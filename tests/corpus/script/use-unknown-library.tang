@@ -1,0 +1,4 @@
+use nothing;
+print("start ");
+print(nothing);
+print("end");

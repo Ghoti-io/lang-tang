@@ -1,0 +1,10 @@
+use random;
+r = random.seeded(123);
+print(r.next_int);
+print(" ");
+print(r.next_float);
+print(" ");
+print(r.next_bool);
+s = random.seeded(123).set_seed(5);
+print(" ");
+print(s.next_int);

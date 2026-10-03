@@ -122,6 +122,61 @@ status "--fuel without a number exits 2" 2 "$TANG" --fuel
 status "--fuel with a word exits 2" 2 "$TANG" --fuel many -e 1
 status "--script and --template together exit 2" 2 "$TANG" -s -t -e 1
 
+# The host API: the built-in libraries, the seed, and the error list.
+check "use math" "3.141593" "$("$TANG" -s -e 'use math; print(math.pi);')"
+check "use math.pi as pi" "3.141593" "$("$TANG" -s -e 'use math.pi as pi; print(pi);')"
+check "an unknown library is null and the program goes on" "start end" \
+  "$("$TANG" -s -e 'use nothing; print("start "); print(nothing); print("end");')"
+first="$("$TANG" --seed 5 -s -e 'use random; print(random.global.next_int);')"
+second="$("$TANG" --seed 5 -s -e 'use random; print(random.global.next_int);')"
+check "--seed gives the same number twice" "$first" "$second"
+other="$("$TANG" --seed 6 -s -e 'use random; print(random.global.next_int);')"
+if [ "$first" != "$other" ]; then
+  printf '  ok    another seed gives another number\n'
+else
+  printf '  FAIL  another seed gives another number\n        got [%s] twice\n' "$first"
+  failures=$((failures + 1))
+fi
+check "random.seeded does not depend on the seed" "5777523539921853504" \
+  "$("$TANG" --seed 99 -s -e 'use random; print(random.seeded(123).next_int);')"
+check "--seed 0 is a seed" "$("$TANG" --seed 0 -s -e 'use random; print(random.global.next_int);')" \
+  "$("$TANG" --seed 0 -s -e 'use random; print(random.global.next_int);')"
+status "--seed without a number exits 2" 2 "$TANG" --seed
+status "--seed with a word exits 2" 2 "$TANG" --seed many -s -e 1
+status "--seed with a negative number exits 2" 2 "$TANG" --seed -3 -s -e 1
+
+out="$("$TANG" --errors -s -e 'print(1/0);' 2>&1 >/dev/null)"
+check "--errors writes template:file:line: message" "main:<evaluate>:1: Divide by zero" "$out"
+status "--errors does not change the exit status of a run that finished" 0 "$TANG" --errors -s -e 'print(1/0);'
+check "without --errors nothing is written to stderr" "" "$("$TANG" -s -e 'print(1/0);' 2>&1 >/dev/null)"
+out="$("$TANG" --errors -s -e 's = "abc";
+s[0] = "x";
+print(s);' 2>&1)"
+check "a discarded error is listed, with its line" "abcmain:<evaluate>:2: Not supported" "$out"
+out="$("$TANG" --errors -s -e 'print(1/0); print(2 % 0);' 2>&1 >/dev/null)"
+check "one entry per swallowed error" "main:<evaluate>:1: Divide by zero
+main:<evaluate>:1: Modulo by zero" "$out"
+out="$("$TANG" --log-errors --errors -s -e 'x = 1/0; print("a");' 2>&1)"
+check "--log-errors enters an error that was only stored" "amain:<evaluate>:1: Divide by zero" "$out"
+check "the same program without it lists nothing" "a" "$("$TANG" --errors -s -e 'x = 1/0; print("a");' 2>&1)"
+
+out="$("$TANG" --halt-on-error -s -e 'print("a"); x = 1/0; print("b");' 2>/dev/null)"
+check "--halt-on-error stops the output at the first error" "a" "$out"
+status "--halt-on-error exits 8, the run's ERR_GUEST" 8 "$TANG" --halt-on-error -s -e 'print("a"); x = 1/0; print("b");'
+status "--halt-on-error on a clean program exits 0" 0 "$TANG" --halt-on-error -s -e 'print("a");'
+out="$("$TANG" --halt-on-error --errors -s -e 'print(1/0);' 2>&1 >/dev/null)"
+case "$out" in
+  *"main:<evaluate>:1: Divide by zero"*) printf '  ok    --errors lists the error that halted the run\n' ;;
+  *) printf '  FAIL  --errors lists the error that halted the run\n        got [%s]\n' "$out"
+     failures=$((failures + 1)) ;;
+esac
+out="$("$TANG" --help)"
+case "$out" in
+  *"--seed"*"--log-errors"*"--halt-on-error"*"--errors"*) printf '  ok    --help describes --seed, --log-errors, --halt-on-error and --errors\n' ;;
+  *) printf '  FAIL  --help describes the host API options\n        got [%s]\n' "$out"
+     failures=$((failures + 1)) ;;
+esac
+
 # A compile error that is not a syntax error is refused the same way.
 out="$("$TANG" -e 'foo(); function foo() {}' 2>&1)"
 case "$out" in

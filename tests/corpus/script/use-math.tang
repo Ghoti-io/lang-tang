@@ -1,0 +1,9 @@
+use math;
+print(math.pi);
+use math.pi as pi;
+print(" ");
+print(pi);
+print(" ");
+print(math.tau);
+use math as m;
+m;

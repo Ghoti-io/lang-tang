@@ -1,0 +1,1 @@
+print("a"); use quick; print(quick()); x = 1 / 0; print("b");

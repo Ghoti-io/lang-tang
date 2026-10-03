@@ -1,0 +1,1 @@
+use nested; print(nested()); s = "abc"; s[0] = "x"; print(s); 1 / 0;

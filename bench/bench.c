@@ -29,8 +29,11 @@
  * template, destroying the tree that template made, compiling both) and of
  * the engine (a tight integer loop, a recursive function, string building,
  * array building, and a loop that is paused and resumed on a small fuel
- * budget). An engine case's unit is one run of a fixed program; the clock
- * covers the run and not the building or the tearing down of the context.
+ * budget) and of the host API (a `use` with a member access, a native function
+ * called in a loop, a template call that opens and closes a budget scope, a
+ * loop of swallowed errors with the error list at its cap, and a generator
+ * drawn in a loop). An engine case's unit is one run of a fixed program; the
+ * clock covers the run and not the building or the tearing down of the context.
  *
  * The calibration case is a fixed amount of integer work that touches no
  * library code, run the same way every real case will be, so a figure from a
@@ -53,6 +56,7 @@
 #include <ghoti.io/lang-tang/compile.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/lang-tang.h>
+#include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
@@ -267,6 +271,9 @@ typedef struct {
   GLTANG_Execution * execution;
 } Engine;
 
+/* Fills the execution's library before the run: a case's own host API. */
+typedef void (*Setup)(GLTANG_Execution * execution);
+
 static void engine_open(Engine * e, GLTANG_Program * program, uint64_t fuel) {
   GRCORE_Options * options = NULL;
   GRHEAP_Options * heap_options = NULL;
@@ -295,13 +302,16 @@ static void engine_close(Engine * e) {
 /* Runs the source @p iterations times; the clock covers only the runs. A
  * result of the wrong kind means the program did not do what the case says it
  * does, so the figure would be of something else. */
-static uint64_t run_source(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice) {
+static uint64_t run_source_with(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice, Setup setup) {
   GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
   uint64_t sink = 0;
   double total = 0.0;
   for (uint64_t i = 0; i < iterations; i++) {
     Engine e;
     engine_open(&e, program, fuel_slice ? fuel_slice : GRCORE_UNLIMITED);
+    if (setup) {
+      setup(e.execution);
+    }
     GRCORE_Outcome outcome;
     double start = now_ns();
     GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
@@ -319,6 +329,10 @@ static uint64_t run_source(const char * source, uint64_t iterations, double * el
   *elapsed = total;
   gltang_program_release(program);
   return sink;
+}
+
+static uint64_t run_source(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice) {
+  return run_source_with(source, iterations, elapsed, expect, fuel_slice, NULL);
 }
 
 static uint64_t run_loop_run(uint64_t iterations, double * elapsed) {
@@ -342,6 +356,72 @@ static uint64_t run_polling_run(uint64_t iterations, double * elapsed) {
   return run_source("s = 0; for (i = 0; i < 1000; i += 1) { s += i * 2; } s;", iterations, elapsed, GLTANG_KIND_INTEGER, 500);
 }
 
+/* The host API. */
+
+static bool bench_increment(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  gltang_call_return_integer(call, gltang_call_integer(call, 0) + 1);
+  return true;
+}
+
+static void setup_native(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "inc", bench_increment, NULL) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK) {
+    setup_failed("a native library");
+  }
+  gltang_library_release(library);
+}
+
+static GLTANG_Program * bench_template(void) {
+  static GLTANG_Program * program;
+  if (!program) {
+    program = compile_source("print(\"<li>\"); print(\"item\"); print(\"</li>\");", GLTANG_PARSE_SCRIPT);
+  }
+  return program;
+}
+
+static void setup_template(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_template(library, "t", bench_template(), 100000, GLTANG_SCOPE_EMPTY) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK) {
+    setup_failed("a template library");
+  }
+  gltang_library_release(library);
+}
+
+static void setup_seeds(GLTANG_Execution * execution) {
+  GLTANG_SeedSequence * seeds = NULL;
+  if (gltang_seeds_create(1, &seeds) != GLTANG_OK || gltang_execution_set_seeds(execution, seeds) != GLTANG_OK) {
+    setup_failed("a seed sequence");
+  }
+  gltang_seeds_destroy(seeds);
+}
+
+static uint64_t use_member_run(uint64_t iterations, double * elapsed) {
+  return run_source_with("s = 0.0; for (i = 0; i < 200; i += 1) { use math; s += math.pi; } s;", iterations, elapsed, GLTANG_KIND_FLOAT, 0, NULL);
+}
+
+static uint64_t native_call_run(uint64_t iterations, double * elapsed) {
+  return run_source_with("use inc; n = 0; for (i = 0; i < 1000; i += 1) { n = inc(n); } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_native);
+}
+
+static uint64_t template_call_run(uint64_t iterations, double * elapsed) {
+  return run_source_with("use t; n = 0; for (i = 0; i < 200; i += 1) { n += t().length; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_template);
+}
+
+static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
+  /* 2,000 swallowed errors against the default cap of 1,024: the list is full
+   * for the last 976, which are counted and not kept. */
+  return run_source_with("for (i = 0; i < 2000; i += 1) { print(1 / 0); } 0;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+}
+
+static uint64_t random_global_run(uint64_t iterations, double * elapsed) {
+  return run_source_with("use random; s = 0; for (i = 0; i < 1000; i += 1) { s += random.global.next_int % 7; } s;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_seeds);
+}
+
 static const Case cases[] = {
     {"calibration", calibration_run, 200u * 1000u * 1000u, 1000u * 1000u},
     {"parse-small-script", parse_small_script_run, 100000u, 100u},
@@ -354,6 +434,11 @@ static const Case cases[] = {
     {"run-string-build-200", run_string_run, 5000u, 5u},
     {"run-array-build-1000", run_array_run, 5000u, 5u},
     {"run-polling-loop-1000", run_polling_run, 5000u, 5u},
+    {"run-use-member-200", use_member_run, 5000u, 5u},
+    {"run-native-call-1000", native_call_run, 5000u, 5u},
+    {"run-template-call-200", template_call_run, 2000u, 5u},
+    {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
+    {"run-random-global-1000", random_global_run, 5000u, 5u},
 };
 
 #define REPEATS 7

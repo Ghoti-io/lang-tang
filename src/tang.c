@@ -33,7 +33,16 @@
  * program); 1 the source was refused (a syntax or compile error, printed as
  * `name:line:column: message` on stderr, or a parser limit); 2 a usage error;
  * 3 the source could not be read; 4 out of memory; 5 the run paused (the
- * command has no one to resume it) and 6 it was unwound by a limit.
+ * command has no one to resume it), 6 it was unwound by a limit, 7 the runtime
+ * could not be set up, and 8 it was ended by `--halt-on-error` (the run's
+ * ERR_GUEST).
+ *
+ * The host's switches over the error list: `--seed N` is the master seed of the
+ * run's random generators, `--log-errors` enters every error when it is created
+ * and not only the ones the program swallows, `--halt-on-error` ends the run at
+ * the first error, and `--errors` writes the error list to stderr after the
+ * run, one `template:file:line: message` an entry, with the chain of template
+ * calls above it indented under it.
  */
 
 #include <ghoti.io/lang-tang/macros.h>
@@ -47,6 +56,7 @@
 #include <ghoti.io/lang-tang/lang-tang.h>
 #include <ghoti.io/lang-tang/compile.h>
 #include <ghoti.io/lang-tang/execution.h>
+#include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 #include <errno.h>
@@ -59,6 +69,7 @@
 #define EXIT_PAUSED 5
 #define EXIT_UNWOUND 6
 #define EXIT_SETUP 7
+#define EXIT_GUEST 8
 
 /** ctang's default for the deepest a call may nest (language reference 10.3). */
 #define DEFAULT_CALL_DEPTH 512
@@ -80,6 +91,14 @@ static void print_help_text(void) {
     "                                limit reached inside one operation (a huge\n"
     "                                repeat or copy) unwinds it instead (exit 6)\n"
     "  --depth N                     Allow calls to nest N deep (default %d)\n"
+    "  --seed N                      The master seed of the random generators; two runs\n"
+    "                                with one seed draw one sequence (default: entropy)\n"
+    "  --log-errors                  Enter every error in the error list when it is\n"
+    "                                created, not only the ones the program swallows\n"
+    "  --halt-on-error               End the run at the first error (exit status 8)\n"
+    "  --errors                      After the run, write the error list to stderr, one\n"
+    "                                template:file:line: message per entry, the template\n"
+    "                                calls above it indented under it\n"
     "  --cleanup, -c                 Accepted for ctang compatibility; this\n"
     "                                command always releases what it allocates\n"
     "  --help, -h                    Display this help message\n"
@@ -87,7 +106,8 @@ static void print_help_text(void) {
     "Exit status: 0 ran; 1 refused (name:line:column: message on stderr);\n"
     "2 usage error; 3 the source could not be read; 4 out of memory;\n"
     "5 paused at a poll (reported on stderr); 6 unwound by a limit;\n"
-    "7 the runtime could not be set up for a reason other than memory.\n",
+    "7 the runtime could not be set up for a reason other than memory;\n"
+    "8 ended by --halt-on-error.\n",
     DEFAULT_CALL_DEPTH);
 }
 
@@ -141,7 +161,40 @@ static bool parse_count(const char * text, uint64_t * out) {
 // Compiles and runs a parsed source, and writes the rendered output. The
 // command is a host: it does what any host does (a group, options, a context,
 // a heap, an execution, `grcore_run`) and nothing more.
-static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, uint64_t fuel, uint64_t depth) {
+typedef struct Options {
+  bool has_fuel;
+  uint64_t fuel;
+  uint64_t depth;
+  bool has_seed;
+  uint64_t seed;
+  bool log_errors;
+  bool halt_on_error;
+  bool show_errors;
+} Options;
+
+/** Writes the error list to stderr: `template:file:line: message`, then the chain, indented. */
+static void write_errors(const GLTANG_Execution * execution) {
+  size_t count = gltang_execution_error_count(execution);
+  for (size_t i = 0; i < count; ++i) {
+    GLTANG_ErrorEntry entry;
+    if (!gltang_execution_error(execution, i, &entry)) {
+      continue;
+    }
+    fprintf(stderr, "%s:%s:%d: %s\n", entry.template_name ? entry.template_name : "?", entry.file ? entry.file : "?", entry.line, entry.message);
+    for (size_t k = 0; k < entry.chain_count; ++k) {
+      GLTANG_ErrorLink link;
+      if (gltang_execution_error_chain(execution, i, k, &link)) {
+        fprintf(stderr, "  in %s:%s:%d\n", link.template_name ? link.template_name : "?", link.file ? link.file : "?", link.line);
+      }
+    }
+  }
+  uint64_t dropped = gltang_execution_errors_dropped(execution);
+  if (dropped) {
+    fprintf(stderr, "(%llu more errors not listed)\n", (unsigned long long)dropped);
+  }
+}
+
+static int run_tree(const GLTANG_Tree * tree, const char * name, const Options * options) {
   GLTANG_ParseError error = {0, 0, {0}};
   GLTANG_Program * program = NULL;
   GLTANG_Result compiled = gltang_compile(tree, name, &error, &program);
@@ -157,33 +210,34 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, 
   int status = EXIT_SETUP;
   const char * setup_step = "the runtime could not be set up";
   GRCORE_Group * group = NULL;
-  GRCORE_Options * options = NULL;
+  GRCORE_Options * core_options = NULL;
   GRCORE_Context * context = NULL;
   GRHEAP_Options * heap_options = NULL;
   GRHEAP_Heap * heap = NULL;
   GLTANG_Execution * execution = NULL;
+  GLTANG_SeedSequence * seeds = NULL;
   GRCORE_Result step = grcore_group_create(NULL, NULL, &group);
   if (step == GRCORE_OK) {
-    step = grcore_options_create(NULL, &options);
+    step = grcore_options_create(NULL, &core_options);
   }
   GRHEAP_Result heap_step = GRHEAP_OK;
   if (step == GRCORE_OK) {
     heap_step = grheap_options_create(NULL, &heap_options);
   }
   if (step == GRCORE_OK && heap_step == GRHEAP_OK) {
-    if (has_fuel) {
-      step = grcore_options_set_fuel(options, fuel);
+    if (options->has_fuel) {
+      step = grcore_options_set_fuel(core_options, options->fuel);
     }
     // ctang's depth counts the calls, and the program's own frame is one more.
     if (step == GRCORE_OK) {
-      step = grcore_options_set_guest_depth(options, depth == UINT64_MAX ? depth : depth + 1u);
+      step = grcore_options_set_guest_depth(core_options, options->depth == UINT64_MAX ? options->depth : options->depth + 1u);
     }
     if (step == GRCORE_OK && gltang_heap_options_configure(heap_options) != GLTANG_OK) {
       step = GRCORE_ERR_INTERNAL;
     }
   }
   if (step == GRCORE_OK && heap_step == GRHEAP_OK) {
-    step = grcore_context_create(group, options, &context);
+    step = grcore_context_create(group, core_options, &context);
     if (step == GRCORE_OK) {
       heap_step = grheap_heap_create(context, heap_options, &heap);
     }
@@ -201,6 +255,29 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, 
           step != GRCORE_OK ? grcore_result_string(step)
           : heap_step != GRHEAP_OK ? grheap_result_string(heap_step)
           : gltang_result_string(created));
+    }
+    goto done;
+  }
+
+  // The host's switches: the main program's name in the error list, the seed
+  // sequence, and the two error switches. All are set before the run starts.
+  GLTANG_Result configured = gltang_execution_set_name(execution, "main");
+  if (configured == GLTANG_OK && options->has_seed) {
+    configured = gltang_seeds_create(options->seed, &seeds);
+    if (configured == GLTANG_OK) {
+      configured = gltang_execution_set_seeds(execution, seeds);
+    }
+  }
+  if (configured == GLTANG_OK) {
+    configured = gltang_execution_set_log_all_errors(execution, options->log_errors);
+  }
+  if (configured == GLTANG_OK) {
+    configured = gltang_execution_set_halt_on_error(execution, options->halt_on_error);
+  }
+  if (configured != GLTANG_OK) {
+    status = configured == GLTANG_ERR_OOM ? EXIT_MEMORY : EXIT_SETUP;
+    if (status == EXIT_SETUP) {
+      fprintf(stderr, "%s: %s: %s\n", name, setup_step, gltang_result_string(configured));
     }
     goto done;
   }
@@ -234,9 +311,16 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, 
     fputc('\n', stderr);
     status = EXIT_PAUSED;
   }
+  else if (ran == GRCORE_ERR_GUEST) {
+    fprintf(stderr, "%s: the run was ended by an error\n", name);
+    status = EXIT_GUEST;
+  }
   else {
     fprintf(stderr, "%s: the run was stopped: %s\n", name, grcore_result_string(ran));
     status = EXIT_UNWOUND;
+  }
+  if (options->show_errors) {
+    write_errors(execution);
   }
 
 done:
@@ -247,7 +331,8 @@ done:
     grcore_context_destroy(context);
   }
   grheap_options_destroy(heap_options);
-  grcore_options_destroy(options);
+  grcore_options_destroy(core_options);
+  gltang_seeds_destroy(seeds);
   if (group) {
     grcore_group_destroy(group);
   }
@@ -262,9 +347,9 @@ int main(int argc, const char * argv[]) {
   bool is_script = false;
   bool is_template = false;
   bool dump_tree = false;
-  bool has_fuel = false;
-  uint64_t fuel = 0;
-  uint64_t depth = DEFAULT_CALL_DEPTH;
+  Options options;
+  memset(&options, 0, sizeof(options));
+  options.depth = DEFAULT_CALL_DEPTH;
 
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--evaluate") || !strcmp(argv[i], "-e")) {
@@ -290,14 +375,26 @@ int main(int argc, const char * argv[]) {
     else if (!strcmp(argv[i], "--tree")) {
       dump_tree = true;
     }
-    else if (!strcmp(argv[i], "--fuel") || !strcmp(argv[i], "--depth")) {
+    else if (!strcmp(argv[i], "--fuel") || !strcmp(argv[i], "--depth") || !strcmp(argv[i], "--seed")) {
       bool is_fuel = !strcmp(argv[i], "--fuel");
-      if (i + 1 >= argc || !parse_count(argv[i + 1], is_fuel ? &fuel : &depth)) {
+      bool is_seed = !strcmp(argv[i], "--seed");
+      uint64_t * target = is_fuel ? &options.fuel : (is_seed ? &options.seed : &options.depth);
+      if (i + 1 >= argc || !parse_count(argv[i + 1], target)) {
         fprintf(stderr, "tang: %s needs a number\n", argv[i]);
         return EXIT_USAGE;
       }
-      has_fuel = has_fuel || is_fuel;
+      options.has_fuel = options.has_fuel || is_fuel;
+      options.has_seed = options.has_seed || is_seed;
       ++i;
+    }
+    else if (!strcmp(argv[i], "--halt-on-error")) {
+      options.halt_on_error = true;
+    }
+    else if (!strcmp(argv[i], "--log-errors")) {
+      options.log_errors = true;
+    }
+    else if (!strcmp(argv[i], "--errors")) {
+      options.show_errors = true;
     }
     else if (argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "tang: unknown option %s\n", argv[i]);
@@ -371,7 +468,7 @@ int main(int argc, const char * argv[]) {
       gltang_tree_print(tree);
     }
     else {
-      status = run_tree(tree, name, has_fuel, fuel, depth);
+      status = run_tree(tree, name, &options);
     }
     gltang_tree_destroy(tree);
   }
