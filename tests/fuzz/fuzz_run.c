@@ -51,7 +51,7 @@ static bool fuzz_native(GLTANG_NativeCall * call, void * user) {
 }
 
 /* The templates a fuzzed program can call: one that finishes, one that never
- * does (stopped by its own tiny scope under each policy). */
+ * does (stopped by its own tiny scope under each of the three policies). */
 static const char * const fuzz_templates[][2] = {
   {"quick", "print(\"q\"); print(!\"<\");"},
   {"runaway", "print(\"before\"); while (true) {}"},
@@ -81,7 +81,7 @@ static GLTANG_Library * fuzz_library(GLTANG_Program ** programs) {
   (void)gltang_library_add_native(root, "native", fuzz_native, NULL);
   (void)gltang_library_add_integer(root, "n", 7);
   (void)gltang_library_add_string(root, "s", "<s>", 3, GLTANG_UNICODE_STRING_TYPE_HTML);
-  static const GLTANG_ScopePolicy policies[3] = {GLTANG_SCOPE_EMPTY, GLTANG_SCOPE_SEGMENTS, GLTANG_SCOPE_EMPTY};
+  static const GLTANG_ScopePolicy policies[3] = {GLTANG_SCOPE_EMPTY, GLTANG_SCOPE_PAUSE, GLTANG_SCOPE_SEGMENTS};
   static const uint64_t budgets[3] = {400, 300, 600};
   for (size_t i = 0; i < 3; ++i) {
     programs[i] = fuzz_compile(fuzz_templates[i][1]);

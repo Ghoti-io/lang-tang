@@ -153,7 +153,7 @@ static GLTANG_Value host_value(GLTANG_Execution * exec, const GLTANG_HostValue *
     case GLTANG_HOST_INTEGER: return gltang_vm_make_int(exec, host->integer);
     case GLTANG_HOST_FLOAT: return gltang_vm_make_float(exec, host->number);
     case GLTANG_HOST_STRING:
-      if (!host->text) {
+      if (!host->text || (unsigned)host->encoding > (unsigned)GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT) {
         return GLTANG_V_NULL;
       }
       return gltang_vm_string_from_utf8(exec, host->text, host->length, host->encoding);
@@ -346,7 +346,10 @@ void gltang_call_return_string(GLTANG_NativeCall * call, const char * text, size
   call->set = GLTANG_CALL_STRING;
   call->encoding = encoding;
   call->length = length;
-  call->failed_to_copy = false;
+  call->failed_to_copy = (unsigned)encoding > (unsigned)GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT;
+  if (call->failed_to_copy) {
+    return;
+  }
   // Copied now: the function's own buffer may be gone when it returns.
   call->text = gcu_malloc(length + 1u);
   if (!call->text || (!text && length)) {

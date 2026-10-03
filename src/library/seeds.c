@@ -36,6 +36,7 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <stdatomic.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/seeds.h>
@@ -85,6 +86,9 @@ bool gltang_entropy(void * bytes, size_t length) {
   while (done < length) {
     ssize_t n = getrandom(out + done, length - done, 0);
     if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
       break;
     }
     done += (size_t)n;
@@ -99,6 +103,9 @@ bool gltang_entropy(void * bytes, size_t length) {
   }
   while (done < length) {
     ssize_t n = read(fd, out + done, length - done);
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
     if (n <= 0) {
       close(fd);
       return false;

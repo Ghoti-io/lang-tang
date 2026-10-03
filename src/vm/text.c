@@ -470,6 +470,19 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
   return GLTANG_ST_OK;
 }
 
+/** Drops what a print that failed appended, back to the last finished print. */
+static void output_rollback(GLTANG_OutBuf * out) {
+  if (out->length > out->committed) {
+    out->length = out->committed;
+    if (out->bytes) {
+      out->bytes[out->length] = '\0';
+    }
+    while (out->segment_count && out->segments[out->segment_count - 1u].offset >= out->length) {
+      --out->segment_count;
+    }
+  }
+}
+
 GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
   // An error prints as nothing (a marker prints itself): it is swallowed here.
   gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_PRINTED, v, exec->act);
@@ -477,11 +490,9 @@ GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
   gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
   bool too_deep = false;
   GLTANG_Status st = gltang_vm_render(&sink, v, GLTANG_RENDER_PRINT, 0, &too_deep);
-  if (st != GLTANG_ST_OK) {
-    return gltang_vm_failure_value(exec, st);
-  }
-  if (too_deep) {
-    return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+  if (st != GLTANG_ST_OK || too_deep) {
+    output_rollback(exec->out);
+    return st != GLTANG_ST_OK ? gltang_vm_failure_value(exec, st) : gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
   }
   exec->out->committed = exec->out->length;
   return GLTANG_V_NULL;
@@ -495,6 +506,7 @@ GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_Stri
     exec->out->committed = exec->out->length;
     return GLTANG_V_NULL;
   }
+  output_rollback(exec->out);
   return gltang_vm_failure_value(exec, st);
 }
 

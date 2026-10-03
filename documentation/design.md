@@ -640,8 +640,9 @@ side channel: a request kind is defined for lang-tang's key
 pending, and the error's creation posts the request through the context's port and
 polls at once (the runtime poll), so that nothing more is printed. The entry is
 recorded as `created`, the frames are popped, and `grcore_run` or `grcore_resume`
-returns `GRCORE_ERR_GUEST` with the execution `UNWOUND`. A template call's scope
-does not catch it: the vote is the run's own (the scope is not the only voter, so
+returns `GRCORE_ERR_GUEST` with the execution `UNWOUND`. The `Limit Exceeded` value of a stopped template call is entered as a
+`scope-limit` and is subject to neither the halt option nor the log-everything
+switch. A template call's scope does not catch it: the vote is the run's own (the scope is not the only voter, so
 `grcore_budget_scope_exhausted` is false), and guest code cannot catch it (AD-5).
 **Rejected: returning a flag from each operation.** Every operation would carry
 the check, and a missed one would let the program go on.
@@ -687,7 +688,8 @@ templates and functions together, so a call past it is the error
 `Recursion Limit Exceeded` as before.
 
 **Policies.** `EMPTY` and `SEGMENTS` are runtime-core's unwind policy; `PAUSE` is
-its pause policy.
+its pause policy. `EMPTY` and `SEGMENTS` record a `scope-limit` entry; `PAUSE`
+records none, since a pause is not a stop.
 
 - When a scope runs out and nothing else voted to stop (the ceiling, a terminate
   or memory did not), the poll unwinds and `grcore_budget_scope_exhausted` names
@@ -1043,8 +1045,8 @@ result and output are read after (`make fuzz-parse`, `make fuzz-template`,
 byte of a `fuzz_run` input picks script or template (bit 0), enters every error at
 creation (bit 1) and halts on the first (bit 2). The harness registers a native
 function, a `user` library, a string, and three templates with tiny scope budgets
-under the three policies (one that finishes, one that never does, one that calls
-the first and divides by zero), a seed sequence, and a cap of 64 on the error
+under the three policies (a finishing one under EMPTY, a runaway one under PAUSE,
+and one that calls the first and divides by zero under SEGMENTS), a seed sequence, and a cap of 64 on the error
 list, so the fuzzer reaches resolution, native calls, scopes and the list; six
 seed files under `tests/fuzz/corpus/run/` do, and are replayed in `make test`. `make fuzz-replay` feeds
 every corpus and seed file once through the same entry points in an ordinary gcc
@@ -1062,8 +1064,8 @@ No library other than `math` and `random`, and in those no `next_int_range`,
 native functions, templates and libraries only), no template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
 differential against ctang and the closing of the ledger are story 11's: the
-oracle stays parse-only, and the ledger has no open row only until that
-differential has run. No debugger beyond the frame protocol the engine registers
+oracle stays parse-only, and the ledger is closed (no open row) as of story 10,
+though the execution differential may open rows again. No debugger beyond the frame protocol the engine registers
 (the frame walk, scopes and variables read from a paused context, which now name
 the right program for every frame). No `simplify`. No JIT, no snapshots. No
 parse-time charge to a context's memory (see "The memory-budget contract"). No

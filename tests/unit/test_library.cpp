@@ -210,6 +210,24 @@ TEST(NativeFunction, ANativeCostsFuelLikeAnyCallAndMoreForABigAnswer) {
   EXPECT_GE(big, small + 1000) << "64 KiB at one unit per 64 bytes is 1,024 units";
 }
 
+TEST(NativeFunction, AnEncodingOutsideTheEnumIsHostFunctionFailedOrNotAvailable) {
+  Compiled compiled("use f; use g; [f(), g];");
+  Context context(compiled.program);
+  ASSERT_EQ(gltang_library_add_native(context.library(), "f", [](GLTANG_NativeCall * call, void *) {
+    gltang_call_return_string(call, "x", 1, (GLTANG_String_Type)99);
+    return true;
+  }, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_factory(context.library(), "g", [](void *, GLTANG_HostValue * out) {
+    out->kind = GLTANG_HOST_STRING;
+    out->text = "x";
+    out->length = 1;
+    out->encoding = (GLTANG_String_Type)99;
+    return true;
+  }, nullptr), GLTANG_OK);
+  ASSERT_TRUE(context.execute());
+  EXPECT_EQ(context.describe(), "[Error: Host function failed, null]");
+}
+
 TEST(NativeFunction, ANativeValueIsAFunctionAndCanBeStored) {
   Compiled compiled("use a; x = a; [x(), x == x];");
   Context context(compiled.program);

@@ -124,7 +124,8 @@ GLTANG_API GRCORE_Step gltang_execution_entry(
  * execution.
  *
  * @param execution The execution, or NULL (ignored). The context must not be
- *   running.
+ *   running. Called from inside a host callback (a native function or a
+ *   factory) it does nothing.
  */
 GLTANG_API void gltang_execution_destroy(GLTANG_Execution * execution);
 
@@ -234,6 +235,10 @@ GLTANG_API GLTANG_Result gltang_execution_set_log_all_errors(
 /**
  * @brief Ends the run at the first error value that is created.
  *
+ * The `Limit Exceeded` value of a template call stopped by its scope is not
+ * created by an operation: it is entered as ::GLTANG_ERROR_HOW_SCOPE_LIMIT and
+ * is subject to neither this option nor ::gltang_execution_set_log_all_errors.
+ *
  * The error is entered in the list (as ::GLTANG_ERROR_HOW_CREATED), the run
  * unwinds, and ::grcore_run or ::grcore_resume returns ::GRCORE_ERR_GUEST with
  * the execution ::GLTANG_EXECUTION_UNWOUND. Nothing is printed after the error.
@@ -302,7 +307,8 @@ GLTANG_API bool gltang_execution_error_chain(const GLTANG_Execution * execution,
     size_t index, size_t link, GLTANG_ErrorLink * out_link);
 
 /**
- * @brief How many entries the cap turned away.
+ * @brief How many entries were turned away: by the cap, or because memory ran
+ *   short when one was made.
  *
  * @param execution The execution.
  * @return The count; 0 for NULL.

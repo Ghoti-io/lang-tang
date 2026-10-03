@@ -300,6 +300,17 @@ TEST(Scope, TheSegmentsPolicyCutsBetweenWholePrintsAndKeepsEncodings) {
   EXPECT_EQ(site->error_count(), 1u);
 }
 
+TEST(Scope, APrintThatFailedLeavesNoBytesForTheSegmentsCutOrTheNextPrint) {
+  // Printing a literal nested past the depth bound fails after writing its
+  // opening brackets; those bytes must not be committed by the next print.
+  std::string deep = std::string(2100, '[') + std::string(2100, ']');
+  Site site("use nav; print(\"[\" + nav() + \"]\");",
+      {{"nav", "print(\"a\"); x = " + deep + "; print(x); print(\"b\"); while (true) {}",
+        300000, GLTANG_SCOPE_SEGMENTS, tt::Mode::Script}});
+  ASSERT_TRUE(site->execute());
+  EXPECT_EQ(site->raw(), "[ab]");
+}
+
 TEST(Scope, ThePauseDevelopmentPolicyPausesAtTheCalleesFileAndLine) {
   Site site(kPage, page_parts(10000, 10000, 500, GLTANG_SCOPE_PAUSE));
   ASSERT_FALSE(site->execute());

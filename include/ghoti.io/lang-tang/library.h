@@ -39,6 +39,12 @@
  * what keeps a program immutable (AD-22), and what makes a cycle of libraries
  * impossible to build: a library that holds another has sealed it first.
  *
+ * **Threads.** Building a library (the `gltang_library_add_*` calls) is
+ * single-threaded: one thread builds it, then attaches it. After that it is
+ * read-only, and its native functions and factories may run concurrently from
+ * many contexts on many threads, so they must be safe for that (their `user`
+ * pointers are shared).
+ *
  * **Reference counting.** A library is reference counted, atomically. The
  * creator's reference is the one ::gltang_library_create returns; whatever a
  * library is attached to takes its own.
@@ -56,7 +62,8 @@
  * else: it cannot pause, and it cannot call back into guest code. Anything it
  * calls on the execution that is running it (any `gltang_execution_*` setter,
  * ::grcore_run, ::grcore_resume) is refused: the setters with
- * ::GLTANG_ERR_INVALID, the runtime calls with ::GRCORE_ERR_INVALID. A native
+ * ::GLTANG_ERR_INVALID, the runtime calls with ::GRCORE_ERR_INVALID, and
+ * ::gltang_execution_destroy does nothing. A native
  * costs fuel like any call, plus one unit per ::GLTANG_WORK_BYTES_PER_FUEL
  * bytes it returns.
  *
@@ -261,8 +268,10 @@ GLTANG_API GLTANG_Result gltang_library_add_factory(GLTANG_Library * library,
  * value is the segments completed so far; ::GLTANG_SCOPE_PAUSE pauses the run
  * at the callee's file and line so the host can raise the scope with
  * ::grcore_context_fuel_scope_set_budget (on ::grcore_context_fuel_scope_top)
- * and resume, or unwind. The scope outcome is always entered in the
- * execution's error list.
+ * and resume, or unwind. The EMPTY and SEGMENTS outcomes are entered in the
+ * execution's error list as a scope limit; PAUSE records none (a pause is not
+ * a stop yet), and a PAUSE scope that runs out inside a native operation (which
+ * cannot pause) unwinds the whole run with the limit instead.
  *
  * @param program The compiled template. The library retains it.
  * @param scope_fuel The scope's own budget (exclusive), or ::GRCORE_UNLIMITED

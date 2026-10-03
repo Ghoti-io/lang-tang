@@ -164,6 +164,8 @@ out="$("$TANG" --halt-on-error -s -e 'print("a"); x = 1/0; print("b");' 2>/dev/n
 check "--halt-on-error stops the output at the first error" "a" "$out"
 status "--halt-on-error exits 8, the run's ERR_GUEST" 8 "$TANG" --halt-on-error -s -e 'print("a"); x = 1/0; print("b");'
 status "--halt-on-error on a clean program exits 0" 0 "$TANG" --halt-on-error -s -e 'print("a");'
+out="$("$TANG" --errors -s -e 'i=0; while (i<1100) { print(1/0); i=i+1; }' 2>&1 >/dev/null | tail -1)"
+check "--errors says how many entries the cap turned away" "(76 more errors not listed)" "$out"
 out="$("$TANG" --halt-on-error --errors -s -e 'print(1/0);' 2>&1 >/dev/null)"
 case "$out" in
   *"main:<evaluate>:1: Divide by zero"*) printf '  ok    --errors lists the error that halted the run\n' ;;

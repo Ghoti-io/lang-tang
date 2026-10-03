@@ -136,7 +136,10 @@ void gltang_vm_error_swallowed(GLTANG_Execution * exec, GLTANG_ErrorHow how, GLT
     return;
   }
   GLTANG_ErrorObject * object = gltang_object(error);
-  if ((object->flags & GLTANG_ERROR_FLAG_LOGGED) || gltang_error_kind_is_marker((GLTANG_ErrorKind)object->error_kind)) {
+  // A marker prints itself, so printing or discarding one swallows nothing;
+  // the creation switches still enter it.
+  if ((object->flags & GLTANG_ERROR_FLAG_LOGGED)
+      || (how != GLTANG_ERROR_HOW_CREATED && gltang_error_kind_is_marker((GLTANG_ErrorKind)object->error_kind))) {
     return;
   }
   // Entered once, whether or not the list had room: a value that was turned
@@ -212,10 +215,10 @@ GLTANG_Value gltang_vm_error_created(GLTANG_Execution * exec, GLTANG_Value error
   }
   // The first error ends the run: a keyed request that the poll turns into an
   // unwind with ERR_GUEST, taken now so that nothing more is printed.
-  exec->halted = true;
   if (!exec->port || grcore_port_post(exec->port, exec->halt_kind) != GRCORE_OK) {
     return error;
   }
+  exec->halted = true;
   if (gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }

@@ -166,6 +166,21 @@ TEST(ErrorList, TheLogAllSwitchEntersEveryErrorAtCreationAndOnlyOnce) {
   EXPECT_EQ(run.context.error(1).e.line, 2);
 }
 
+TEST(ErrorList, AMarkerIsEnteredAtCreationUnderLogAllAndNotWhenPrinted) {
+  {
+    Named run("print(9223372036854775807 + 1); print(\"x\");", "page", true);
+    ASSERT_TRUE(run.context.execute());
+    ASSERT_EQ(run.context.error_count(), 1u);
+    EXPECT_EQ(run.context.error(0).e.kind, GLTANG_ERROR_INTEGER_TOO_LARGE);
+    EXPECT_EQ(run.context.error(0).e.how, GLTANG_ERROR_HOW_CREATED);
+  }
+  {
+    Named run("print(9223372036854775807 + 1);");
+    ASSERT_TRUE(run.context.execute());
+    EXPECT_EQ(run.context.error_count(), 0u);
+  }
+}
+
 TEST(ErrorList, ASwallowedCaseIsNotDoubledUnderLogAll) {
   Named run("s = \"abc\";\ns[0] = \"x\";\nprint(s);\nprint(1 / 0);", "page", true);
   ASSERT_TRUE(run.context.execute());
@@ -280,6 +295,7 @@ TEST(Halt, AMarkerIsAnErrorValueToo) {
   Named run("print(\"a\"); print(9223372036854775807 + 1); print(\"b\");", "page", false, true);
   EXPECT_FALSE(run.context.execute());
   EXPECT_EQ(run.context.raw(), "a");
+  EXPECT_EQ(run.context.error_count(), 1u);
 }
 
 TEST(Halt, AnErrorInsideANativeOperationEndsTheRunToo) {
