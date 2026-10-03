@@ -24,6 +24,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeFunctionCall.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_function_call_vtable = {
@@ -38,6 +40,15 @@ GLTANG_Ast_Node_Function_Call * gltang_ast_node_function_call_create(GLTANG_Ast_
   assert(lhs);
   assert(arguments);
 
+  uint32_t depth = 1 + gltang_ast_height_max(gltang_ast_height(lhs), gltang_ast_height_of_nodes(arguments));
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Function_Call * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Function_Call));
   if (!self) {
     return 0;
@@ -48,6 +59,7 @@ GLTANG_Ast_Node_Function_Call * gltang_ast_node_function_call_create(GLTANG_Ast_
       .vtable = &gltang_ast_node_function_call_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .lhs = lhs,
     .arguments = arguments,
@@ -75,13 +87,10 @@ void gltang_ast_node_function_call_print(GLTANG_Ast_Node * self, const char * in
   GLTANG_Ast_Node_Function_Call * function_call = (GLTANG_Ast_Node_Function_Call *)self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -96,7 +105,7 @@ void gltang_ast_node_function_call_print(GLTANG_Ast_Node * self, const char * in
     printf("%s  %zu:\n", indent, i);
     gltang_ast_node_print((GLTANG_Ast_Node *)GLTANG_TYPEX_P(function_call->arguments->data[i]), new_indent);
   }
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

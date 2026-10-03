@@ -24,6 +24,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeBinary.h>
 #include <ghoti.io/lang-tang/ast/astNodeInteger.h>
 #include <ghoti.io/lang-tang/ast/astNodeFloat.h>
@@ -43,6 +45,15 @@ GLTANG_Ast_Node_Binary * gltang_ast_node_binary_create(GLTANG_Ast_Node * lhs, GL
   assert(lhs);
   assert(rhs);
 
+  uint32_t depth = 1 + gltang_ast_height_max(gltang_ast_height(lhs), gltang_ast_height(rhs));
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Binary * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Binary));
   if (!self) {
     return 0;
@@ -53,6 +64,7 @@ GLTANG_Ast_Node_Binary * gltang_ast_node_binary_create(GLTANG_Ast_Node * lhs, GL
       .vtable = &gltang_ast_node_binary_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .lhs = lhs,
     .rhs = rhs,
@@ -80,14 +92,10 @@ void gltang_ast_node_binary_print(GLTANG_Ast_Node * self, const char * indent) {
   GLTANG_Ast_Node_Binary * binary = (GLTANG_Ast_Node_Binary *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   const char * operator_str = 0;
   switch(binary->operator_type) {
@@ -142,7 +150,7 @@ void gltang_ast_node_binary_print(GLTANG_Ast_Node * self, const char * indent) {
   printf("%s  RHS:\n", indent);
   gltang_ast_node_print(binary->rhs, new_indent);
 
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

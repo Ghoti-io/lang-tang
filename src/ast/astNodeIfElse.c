@@ -24,6 +24,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeIfElse.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_if_else_vtable = {
@@ -39,6 +41,15 @@ GLTANG_Ast_Node_If_Else * gltang_ast_node_if_else_create(GLTANG_Ast_Node * condi
   assert(ifBlock);
   // NOTE: elseBlock can be NULL.
 
+  uint32_t depth = 1 + gltang_ast_height_max(gltang_ast_height_max(gltang_ast_height(condition), gltang_ast_height(ifBlock)), gltang_ast_height(elseBlock));
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_If_Else * self = gcu_malloc(sizeof(GLTANG_Ast_Node_If_Else));
   if (!self) {
     return 0;
@@ -49,6 +60,7 @@ GLTANG_Ast_Node_If_Else * gltang_ast_node_if_else_create(GLTANG_Ast_Node * condi
       .vtable = &gltang_ast_node_if_else_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .condition = condition,
     .ifBlock = ifBlock,
@@ -78,13 +90,10 @@ void gltang_ast_node_if_else_print(GLTANG_Ast_Node * self, const char * indent) 
   GLTANG_Ast_Node_If_Else * if_else = (GLTANG_Ast_Node_If_Else *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -100,7 +109,7 @@ void gltang_ast_node_if_else_print(GLTANG_Ast_Node * self, const char * indent) 
     printf("%s  Else Block:\n", indent);
     gltang_ast_node_print(if_else->elseBlock, new_indent);
   }
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

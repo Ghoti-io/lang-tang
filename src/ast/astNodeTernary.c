@@ -24,6 +24,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeTernary.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_ternary_vtable = {
@@ -39,6 +41,15 @@ GLTANG_Ast_Node_Ternary * gltang_ast_node_ternary_create(GLTANG_Ast_Node * condi
   assert(ifTrue);
   assert(ifFalse);
 
+  uint32_t depth = 1 + gltang_ast_height_max(gltang_ast_height_max(gltang_ast_height(condition), gltang_ast_height(ifTrue)), gltang_ast_height(ifFalse));
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Ternary * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Ternary));
   if (!self) {
     return 0;
@@ -49,6 +60,7 @@ GLTANG_Ast_Node_Ternary * gltang_ast_node_ternary_create(GLTANG_Ast_Node * condi
       .vtable = &gltang_ast_node_ternary_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .condition = condition,
     .ifTrue = ifTrue,
@@ -76,13 +88,10 @@ void gltang_ast_node_ternary_print(GLTANG_Ast_Node * self, const char * indent) 
   GLTANG_Ast_Node_Ternary * ternary = (GLTANG_Ast_Node_Ternary *)self;
 
   assert(indent);
-  size_t indent_len = strlen(indent);
-  char * new_indent = gcu_malloc(indent_len + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -96,7 +105,7 @@ void gltang_ast_node_ternary_print(GLTANG_Ast_Node * self, const char * indent) 
 
   printf("%s  If False:\n", indent);
   gltang_ast_node_print(ternary->ifFalse, new_indent);
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

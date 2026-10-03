@@ -25,6 +25,9 @@
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
 #include <ghoti.io/lang-tang/ast/astNode.h>
+#include <ghoti.io/lang-tang/ast/astNodeMap.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 
 GLTANG_Ast_Node_VTable gltang_ast_node_null_vtable = {
   .name = "Null",
@@ -43,6 +46,7 @@ GLTANG_Ast_Node * gltang_ast_node_create(GLTANG_PARSER_LTYPE location) {
     .vtable = &gltang_ast_node_null_vtable,
     .location = location,
     .is_singleton = false,
+    .depth = 1,
   };
   return self;
 }
@@ -101,4 +105,74 @@ void gltang_ast_node_null_print(GLTANG_Ast_Node * self, const char * indent) {
 
 void gltang_ast_node_null_walk(GLTANG_Ast_Node * self, GLTANG_Ast_Node_Walk_Callback callback, void * data, void * return_value) {
   callback(self, data, return_value);
+}
+
+
+// The refusal is thread-local because a parse runs on one thread and the
+// constructors it calls have no parse context to report to.
+static _Thread_local bool depth_refused = false;
+
+uint32_t gltang_ast_height_of_nodes(const GLTANG_VectorX * nodes) {
+  uint32_t height = 0;
+  if (!nodes) {
+    return 0;
+  }
+  size_t count = GLTANG_VECTORX_COUNT((GLTANG_VectorX *)nodes);
+  for (size_t i = 0; i < count; ++i) {
+    height = gltang_ast_height_max(height, gltang_ast_height((const GLTANG_Ast_Node *)GLTANG_TYPEX_P(nodes->data[i])));
+  }
+  return height;
+}
+
+uint32_t gltang_ast_height_of_pairs(const GLTANG_VectorX * pairs) {
+  uint32_t height = 0;
+  if (!pairs) {
+    return 0;
+  }
+  size_t count = GLTANG_VECTORX_COUNT((GLTANG_VectorX *)pairs);
+  for (size_t i = 0; i < count; ++i) {
+    const GLTANG_Ast_Node_Map_Pair * pair = GLTANG_TYPEX_P(pairs->data[i]);
+    if (pair) {
+      height = gltang_ast_height_max(height, gltang_ast_height_max(gltang_ast_height(pair->key), gltang_ast_height(pair->value)));
+    }
+  }
+  return height;
+}
+
+bool gltang_ast_depth_ok(uint32_t height) {
+  if (height > GLTANG_MAX_TREE_DEPTH) {
+    depth_refused = true;
+    return false;
+  }
+  return true;
+}
+
+void gltang_ast_depth_reset(void) {
+  depth_refused = false;
+}
+
+bool gltang_ast_depth_refused(void) {
+  return depth_refused;
+}
+
+
+char * gltang_ast_indent_extend(const char * indent, size_t extra) {
+  size_t length = strlen(indent);
+  if (length >= GLTANG_PRINT_INDENT_MAX) {
+    return (char *)indent;
+  }
+  char * extended = gcu_malloc(length + extra + 1);
+  if (!extended) {
+    return 0;
+  }
+  memcpy(extended, indent, length);
+  memset(extended + length, ' ', extra);
+  extended[length + extra] = '\0';
+  return extended;
+}
+
+void gltang_ast_indent_release(char * extended, const char * indent) {
+  if (extended && extended != indent) {
+    gcu_free(extended);
+  }
 }

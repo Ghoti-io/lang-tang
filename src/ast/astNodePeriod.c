@@ -24,6 +24,8 @@
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/cutil/string.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodePeriod.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_period_vtable = {
@@ -38,6 +40,15 @@ GLTANG_Ast_Node_Period * gltang_ast_node_period_create(GLTANG_Ast_Node * lhs, co
   assert(lhs);
   assert(rhs);
 
+  uint32_t depth = 1 + gltang_ast_height(lhs);
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Period * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Period));
   if (!self) {
     return 0;
@@ -48,6 +59,7 @@ GLTANG_Ast_Node_Period * gltang_ast_node_period_create(GLTANG_Ast_Node * lhs, co
       .vtable = &gltang_ast_node_period_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .lhs = lhs,
     .rhs = rhs,
@@ -73,13 +85,10 @@ void gltang_ast_node_period_print(GLTANG_Ast_Node * self, const char * indent) {
   GLTANG_Ast_Node_Period * period = (GLTANG_Ast_Node_Period *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -89,7 +98,7 @@ void gltang_ast_node_period_print(GLTANG_Ast_Node * self, const char * indent) {
   gltang_ast_node_print(period->lhs, new_indent);
 
   printf("%s  RHS: %s\n", indent, period->rhs);
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

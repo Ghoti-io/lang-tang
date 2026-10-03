@@ -17,8 +17,10 @@
 #   free     the syntax tree's node classes (everything under ast/) and the
 #            two headers they are built on, location.h and unicodeString.h,
 #            and tangScanner.h, which the generated scanner and parser share.
-#            The compiler of a later story reads these, so their shape may
-#            change.
+#            The compiler reads these, so their shape may change.
+#   free     also the engine's: bytecode.h, program.h, compile.h, value.h and
+#            execution.h. They are new and unproven; a header joins the stable
+#            set by a decision to freeze it, taken here.
 #
 # A header in neither list fails: a new header is a decision about its
 # stability, and it is taken by adding it to a list on purpose.
@@ -36,7 +38,7 @@ ROOT="${1:?usage: check-labels.sh <root>}"
 BASE="$ROOT/include/ghoti.io/lang-tang"
 
 STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h lang-tang.h'
-FREE='location.h unicodeString.h tangScanner.h'
+FREE='location.h unicodeString.h tangScanner.h bytecode.h program.h compile.h value.h execution.h'
 
 if [ ! -d "$BASE" ]; then
   printf 'check-labels: %s does not exist; this gate is measuring nothing\n' \

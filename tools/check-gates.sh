@@ -85,6 +85,8 @@ expect_fail 'labels/planted-free-in-stable (free where stable is required)' \
   'core.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-in-stable"
 expect_fail 'labels/planted-stable-in-free (stable where free is required)' \
   'astNode.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-in-free"
+expect_fail 'labels/planted-stable-engine (the execution API labelled stable)' \
+  'execution.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-engine"
 expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"
@@ -129,13 +131,15 @@ printf 'int stub_jit(void) { return 3; }\n' > "$work/jit.c"
 printf 'int stub_cutil(void) { return 4; }\n' > "$work/cutil.c"
 printf 'int stub_unicode(void) { return 5; }\n' > "$work/unicode.c"
 printf 'int stub_self(void) { return 6; }\n' > "$work/self.c"
+printf 'int stub_core(void) { return 7; }\n' > "$work/core.c"
+printf 'int stub_heap(void) { return 8; }\n' > "$work/heap.c"
 printf 'int stub_tang(void);\nint planted_tang(void) { return stub_tang(); }\n' > "$work/planted_tang.c"
 printf 'int stub_debug(void);\nint planted_debug(void) { return stub_debug(); }\n' > "$work/planted_debug.c"
 printf 'int stub_jit(void);\nint planted_jit(void) { return stub_jit(); }\n' > "$work/planted_jit.c"
-printf 'int stub_cutil(void);\nint stub_unicode(void);\nint control(void) { return stub_cutil() + stub_unicode(); }\n' > "$work/control.c"
+printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_core(void);\nint stub_heap(void);\nint control(void) { return stub_cutil() + stub_unicode() + stub_core() + stub_heap(); }\n' > "$work/control.c"
 printf 'int stub_cutil(void);\nint dev(void) { return stub_cutil(); }\n' > "$work/dev.c"
 printf 'int stub_tang(void);\nint stub_self(void);\nint main(void) { return stub_tang() + stub_self(); }\n' > "$work/exe_planted.c"
-printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_self(void);\nint main(void) { return stub_cutil() + stub_unicode() + stub_self(); }\n' > "$work/exe_control.c"
+printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_core(void);\nint stub_heap(void);\nint stub_self(void);\nint main(void) { return stub_cutil() + stub_unicode() + stub_core() + stub_heap() + stub_self(); }\n' > "$work/exe_control.c"
 
 built=1
 # shellcheck disable=SC2086
@@ -146,6 +150,8 @@ built=1
   $CC $SHFLAGS -o "$stubs/libghoti.io-cutil-0.$SHEXT" "$work/cutil.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-unicode-0.$SHEXT" "$work/unicode.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-lang-tang-0.$SHEXT" "$work/self.c" &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-runtime-core-0.$SHEXT" "$work/core.c" &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-runtime-heap-0.$SHEXT" "$work/heap.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-cutil-dev.$SHEXT" "$work/cutil.c" &&
   $CC $SHFLAGS -o "$work/planted-tang/libplanted.$SHEXT" "$work/planted_tang.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-tang-0.$SHEXT &&
@@ -155,7 +161,8 @@ built=1
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-jit-0.$SHEXT &&
   $CC $SHFLAGS -o "$work/control/libcontrol.$SHEXT" "$work/control.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-0.$SHEXT \
-    -l:libghoti.io-unicode-0.$SHEXT &&
+    -l:libghoti.io-unicode-0.$SHEXT -l:libghoti.io-runtime-core-0.$SHEXT \
+    -l:libghoti.io-runtime-heap-0.$SHEXT &&
   $CC $SHFLAGS -o "$work/dev/libdev.$SHEXT" "$work/dev.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-dev.$SHEXT &&
   $CC -o "$work/exe-planted/tang" "$work/exe_planted.c" \
@@ -163,15 +170,16 @@ built=1
     -l:libghoti.io-lang-tang-0.$SHEXT &&
   $CC -o "$work/exe-control/tang" "$work/exe_control.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-0.$SHEXT \
-    -l:libghoti.io-unicode-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT
+    -l:libghoti.io-unicode-0.$SHEXT -l:libghoti.io-runtime-core-0.$SHEXT \
+    -l:libghoti.io-runtime-heap-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT
 } >"$work/build.log" 2>&1 || built=0
 if [ "$built" -eq 0 ]; then
   fail "could not build the link-line fixtures:
 $(cat "$work/build.log")"
 else
-  expect_pass 'links/control (cutil and unicode)' "$E" --links "$work/control"
+  expect_pass 'links/control (cutil, unicode, runtime-core, runtime-heap)' "$E" --links "$work/control"
   expect_pass 'links/cutil with a BRANCH suffix (-dev)' "$E" --links "$work/dev"
-  expect_pass 'links/program control (cutil, unicode, lang-tang)' \
+  expect_pass 'links/program control (cutil, unicode, runtime-core, runtime-heap, lang-tang)' \
     "$E" --links "$work/exe-control/tang"
   expect_fail 'links/planted-tang (a shared object linking ctang)' 'lang-tang -> tang' \
     "$E" --links "$work/planted-tang"

@@ -15,6 +15,7 @@
 
 #include <execinfo.h>
 #include <map>
+#include <atomic>
 #include <unordered_set>
 
 extern "C" {
@@ -25,10 +26,13 @@ void __real_free(void * pointer);
 }
 
 namespace {
-long g_calls = 0;
-long g_fail_at = 0;
-bool g_fired = false;
-bool g_tracking = false;
+// Atomic because the engine tests run contexts on several threads, and every
+// one of them goes through these wrappers. Relaxed is enough: the counters
+// order nothing, and the sweeps that arm them are single-threaded.
+std::atomic<long> g_calls{0};
+std::atomic<long> g_fail_at{0};
+std::atomic<bool> g_fired{false};
+std::atomic<bool> g_tracking{false};
 // Blocks handed out by the wrappers while tracking, and not yet freed. The set
 // is libstdc++'s, which allocates inside libstdc++ and so does not recurse.
 std::unordered_set<void *> & live_blocks() {
@@ -70,8 +74,9 @@ void * g_fail_frames[24];
 int g_fail_depth = 0;
 
 bool should_fail() {
-  g_calls++;
-  if (g_fail_at != 0 && g_calls == g_fail_at) {
+  long n = ++g_calls;
+  long at = g_fail_at;
+  if (at != 0 && n == at) {
     g_fired = true;
     if (want_stacks()) {
       g_fail_depth = backtrace(g_fail_frames, 24);

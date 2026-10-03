@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeBreak.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_break_vtable = {
@@ -43,6 +45,7 @@ GLTANG_Ast_Node_Break * gltang_ast_node_break_create(GLTANG_PARSER_LTYPE locatio
       .vtable = &gltang_ast_node_break_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
   };
   return self;

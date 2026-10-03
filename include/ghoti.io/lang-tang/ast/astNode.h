@@ -233,6 +233,14 @@ struct GLTANG_Ast_Node {
    * Whether or not the AST node is a singleton.
    */
   bool is_singleton;
+  /**
+   * The height of the subtree rooted here: 1 for a leaf, otherwise one more
+   * than the tallest child. A constructor that would make a node taller than
+   * GLTANG_MAX_TREE_DEPTH refuses instead, so destroy, walk, count, print and
+   * the compiler, which recurse once per level, are bounded on every tree
+   * that exists.
+   */
+  uint32_t depth;
 };
 
 /**

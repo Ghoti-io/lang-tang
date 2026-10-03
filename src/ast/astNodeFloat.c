@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeFloat.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_float_vtable = {
@@ -43,6 +45,7 @@ GLTANG_Ast_Node_Float * gltang_ast_node_float_create(GCU_float64_t value, GLTANG
       .vtable = &gltang_ast_node_float_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
     .value = value,
   };

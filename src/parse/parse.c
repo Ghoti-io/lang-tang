@@ -44,6 +44,7 @@
 #undef YY_HEADER_EXPORT_START_CONDITIONS
 
 #include <ghoti.io/lang-tang/ast/astNodeAll.h>
+#include "../ast/ast_internal.h"
 
 // Defined by the generated scanner and parser, which are not declared in any
 // header of ours.
@@ -128,6 +129,7 @@ GLTANG_Result gltang_parse(const char * source, GLTANG_ParseMode mode, GLTANG_Pa
     gltang_flex_set_state(TEMPLATE, scanner);
   }
 
+  gltang_ast_depth_reset();
   GLTANG_Ast_Node * ast = 0;
   GLTANG_Parser_Error parse_error = 0;
   GLTANG_PARSER_LTYPE error_location = {0, 0, 0, 0};
@@ -168,6 +170,13 @@ GLTANG_Result gltang_parse(const char * source, GLTANG_ParseMode mode, GLTANG_Pa
       // The error handler ran but could not allocate its node.
       result = GLTANG_ERR_OOM;
     }
+    // A constructor that refused a tree taller than the budget can only return
+    // NULL, which the grammar reads as running out of memory. The refusal was
+    // remembered, so the caller is told which it was.
+    if (result == GLTANG_ERR_OOM && gltang_ast_depth_refused()) {
+      result = GLTANG_ERR_LIMIT;
+    }
+    gltang_ast_depth_reset();
     if (ast) {
       gltang_ast_node_destroy(ast);
     }

@@ -24,6 +24,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeBoolean.h>
 #include <ghoti.io/lang-tang/ast/astNodeFloat.h>
 #include <ghoti.io/lang-tang/ast/astNodeInteger.h>
@@ -41,6 +43,15 @@ GLTANG_Ast_Node_VTable gltang_ast_node_unary_vtable = {
 GLTANG_Ast_Node_Unary * gltang_ast_node_unary_create(GLTANG_Ast_Node * expression, GLTANG_Unary_Type operator_type, GLTANG_PARSER_LTYPE location) {
   assert(expression);
 
+  uint32_t depth = 1 + gltang_ast_height(expression);
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Unary * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Unary));
   if (!self) {
     return 0;
@@ -51,6 +62,7 @@ GLTANG_Ast_Node_Unary * gltang_ast_node_unary_create(GLTANG_Ast_Node * expressio
       .vtable = &gltang_ast_node_unary_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .expression = expression,
     .operator_type = operator_type,
@@ -75,13 +87,10 @@ void gltang_ast_node_unary_print(GLTANG_Ast_Node * self, const char * indent) {
   GLTANG_Ast_Node_Unary * unary = (GLTANG_Ast_Node_Unary *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 3);
+  char * new_indent = gltang_ast_indent_extend(indent, 2);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "  ", 3);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -92,7 +101,7 @@ void gltang_ast_node_unary_print(GLTANG_Ast_Node * self, const char * indent) {
         ? "!"
         : "unknown");
   gltang_ast_node_print(unary->expression, new_indent);
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

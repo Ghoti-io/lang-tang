@@ -45,15 +45,20 @@ TEST(Ledger, TheRealLedgerIsValid) {
 TEST(Ledger, EverySectionThirteenItemThatIsNotFixedHasARow) {
   // Language reference section 13: items 9 ("not a defect, described
   // wrongly") and 13 ("still open") are the two whose status is not Fixed.
+  // Item 9 waits for the error list (story 10 and 11) and so is `open`. Item
+  // 13 (dates) was closed by the compiler story, which adds no syntax: its
+  // row is `fixed`, and the test requires that the row exists and has not
+  // been dropped.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   for (const char * ref : {"9", "13"}) {
     bool found = false;
     for (const auto & r : ledger.rows) {
-      if (r.ref == ref && r.category == "ctang-defect" && r.status == "open") {
+      std::string wanted = std::string(ref) == "9" ? "open" : "fixed";
+      if (r.ref == ref && r.category == "ctang-defect" && r.status == wanted) {
         found = true;
       }
     }
-    EXPECT_TRUE(found) << "no open ctang-defect row for section 13 item " << ref;
+    EXPECT_TRUE(found) << "no " << (std::string(ref) == "9" ? "open" : "fixed") << " ctang-defect row for section 13 item " << ref;
   }
 }
 

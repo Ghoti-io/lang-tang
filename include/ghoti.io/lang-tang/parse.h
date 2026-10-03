@@ -60,6 +60,20 @@ typedef enum {
   GLTANG_PARSE_MODE_COUNT ///< Not a mode: closes the enum.
 } GLTANG_ParseMode;
 
+/**
+ * @brief The tallest syntax tree gltang_parse() will build, in nodes along the
+ *   longest path from the root to a leaf.
+ *
+ * Destroying, walking, counting and printing a tree, and compiling it, each
+ * recurse once per level, and a left-associative source such as `1+1+1+...`
+ * makes a tree as tall as it is long while the parser's own stack stays flat.
+ * A source whose tree would be taller than this is refused with
+ * ::GLTANG_ERR_LIMIT and no tree, so every tree that exists can be walked on
+ * an ordinary C stack. The figure is the parser's own nesting limit. ctang
+ * has no such limit, and the difference is recorded in the divergence ledger.
+ */
+#define GLTANG_MAX_TREE_DEPTH 10000
+
 /** @brief The longest message ::GLTANG_ParseError keeps, terminator included. */
 #define GLTANG_PARSE_ERROR_MESSAGE_SIZE 256
 
@@ -103,7 +117,8 @@ typedef struct GLTANG_Tree GLTANG_Tree;
  *   `a[i] += 1`, truncated input); ::GLTANG_ERR_LIMIT when the parser's own
  *   stack limit is reached by nesting thousands deep (bison reports a stack it
  *   could not grow the same way, so a real out-of-memory there also reads as
- *   this result); ::GLTANG_ERR_OOM when an
+ *   this result), or when the tree would be taller than
+ *   ::GLTANG_MAX_TREE_DEPTH; ::GLTANG_ERR_OOM when an
  *   allocation fails; ::GLTANG_ERR_INVALID for a NULL `source` or `tree_out`
  *   or a bad mode. A refusal allocates nothing the caller must free.
  */

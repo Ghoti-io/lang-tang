@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeString.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_string_vtable = {
@@ -46,6 +48,7 @@ GLTANG_Ast_Node_String * gltang_ast_node_string_create(GLTANG_Unicode_String * s
       .vtable = &gltang_ast_node_string_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
     .string = string,
   };

@@ -24,6 +24,8 @@
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/cutil/hash.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeFunction.h>
 #include <ghoti.io/lang-tang/ast/astNodeIdentifier.h>
 #include <ghoti.io/lang-tang/ast/astNodeParseError.h>
@@ -41,6 +43,15 @@ GLTANG_Ast_Node_Function * gltang_ast_node_function_create(const char * identifi
   assert(parameters);
   assert(block);
 
+  uint32_t depth = 1 + gltang_ast_height(block);
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Function * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Function));
   if (!self) {
     return 0;
@@ -51,6 +62,7 @@ GLTANG_Ast_Node_Function * gltang_ast_node_function_create(const char * identifi
       .vtable = &gltang_ast_node_function_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .identifier = identifier,
     .hash = GLTANG_STRING_HASH(identifier, strlen(identifier)),
@@ -79,21 +91,16 @@ void gltang_ast_node_function_print(GLTANG_Ast_Node * self, const char * indent)
   GLTANG_Ast_Node_Function * function = (GLTANG_Ast_Node_Function *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
-  char * small_indent = gcu_malloc(strlen(indent) + 3);
+  char * small_indent = gltang_ast_indent_extend(indent, 2);
   if (!small_indent) {
-    gcu_free(new_indent);
+    gltang_ast_indent_release(new_indent, indent);
     return;
   }
-  memcpy(small_indent, indent, indent_len + 1);
-  memcpy(small_indent + indent_len, "  ", 3);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -111,8 +118,8 @@ void gltang_ast_node_function_print(GLTANG_Ast_Node * self, const char * indent)
   assert(function->block->vtable->print);
   function->block->vtable->print(function->block, small_indent);
 
-  gcu_free(new_indent);
-  gcu_free(small_indent);
+  gltang_ast_indent_release(new_indent, indent);
+  gltang_ast_indent_release(small_indent, indent);
 }
 
 

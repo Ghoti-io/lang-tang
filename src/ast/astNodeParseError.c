@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeParseError.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_parse_error_vtable = {
@@ -57,6 +59,7 @@ GLTANG_Ast_Node_Parse_Error * gltang_ast_node_parse_error_create(const char * me
       .vtable = &gltang_ast_node_parse_error_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
     .message = 0,
   };

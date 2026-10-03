@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeContinue.h>
 
 GLTANG_Ast_Node_VTable gltang_ast_node_continue_vtable = {
@@ -43,6 +45,7 @@ GLTANG_Ast_Node_Continue * gltang_ast_node_continue_create(GLTANG_PARSER_LTYPE l
       .vtable = &gltang_ast_node_continue_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
   };
   return self;

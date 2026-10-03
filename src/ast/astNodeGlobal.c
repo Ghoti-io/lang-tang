@@ -23,6 +23,8 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeAssign.h>
 #include <ghoti.io/lang-tang/ast/astNodeGlobal.h>
 #include <ghoti.io/lang-tang/ast/astNodeIdentifier.h>
@@ -47,6 +49,21 @@ GLTANG_Ast_Node_Global * gltang_ast_node_global_create(GLTANG_Ast_Node * identif
     }
   }
 
+  uint32_t depth = 1 + gltang_ast_height(full_assignment ? full_assignment : identifier);
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    if (full_assignment) {
+
+      gcu_free(full_assignment);
+
+    }
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Global * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Global));
   if (!self) {
     // A refused creation leaves every argument with the caller, which frees
@@ -64,6 +81,7 @@ GLTANG_Ast_Node_Global * gltang_ast_node_global_create(GLTANG_Ast_Node * identif
       .vtable = &gltang_ast_node_global_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .identifier = identifier,
     .assignment = full_assignment,
@@ -93,13 +111,10 @@ void gltang_ast_node_global_print(GLTANG_Ast_Node * self, const char * indent) {
   GLTANG_Ast_Node_Global * global = (GLTANG_Ast_Node_Global *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -110,7 +125,7 @@ void gltang_ast_node_global_print(GLTANG_Ast_Node * self, const char * indent) {
     printf("%s  Assignment:\n", indent);
     gltang_ast_node_print(global->assignment, new_indent);
   }
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

@@ -25,8 +25,12 @@
  *
  * Every library ships one from its first commit, so that "performant" is a
  * claim with a way to check it. Besides the calibration case it holds the
- * cases of the front end: parsing a small script, parsing a 1 MiB generated
- * template, and destroying the tree that template made.
+ * cases of the front end (parsing a small script, parsing a 1 MiB generated
+ * template, destroying the tree that template made, compiling both) and of
+ * the engine (a tight integer loop, a recursive function, string building,
+ * array building, and a loop that is paused and resumed on a small fuel
+ * budget). An engine case's unit is one run of a fixed program; the clock
+ * covers the run and not the building or the tearing down of the context.
  *
  * The calibration case is a fixed amount of integer work that touches no
  * library code, run the same way every real case will be, so a figure from a
@@ -39,14 +43,20 @@
  *   bench --smoke   run every case once with a tiny workload (what `make
  *                   test` does); proves the harness builds, links and runs
  *
- * No numeric budget is asserted here. AD-26 records budgets once a first
- * measurement of a real case exists.
+ * No numeric budget is asserted here; the first measurements are recorded in
+ * documentation/design.md.
  */
 
 /* clock_gettime(CLOCK_MONOTONIC) is POSIX, and -std=c17 hides it. */
 #define _POSIX_C_SOURCE 200809L
 
+#include <ghoti.io/lang-tang/compile.h>
+#include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/lang-tang.h>
+#include <ghoti.io/lang-tang/program.h>
+#include <ghoti.io/lang-tang/value.h>
+#include <ghoti.io/runtime-core/runtime-core.h>
+#include <ghoti.io/runtime-heap/runtime-heap.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -191,11 +201,159 @@ static uint64_t destroy_big_tree_run(uint64_t iterations, double * elapsed) {
   return sink;
 }
 
+
+/* Compiles a source; a case that cannot do this has nothing to measure. */
+static GLTANG_Program * compile_source(const char * source, GLTANG_ParseMode mode) {
+  GLTANG_Tree * tree = NULL;
+  GLTANG_Program * program = NULL;
+  if (gltang_parse(source, mode, NULL, &tree) != GLTANG_OK) {
+    setup_failed("parse of an engine case");
+  }
+  if (gltang_compile(tree, "bench", NULL, &program) != GLTANG_OK) {
+    setup_failed("compile of an engine case");
+  }
+  gltang_tree_destroy(tree);
+  return program;
+}
+
+static uint64_t compile_small_script_run(uint64_t iterations, double * elapsed) {
+  GLTANG_Tree * tree = NULL;
+  if (gltang_parse(small_script, GLTANG_PARSE_SCRIPT, NULL, &tree) != GLTANG_OK) {
+    setup_failed("parse of the small script");
+  }
+  uint64_t sink = 0;
+  double start = now_ns();
+  for (uint64_t i = 0; i < iterations; i++) {
+    GLTANG_Program * program = NULL;
+    if (gltang_compile(tree, "bench", NULL, &program) != GLTANG_OK) {
+      setup_failed("compile of the small script");
+    }
+    sink += gltang_program_function_count(program) + gltang_program_function_size(program, 0);
+    gltang_program_release(program);
+  }
+  *elapsed = now_ns() - start;
+  gltang_tree_destroy(tree);
+  return sink;
+}
+
+static uint64_t compile_big_template_run(uint64_t iterations, double * elapsed) {
+  size_t length;
+  char * text = make_big_template(&length);
+  GLTANG_Tree * tree = NULL;
+  if (gltang_parse(text, GLTANG_PARSE_TEMPLATE, NULL, &tree) != GLTANG_OK) {
+    setup_failed("parse of the big template");
+  }
+  uint64_t sink = 0;
+  double start = now_ns();
+  for (uint64_t i = 0; i < iterations; i++) {
+    GLTANG_Program * program = NULL;
+    if (gltang_compile(tree, "bench", NULL, &program) != GLTANG_OK) {
+      setup_failed("compile of the big template");
+    }
+    sink += gltang_program_function_size(program, 0);
+    gltang_program_release(program);
+  }
+  *elapsed = now_ns() - start;
+  gltang_tree_destroy(tree);
+  free(text);
+  return sink;
+}
+
+/* One engine: a group, a context with the given fuel, a heap, an execution. */
+typedef struct {
+  GRCORE_Group * group;
+  GRCORE_Context * context;
+  GRHEAP_Heap * heap;
+  GLTANG_Execution * execution;
+} Engine;
+
+static void engine_open(Engine * e, GLTANG_Program * program, uint64_t fuel) {
+  GRCORE_Options * options = NULL;
+  GRHEAP_Options * heap_options = NULL;
+  if (grcore_group_create(NULL, NULL, &e->group) != GRCORE_OK
+      || grcore_options_create(NULL, &options) != GRCORE_OK
+      || grheap_options_create(NULL, &heap_options) != GRHEAP_OK) {
+    setup_failed("a group");
+  }
+  grcore_options_set_fuel(options, fuel);
+  grcore_options_set_guest_depth(options, 1024);
+  gltang_heap_options_configure(heap_options);
+  if (grcore_context_create(e->group, options, &e->context) != GRCORE_OK
+      || grheap_heap_create(e->context, heap_options, &e->heap) != GRHEAP_OK
+      || gltang_execution_create(e->context, program, &e->execution) != GLTANG_OK) {
+    setup_failed("a context");
+  }
+  grheap_options_destroy(heap_options);
+  grcore_options_destroy(options);
+}
+
+static void engine_close(Engine * e) {
+  grcore_context_destroy(e->context);
+  grcore_group_destroy(e->group);
+}
+
+/* Runs the source @p iterations times; the clock covers only the runs. A
+ * result of the wrong kind means the program did not do what the case says it
+ * does, so the figure would be of something else. */
+static uint64_t run_source(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice) {
+  GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
+  uint64_t sink = 0;
+  double total = 0.0;
+  for (uint64_t i = 0; i < iterations; i++) {
+    Engine e;
+    engine_open(&e, program, fuel_slice ? fuel_slice : GRCORE_UNLIMITED);
+    GRCORE_Outcome outcome;
+    double start = now_ns();
+    GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
+    while (r == GRCORE_OK && outcome == GRCORE_OUTCOME_PAUSED) {
+      grcore_context_set_fuel(e.context, grcore_context_fuel_used(e.context) + fuel_slice);
+      r = grcore_resume(e.context, &outcome);
+    }
+    total += now_ns() - start;
+    if (r != GRCORE_OK || gltang_execution_result_kind(e.execution) != expect) {
+      setup_failed(source);
+    }
+    sink += (uint64_t)gltang_execution_result_integer(e.execution) + gltang_execution_result_size(e.execution);
+    engine_close(&e);
+  }
+  *elapsed = total;
+  gltang_program_release(program);
+  return sink;
+}
+
+static uint64_t run_loop_run(uint64_t iterations, double * elapsed) {
+  return run_source("s = 0; for (i = 0; i < 1000; i += 1) { s += i * 2; } s;", iterations, elapsed, GLTANG_KIND_INTEGER, 0);
+}
+
+static uint64_t run_fib_run(uint64_t iterations, double * elapsed) {
+  return run_source("function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } fib(15);", iterations, elapsed, GLTANG_KIND_INTEGER, 0);
+}
+
+static uint64_t run_string_run(uint64_t iterations, double * elapsed) {
+  return run_source("s = \"\"; for (i = 0; i < 200; i += 1) { s = s + \"ab\"; } s.length;", iterations, elapsed, GLTANG_KIND_INTEGER, 0);
+}
+
+static uint64_t run_array_run(uint64_t iterations, double * elapsed) {
+  return run_source("a = []; for (i = 0; i < 1000; i += 1) { a[i] = i; } a;", iterations, elapsed, GLTANG_KIND_ARRAY, 0);
+}
+
+static uint64_t run_polling_run(uint64_t iterations, double * elapsed) {
+  /* The same loop as run-loop-1000, paused and resumed every 500 units of fuel. */
+  return run_source("s = 0; for (i = 0; i < 1000; i += 1) { s += i * 2; } s;", iterations, elapsed, GLTANG_KIND_INTEGER, 500);
+}
+
 static const Case cases[] = {
     {"calibration", calibration_run, 200u * 1000u * 1000u, 1000u * 1000u},
     {"parse-small-script", parse_small_script_run, 100000u, 100u},
     {"parse-1MiB-template", parse_big_template_run, 20u, 1u},
     {"destroy-1MiB-template-tree", destroy_big_tree_run, 16u, 1u},
+    {"compile-small-script", compile_small_script_run, 100000u, 100u},
+    {"compile-1MiB-template", compile_big_template_run, 20u, 1u},
+    {"run-loop-1000", run_loop_run, 5000u, 5u},
+    {"run-fib-15", run_fib_run, 1000u, 2u},
+    {"run-string-build-200", run_string_run, 5000u, 5u},
+    {"run-array-build-1000", run_array_run, 5000u, 5u},
+    {"run-polling-loop-1000", run_polling_run, 5000u, 5u},
 };
 
 #define REPEATS 7

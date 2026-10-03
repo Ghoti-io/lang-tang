@@ -222,6 +222,32 @@ endif
 endif
 INCLUDE += $(UNICODE_CFLAGS)
 
+# runtime-core and runtime-heap: the engine runs on the frame protocol and the
+# collector (AD-8, AD-11). Hard errors that name the fix, like the others.
+RCORE_PC ?= ghoti.io-runtime-core$(BRANCH)
+RCORE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RCORE_PC) 2>/dev/null)
+RCORE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RCORE_PC) 2>/dev/null)
+ifeq ($(strip $(RCORE_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-runtime-core was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback.)
+endif
+endif
+INCLUDE += $(RCORE_CFLAGS)
+
+RHEAP_PC ?= ghoti.io-runtime-heap$(BRANCH)
+RHEAP_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RHEAP_PC) 2>/dev/null)
+RHEAP_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RHEAP_PC) 2>/dev/null)
+ifeq ($(strip $(RHEAP_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-runtime-heap was not found by pkg-config. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file. There is deliberately no sibling-checkout fallback.)
+endif
+endif
+INCLUDE += $(RHEAP_CFLAGS)
+
+# Everything a link needs, in dependency order: the collector, the core, then
+# the libraries the ported front end uses.
+DEP_LIBS := $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS)
+
 # bison and flex generate the parser and the scanner. A generator that cannot
 # run stops the build and names what is missing; nothing is written in its
 # place (CONVENTIONS.md section 6).
@@ -264,7 +290,7 @@ TEST_HELPER_OBJ := $(patsubst tests/%.cpp,$(OBJ_DIR)/tests/%.o,$(TEST_HELPER_SRC
 # dropped. The archive is a normal prerequisite of every test, so a clean
 # tree builds it; the .so is order-only because check-symbols wants it and
 # the tests do not link it.
-CORELIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-archive $(UNICODE_LIBS) $(CUTIL_LIBS)
+CORELIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-archive $(DEP_LIBS)
 
 # Every allocation the library makes by plain malloc, calloc or realloc - its
 # own through cutil's inline gcu_malloc, flex's, and bison's stack - passes
@@ -383,6 +409,12 @@ $(OBJ_DIR)/ast/%.o: src/ast/%.c $(FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
+# The compiler reads the tree through the same struct-inheritance downcast the
+# tree is built on, so it takes the same relaxation.
+$(OBJ_DIR)/compile/compile.o: src/compile/compile.c $(FLAGS_STAMP) | $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(LIB_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+
 # Explicit rules replace the pattern rule's prerequisites rather than adding to
 # them, so these name the flags stamp and the generated headers themselves. The
 # stamp goes after the source so that $< is still the source.
@@ -396,7 +428,7 @@ $(OBJ_DIR)/tangScanner.o: $(GEN_DIR)/tangScanner.c $(FLAGS_STAMP) | $(GEN_HEADER
 
 $(APP_DIR)/$(TARGET): $(LIBOBJECTS)
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
+	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) $(DEP_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
 ifeq ($(OS_NAME), Linux)
 	@ln -f -s $(TARGET) $(APP_DIR)/$(SO_NAME)
 	@ln -f -s $(SO_NAME) $(APP_DIR)/$(BASE_NAME)
@@ -415,7 +447,7 @@ $(OBJ_DIR)/tang.o: src/tang.c $(FLAGS_STAMP) | $(GEN_HEADERS)
 
 $(APP_DIR)/tang$(EXE_EXTENSION): $(OBJ_DIR)/tang.o $(APP_DIR)/$(TARGET)
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -o $@ $(OBJ_DIR)/tang.o -L$(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH) $(LDFLAGS) $(UNICODE_LIBS) $(CUTIL_LIBS) -Wl,-rpath,$(abspath $(APP_DIR))
+	$(CC) $(CFLAGS) -o $@ $(OBJ_DIR)/tang.o -L$(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH) $(LDFLAGS) $(DEP_LIBS) -Wl,-rpath,$(abspath $(APP_DIR))
 
 ifneq ($(TEST_HELPER_SRC),)
 $(TEST_HELPER_OBJ): $(TEST_HELPER_SRC) $(FLAGS_STAMP) | $(GEN_HEADERS)
@@ -449,7 +481,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS)
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing
-.PHONY: check-labels check-edges check-gates bench test-tsan test-oracle cli-test fuzz-replay fuzz-parse
+.PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 .PHONY: fuzz fuzz-clean
@@ -622,11 +654,23 @@ else
 	@printf 'check-symbols: skipped (Linux only)\n'
 endif
 
+# The suites that drive the engine. `make test` runs them again with the heap
+# collecting before every allocation and checking every store (torture and
+# verify), and again with a guest stack that moves on every push; test-torture
+# runs them under ASan as well.
+TORTURE_SUITES := testExecute_simple testExecute_complex testEngine testCompile
+
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf '\n### Running %s ###\n\n' "$$test_name"; \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
+	done
+	@for mode in "GRHEAP_TORTURE=1 GRHEAP_VERIFY=1" "GLTANG_TEST_MOVING_STACK=1"; do \
+		for t in $(TORTURE_SUITES); do \
+			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+		done; \
 	done
 	@if [ -z "$(strip $(BENCH_EXECUTABLES))" ]; then \
 		printf 'test: no benchmark harness under bench/ (AD-26 requires one)\n' >&2; exit 1; \
@@ -732,7 +776,7 @@ ASAN_DEPFILES := $(ASAN_LIBOBJECTS:.o=.d) \
 -include $(ASAN_DEPFILES)
 ASAN_ARCHIVE := $(ASAN_APP_DIR)/$(STATIC_TARGET)
 ASAN_TEST_HELPER_OBJ := $(patsubst tests/%.cpp,$(ASAN_OBJ_DIR)/tests/%.o,$(TEST_HELPER_SRC))
-ASAN_CORELIBRARY := -Wl,--whole-archive $(ASAN_ARCHIVE) -Wl,--no-whole-archive $(UNICODE_LIBS) $(CUTIL_LIBS)
+ASAN_CORELIBRARY := -Wl,--whole-archive $(ASAN_ARCHIVE) -Wl,--no-whole-archive $(DEP_LIBS)
 ASAN_CFLAGS := $(CFLAGS) $(ASAN_UBSAN_FLAGS) -DGLTANG_BUILD
 ASAN_CXXFLAGS := $(CXXFLAGS) $(ASAN_UBSAN_FLAGS)
 ASAN_LDFLAGS := $(LDFLAGS) $(ASAN_UBSAN_FLAGS)
@@ -745,6 +789,10 @@ $(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP) | $(GEN_HEADERS)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_OBJ_DIR)/ast/%.o: src/ast/%.c $(ASAN_FLAGS_STAMP) | $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(ASAN_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+
+$(ASAN_OBJ_DIR)/compile/compile.o: src/compile/compile.c $(ASAN_FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
@@ -792,6 +840,18 @@ test-asan: $(ASAN_TEST_EXECUTABLES) ## Build with ASan+UBSan and run the tests
 	done
 	@printf '\nASan+UBSan suite clean.\n'
 
+ASAN_TORTURE_EXECUTABLES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TORTURE_SUITES)))
+
+test-torture: $(ASAN_TORTURE_EXECUTABLES) ## ASan+UBSan with the heap in torture and verify and a moving guest stack
+	@for test_exe in $(ASAN_TORTURE_EXECUTABLES); do \
+		printf '\n### ASan+UBSan torture %s ###\n\n' "$$(basename $$test_exe)"; \
+		GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 GLTANG_TEST_MOVING_STACK=1 \
+		LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}" \
+		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
+			$$test_exe --gtest_brief=1 || exit 1; \
+	done
+	@printf '\nASan+UBSan torture suite clean.\n'
+
 ####################################################################
 # ThreadSanitizer, in its own tree
 ####################################################################
@@ -809,7 +869,7 @@ TSAN_DEPFILES := $(TSAN_LIBOBJECTS:.o=.d) \
 -include $(TSAN_DEPFILES)
 TSAN_ARCHIVE := $(TSAN_APP_DIR)/$(STATIC_TARGET)
 TSAN_TEST_HELPER_OBJ := $(patsubst tests/%.cpp,$(TSAN_OBJ_DIR)/tests/%.o,$(TEST_HELPER_SRC))
-TSAN_CORELIBRARY := -Wl,--whole-archive $(TSAN_ARCHIVE) -Wl,--no-whole-archive $(UNICODE_LIBS) $(CUTIL_LIBS)
+TSAN_CORELIBRARY := -Wl,--whole-archive $(TSAN_ARCHIVE) -Wl,--no-whole-archive $(DEP_LIBS)
 TSAN_CFLAGS := $(CFLAGS) $(TSAN_FLAGS) -DGLTANG_BUILD
 TSAN_CXXFLAGS := $(CXXFLAGS) $(TSAN_FLAGS)
 TSAN_LDFLAGS := $(LDFLAGS) $(TSAN_FLAGS)
@@ -822,6 +882,10 @@ $(TSAN_OBJ_DIR)/%.o: src/%.c $(TSAN_FLAGS_STAMP) | $(GEN_HEADERS)
 	$(CC) $(TSAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(TSAN_OBJ_DIR)/ast/%.o: src/ast/%.c $(TSAN_FLAGS_STAMP) | $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(TSAN_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+
+$(TSAN_OBJ_DIR)/compile/compile.o: src/compile/compile.c $(TSAN_FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(TSAN_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
@@ -936,8 +1000,9 @@ test-oracle: oracle-present $(ORACLE_RUNNER) $(ORACLE_TEST) ## Compare lang-tang
 # build, and fails on a crash. It is part of `make test`, so a regression that
 # a fuzzer once found is a failing test and not a campaign to repeat. It is not
 # a campaign, and no differential fuzzing is done here.
-FUZZ_REPLAYS := $(APP_DIR)/fuzz/replay_parse$(EXE_EXTENSION) $(APP_DIR)/fuzz/replay_template$(EXE_EXTENSION)
--include $(APP_DIR)/fuzz/replay_parse.d $(APP_DIR)/fuzz/replay_template.d
+FUZZ_REPLAYS := $(APP_DIR)/fuzz/replay_parse$(EXE_EXTENSION) $(APP_DIR)/fuzz/replay_template$(EXE_EXTENSION) \
+	$(APP_DIR)/fuzz/replay_run$(EXE_EXTENSION)
+-include $(APP_DIR)/fuzz/replay_parse.d $(APP_DIR)/fuzz/replay_template.d $(APP_DIR)/fuzz/replay_run.d
 
 $(APP_DIR)/fuzz/replay_%$(EXE_EXTENSION): tests/fuzz/fuzz_%.c tests/fuzz/replay_main.c \
 		$(APP_DIR)/$(STATIC_TARGET) $(FLAGS_STAMP) | $(APP_DIR)/$(TARGET) $(GEN_HEADERS)
@@ -989,7 +1054,7 @@ FUZZ_ASAN_OPTIONS ?= allocator_may_return_null=1:max_allocation_size_mb=512:quar
 
 FUZZ_OBJECTS := $(patsubst $(OBJ_DIR)/%,$(FUZZ_OBJ_DIR)/%,$(LIBOBJECTS))
 -include $(FUZZ_OBJECTS:.o=.d)
--include $(patsubst %,$(FUZZ_APP_DIR)/%.d,fuzz_parse fuzz_template)
+-include $(patsubst %,$(FUZZ_APP_DIR)/%.d,fuzz_parse fuzz_template fuzz_run)
 
 ifdef PREFIX
 FUZZ_RPATH := -Wl,-rpath,$(LIB_INSTALL_PATH)/$(SUITE)
@@ -1021,7 +1086,7 @@ $$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.c $$(FUZZ_OBJECTS) $$(FUZZ_FLAGS_STAMP)
 	@printf "\n### Building $1 ###\n"
 	$$(FUZZ_CC) $$(FUZZ_BIN_CFLAGS) $$(INCLUDE) \
 		-MMD -MP -MF $$(FUZZ_APP_DIR)/$1.d \
-		-o $$@ $$< $$(FUZZ_OBJECTS) $$(UNICODE_LIBS) $$(CUTIL_LIBS) -lstdc++ -lm $$(FUZZ_RPATH)
+		-o $$@ $$< $$(FUZZ_OBJECTS) $$(DEP_LIBS) -lstdc++ -lm $$(FUZZ_RPATH)
 
 # env -u LD_PRELOAD: a sanitizer runtime insists on loading first, and this
 # workstation's desktop session sets LD_PRELOAD for unrelated reasons.
@@ -1038,9 +1103,10 @@ endef
 
 $(eval $(call fuzz-rule,fuzz_parse,parse))
 $(eval $(call fuzz-rule,fuzz_template,template))
+$(eval $(call fuzz-rule,fuzz_run,run))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz: fuzz-run-parse fuzz-run-template
+fuzz: fuzz-run-parse fuzz-run-template fuzz-run-run
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 fuzz-clean:
@@ -1051,7 +1117,7 @@ fuzz-clean:
 ####################################################################
 
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
-PC_REQUIRES := $(CUTIL_PC) $(UNICODE_PC)
+PC_REQUIRES := $(CUTIL_PC) $(UNICODE_PC) $(RCORE_PC) $(RHEAP_PC)
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)
 
 install: all ## Install the library
@@ -1160,20 +1226,20 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(TSAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(TSAN_CFLAGS) $(TSAN_CXXFLAGS) $(TSAN_LDFLAGS) $(INCLUDE) $(TSAN_CORELIBRARY) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(TSAN_CFLAGS) $(TSAN_CXXFLAGS) $(TSAN_LDFLAGS) $(INCLUDE) $(TSAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(ASAN_CORELIBRARY) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(ASAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(FUZZ_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_LIB_CFLAGS) $(FUZZ_BIN_CFLAGS) $(INCLUDE) $(UNICODE_LIBS) $(CUTIL_LIBS) $(FUZZ_RPATH) $(FUZZ_APP_DIR)' > $@.new
+	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_LIB_CFLAGS) $(FUZZ_BIN_CFLAGS) $(INCLUDE) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(FUZZ_RPATH) $(FUZZ_APP_DIR)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@

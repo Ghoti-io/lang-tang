@@ -25,6 +25,8 @@
 #include <ghoti.io/cutil/hash.h>
 #include <ghoti.io/cutil/string.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeBoolean.h>
 #include <ghoti.io/lang-tang/ast/astNodeIdentifier.h>
 #include <ghoti.io/lang-tang/ast/astNodeInteger.h>
@@ -56,6 +58,7 @@ GLTANG_Ast_Node_Identifier * gltang_ast_node_identifier_create(const char * iden
       .vtable = &gltang_ast_node_identifier_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = 1,
     },
     .identifier = identifier,
     .hash = GLTANG_STRING_HASH(identifier, strlen(identifier)),

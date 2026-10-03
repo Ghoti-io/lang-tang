@@ -25,6 +25,8 @@
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/cutil/string.h>
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/parse.h>
+#include "ast_internal.h"
 #include <ghoti.io/lang-tang/ast/astNodeAssign.h>
 #include <ghoti.io/lang-tang/ast/astNodeBinary.h>
 #include <ghoti.io/lang-tang/ast/astNodeDoWhile.h>
@@ -42,6 +44,15 @@ GLTANG_Ast_Node_Do_While * gltang_ast_node_do_while_create(GLTANG_Ast_Node * con
   assert(condition);
   assert(block);
 
+  uint32_t depth = 1 + gltang_ast_height_max(gltang_ast_height(condition), gltang_ast_height(block));
+
+  if (!gltang_ast_depth_ok(depth)) {
+
+    return 0;
+
+  }
+
+
   GLTANG_Ast_Node_Do_While * self = gcu_malloc(sizeof(GLTANG_Ast_Node_Do_While));
   if (!self) {
     return 0;
@@ -52,6 +63,7 @@ GLTANG_Ast_Node_Do_While * gltang_ast_node_do_while_create(GLTANG_Ast_Node * con
       .vtable = &gltang_ast_node_do_while_vtable,
       .location = location,
       .is_singleton = false,
+      .depth = depth,
     },
     .condition = condition,
     .block = block,
@@ -77,13 +89,10 @@ void gltang_ast_node_do_while_print(GLTANG_Ast_Node * self, const char * indent)
   GLTANG_Ast_Node_Do_While * do_while = (GLTANG_Ast_Node_Do_While *) self;
 
   assert(indent);
-  char * new_indent = gcu_malloc(strlen(indent) + 5);
+  char * new_indent = gltang_ast_indent_extend(indent, 4);
   if (!new_indent) {
     return;
   }
-  size_t indent_len = strlen(indent);
-  memcpy(new_indent, indent, indent_len + 1);
-  memcpy(new_indent + indent_len, "    ", 5);
 
   assert(self->vtable);
   assert(self->vtable->name);
@@ -94,7 +103,7 @@ void gltang_ast_node_do_while_print(GLTANG_Ast_Node * self, const char * indent)
 
   printf("%s  Block:\n", indent);
   gltang_ast_node_print(do_while->block, new_indent);
-  gcu_free(new_indent);
+  gltang_ast_indent_release(new_indent, indent);
 }
 
 

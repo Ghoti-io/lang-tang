@@ -33,6 +33,8 @@ TANG="${1:?usage: cli-test.sh <path to tang>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CORPUS="$HERE/corpus"
 failures=0
+TMPFILE="$(mktemp)"
+trap 'rm -f "$TMPFILE"' EXIT
 
 # check <name> <expected> <actual>
 check() {
@@ -60,38 +62,100 @@ TREE='Binary (+):
   RHS:
     Integer: 2'
 
+# --tree keeps the old behaviour: parse, print the syntax tree, run nothing.
 # A script and a template read from a file.
-check "file, script" "$TREE" "$("$TANG" -s "$CORPUS/script/expression-only.tang" | head -5)"
+check "file, script" "$TREE" "$("$TANG" --tree -s "$CORPUS/script/expression-only.tang" | head -5)"
 check "file, template: text becomes a print" \
-  "Block:" "$("$TANG" "$CORPUS/template/plain-text.tang" | head -1)"
+  "Block:" "$("$TANG" --tree "$CORPUS/template/plain-text.tang" | head -1)"
 
 # The source from the command line.
-check "-e, script" "$TREE" "$("$TANG" -s -e '1 + 2')"
-check "--evaluate --script" "$TREE" "$("$TANG" --script --evaluate '1 + 2')"
-check "-e, template" "Block:" "$("$TANG" -e 'Hello <%= 1+1 %>!' | head -1)"
+check "-e, script" "$TREE" "$("$TANG" --tree -s -e '1 + 2')"
+check "--evaluate --script" "$TREE" "$("$TANG" --tree --script --evaluate '1 + 2')"
+check "-e, template" "Block:" "$("$TANG" --tree -t -e 'Hello <%= 1+1 %>!' | head -1)"
 
 # The same, read from stdin.
-check "stdin, script" "$TREE" "$(printf '1 + 2' | "$TANG" -s)"
-check "stdin, template" "Block:" "$(printf 'Hello <%%= 1+1 %%>!' | "$TANG" | head -1)"
+check "stdin, script" "$TREE" "$(printf '1 + 2' | "$TANG" --tree -s)"
+check "stdin, template" "Block:" "$(printf 'Hello <%%= 1+1 %%>!' | "$TANG" --tree | head -1)"
 
-# Empty stdin is an empty tree, not a read of whatever followed the buffer in
-# memory: no output and a success.
-check "stdin, empty" "" "$(printf '' | "$TANG" -s)"
+# Empty stdin is an empty program, not a read of whatever followed the buffer
+# in memory: no output and a success, run or dumped.
+check "stdin, empty" "" "$(printf '' | "$TANG" --tree -s)"
 status "stdin, empty exits 0" 0 sh -c "printf '' | '$TANG'"
+check "stdin, empty runs to nothing" "" "$(printf '' | "$TANG" -s)"
 check "-e '', empty" "" "$("$TANG" -s -e '')"
+
+# Running. The output is written rendered: every piece of text encoded as its
+# tag says. -e is code, so these are the programs the reference prints.
+check "-e prints" "3" "$("$TANG" -e 'print(1+2);')"
+check "-e renders per segment" '<b>&lt;i&gt;' "$("$TANG" -e 'print("<b>" + !"<i>");')"
+check "-e -s is the same" "3" "$("$TANG" -s -e 'print(1+2);')"
+check "-e -t is a template" "Hello 2!" "$("$TANG" -t -e 'Hello <%= 1+1 %>!')"
+check "a file runs as a template" "Hello, world!" "$("$TANG" "$CORPUS/template/plain-text.tang" | head -1)"
+check "a script file runs" "3" "$(printf 'print(1+2);' > "$TMPFILE"; "$TANG" -s "$TMPFILE")"
+check "stdin runs as a template" "Hello 2!" "$(printf 'Hello <%%= 1+1 %%>!' | "$TANG")"
+check "stdin runs as a script with -s" "3" "$(printf 'print(1+2);' | "$TANG" -s)"
+check "the result is not printed" "" "$("$TANG" -e '1 + 2;')"
+check "errors are values and print as nothing" "a" "$("$TANG" -e 'print("a"); print(1/0);')"
+check "a marker prints as itself" "[INTEGER TOO LARGE]" "$("$TANG" -e 'print(9223372036854775807 + 1);')"
+check "recursion past the depth yields the error and the program goes on" "after" \
+  "$("$TANG" -e 'function f(n) { return f(n + 1); } f(0); print("after");')"
+check "--depth moves the limit" "ok" \
+  "$("$TANG" --depth 100 -e 'function d(n) { if (n <= 0) { return 0; } return d(n - 1); } if (d(99) == 0) { print("ok"); } else { print("no"); }')"
+check "--depth bounds it" "no" \
+  "$("$TANG" --depth 10 -e 'function d(n) { if (n <= 0) { return 0; } return d(n - 1); } if (d(20) == 0) { print("ok"); } else { print("no"); }')"
+check "50,000 deep recursion, depth raised" "50000" \
+  "$("$TANG" --depth 100000 -e 'function d(n) { if (n <= 0) { return 0; } return 1 + d(n - 1); } print(d(50000));')"
+
+# A runaway loop under a fuel budget pauses; the command has no one to resume
+# it, so it says where and exits 5. The process survives.
+out="$("$TANG" --fuel 5000 -e 'while (true) {}' 2>&1)"
+case "$out" in
+  "<evaluate>:1: paused on fuel"*) printf '  ok    a runaway loop pauses at its file and line, naming the fuel\n' ;;
+  *) printf '  FAIL  a runaway loop pauses at its file and line, naming the fuel\n        got [%s]\n' "$out"
+     failures=$((failures + 1)) ;;
+esac
+status "a paused run exits 5" 5 "$TANG" --fuel 5000 -e 'while (true) {}'
+check "the output so far is written when it pauses" "start" \
+  "$("$TANG" --fuel 5000 -e 'print("start"); while (true) {}' 2>/dev/null)"
+status "--fuel without a number exits 2" 2 "$TANG" --fuel
+status "--fuel with a word exits 2" 2 "$TANG" --fuel many -e 1
+status "--script and --template together exit 2" 2 "$TANG" -s -t -e 1
+
+# A compile error that is not a syntax error is refused the same way.
+out="$("$TANG" -e 'foo(); function foo() {}' 2>&1)"
+case "$out" in
+  "<evaluate>:1:"*": "*) printf '  ok    a compile error names name:line:column: message\n' ;;
+  *) printf '  FAIL  a compile error names name:line:column: message\n        got [%s]\n' "$out"
+     failures=$((failures + 1)) ;;
+esac
+status "a compile error exits 1" 1 "$TANG" -e 'foo(); function foo() {}'
+status "global at top level exits 1" 1 "$TANG" -e 'global x;'
+status "a slice is not an assignment target" 1 "$TANG" -e 'a = [1]; a[0:1] = 2;'
+check "nothing runs after a refusal" "" "$("$TANG" -e 'print("x"); foo(); function foo() {}' 2>/dev/null)"
 
 # A byte that is not valid UTF-8, in the middle of the input but inside a
 # comment, which the scanner skips. Read one character at a time into a char,
 # as ctang's reader once did, 0xFF is -1 on a platform where char is signed and
 # so compares equal to EOF: everything after it was silently dropped.
-check "stdin, 0xFF byte inside a comment" "Block:" \
-  "$(printf 'print("before");\n/* \377 */\nprint("-after");\n' | "$TANG" -s | head -1)"
-nodes="$(printf 'print("before");\n/* \377 */\nprint("-after");\n' | "$TANG" -s | grep -c 'Print')"
+check "stdin, 0xFF byte inside a comment" "before-after" \
+  "$(printf 'print("before");\n/* \377 */\nprint("-after");\n' | "$TANG" -s)"
+nodes="$(printf 'print("before");\n/* \377 */\nprint("-after");\n' | "$TANG" --tree -s | grep -c 'Print')"
 check "stdin, 0xFF byte: both prints survive" "2" "$nodes"
 
 # Input larger than any single buffer the reader starts with.
-big="$(awk 'BEGIN { while (i++ < 5000) printf "print(\"x\");" }' | "$TANG" -s | grep -c 'Print')"
+big="$(awk 'BEGIN { while (i++ < 5000) printf "print(\"x\");" }' | "$TANG" --tree -s | grep -c 'Print')"
 check "stdin, large input" "5000" "$big"
+big="$(awk 'BEGIN { while (i++ < 5000) printf "print(\"x\");" }' | "$TANG" -s | wc -c)"
+check "stdin, large input runs" "5000" "$big"
+
+# A tree taller than the budget is refused with no tree, run or dumped.
+tall="$(awk 'BEGIN { printf "1"; while (i++ < 10000) printf "+1" }')"
+exact="$(awk 'BEGIN { printf "1"; while (i++ < 9999) printf "+1" }')"
+status "a tree 10,001 deep is refused" 1 "$TANG" -e "$tall"
+status "a tree 10,001 deep is refused when only dumped" 1 "$TANG" --tree -e "$tall"
+status "a tree 10,000 deep runs" 0 "$TANG" -e "$exact"
+check "a deep tree gives its answer (the print and the block add two levels)" "9998" \
+  "$("$TANG" -e "print($(awk 'BEGIN { printf "1"; while (i++ < 9997) printf "+1" }'));")"
 
 # Nesting past the parser's own stack is a refusal (exit 1), not a crash and
 # not a success.
@@ -153,8 +217,8 @@ status "an unknown option exits 2" 2 "$TANG" --no-such-option
 # Help.
 out="$("$TANG" --help)"
 case "$out" in
-  *"Execution arrives with"*"interpreter"*) printf '  ok    --help says execution arrives with the interpreter\n' ;;
-  *) printf '  FAIL  --help says execution arrives with the interpreter\n        got [%s]\n' "$out"
+  *"Run a Tang template"*"--tree"*"--fuel"*"--depth"*) printf '  ok    --help describes running, --tree, --fuel and --depth\n' ;;
+  *) printf '  FAIL  --help describes running, --tree, --fuel and --depth\n        got [%s]\n' "$out"
      failures=$((failures + 1)) ;;
 esac
 status "-h exits 0" 0 "$TANG" -h
