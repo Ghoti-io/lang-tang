@@ -182,6 +182,9 @@ run_case() {
     if [ "$status" -eq 0 ]; then
       printf '  NOT CAUGHT: %s passed with the defect in place\n' "$(name_of_test "$case_name")" >&2
       rc=1
+    elif [ "$status" -eq 124 ]; then
+      printf '  NOT CAUGHT: %s timed out (exit 124); a hang is not a failure of the instrument\n' "$(name_of_test "$case_name")" >&2
+      rc=1
     else
       printf '  caught by %s (exit %s): %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")"
     fi

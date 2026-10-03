@@ -291,7 +291,8 @@ inline bool from_hex(const std::string & hex, std::string * out) {
   out->clear();
   for (size_t i = 0; i < hex.size(); i += 2) {
     unsigned v;
-    if (std::sscanf(hex.substr(i, 2).c_str(), "%2x", &v) != 1) {
+    if (!std::isxdigit((unsigned char)hex[i]) || !std::isxdigit((unsigned char)hex[i + 1]) ||
+        std::sscanf(hex.substr(i, 2).c_str(), "%2x", &v) != 1) {
       return false;
     }
     out->push_back((char)v);

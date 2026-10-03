@@ -136,7 +136,7 @@ void run_row(const Row & row) {
     std::printf("  row %s: %s\n", row.native, row.name);
     std::fflush(stdout);
   }
-  alarm(60);  // a hang is a failure, not a stuck suite
+  alarm(tt::heavy_instruments() ? 300 : 60);  // a hang is a failure, not a stuck suite
   Result base = run_source(row.build + " 0;", row, kUnlimited, kUnlimited);
   uint64_t memory = row.memory == kUnlimited ? kUnlimited : base.m.memory_peak + row.memory;
   Result r = run_source(row.build + " " + row.op, row, base.m.fuel + row.fuel, memory);
@@ -397,7 +397,7 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
 
 TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
   std::vector<Row> t = rows();
-  EXPECT_GE(t.size(), 26u);
+  EXPECT_EQ(t.size(), kSmall ? 26u : 27u);
   for (const Row & row : t) {
     run_row(row);
   }

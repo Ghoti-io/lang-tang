@@ -34,7 +34,11 @@
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 
 #include <malloc.h>
+#if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
 #include <valgrind/valgrind.h>
+#else
+#define RUNNING_ON_VALGRIND 0
+#endif
 
 #include <cstdlib>
 #include <cstring>
@@ -130,7 +134,7 @@ struct Tracker {
     }
     if (p) {
       size_t after = malloc_usable_size(p);
-      t->live_bytes -= before;
+      t->live_bytes -= before < t->live_bytes ? before : t->live_bytes;
       t->grew(after);
     }
     return p;
@@ -140,7 +144,7 @@ struct Tracker {
     if (p) {
       Tracker * t = static_cast<Tracker *>(ctx);
       --t->live_blocks;
-      t->live_bytes -= malloc_usable_size(p);
+      { size_t u = malloc_usable_size(p); t->live_bytes -= u < t->live_bytes ? u : t->live_bytes; }
       std::free(p);
     }
   }
@@ -161,7 +165,7 @@ struct Tracker {
   static void do_unmap(void * ctx, void * p, size_t size) {
     Tracker * t = static_cast<Tracker *>(ctx);
     --t->live_pages;
-    t->live_bytes -= size;
+    t->live_bytes -= size < t->live_bytes ? size : t->live_bytes;
     t->base_pages->unmap(t->base_pages->ctx, p, size);
   }
 };

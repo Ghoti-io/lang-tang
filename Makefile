@@ -589,8 +589,9 @@ PLANTED_ENV = PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(S
 check-planted-quick: ## Planted defects 03 to 07 (phase shuffle, native gate, frame observer, oracle)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
-check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture
+check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
 	@$(PLANTED_ENV) tools/check-planted.sh --slow
+	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
 check-planted: ## All seven planted defects: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all

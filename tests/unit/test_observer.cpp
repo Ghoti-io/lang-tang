@@ -501,6 +501,22 @@ TEST(ObserverFails, ADifferentDepthIsReportedWithThePollAndTheFrameThatIsMissing
   EXPECT_NE(d.what.find("depth"), std::string::npos) << d.str();
 }
 
+TEST(ObserverFails, AFailedFrameWalkIsADivergenceAndNotAnEmptyRecordThatMatches) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  size_t poll = pick_poll(a.trace);
+  ASSERT_GT(poll, 0u);
+  // Both runs' walks failed at one poll: empty frame lists on both sides.
+  a.trace.polls[poll].captured = b.trace.polls[poll].captured = false;
+  a.trace.polls[poll].frames.clear();
+  b.trace.polls[poll].frames.clear();
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_NE(d.what.find("frame walk failed"), std::string::npos) << d.str();
+  EXPECT_TRUE(observer::capture(nullptr, &a.trace.polls[poll].frames) == false);
+}
+
 TEST(ObserverFails, AChangedVariableAndALocationAreReportedToo) {
   Observed a = nested_trace();
   Observed b = nested_trace();

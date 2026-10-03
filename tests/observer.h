@@ -75,6 +75,7 @@ struct FrameRecord {
 };
 
 struct PollRecord {
+  bool captured = true;  ///< False if the frame walk failed: the frames are then not a record of anything.
   GRCORE_Verdict verdict = GRCORE_VERDICT_CONTINUE;
   std::vector<FrameRecord> frames;
 };
@@ -220,7 +221,7 @@ class Observer {
     }
     PollRecord poll;
     poll.verdict = grcore_pollcall_verdict(call);
-    capture(context, &poll.frames);
+    poll.captured = capture(context, &poll.frames);
     self->trace.polls.push_back(std::move(poll));
   }
 
@@ -336,6 +337,9 @@ inline bool first_divergence(const Trace & a, const Trace & b, Divergence * out)
   for (size_t p = 0; p < common; ++p) {
     const PollRecord & x = a.polls[p];
     const PollRecord & y = b.polls[p];
+    if (!x.captured || !y.captured) {
+      return detail::differ(out, p, false, 0, "frame walk failed", x.captured ? "captured" : "not captured", y.captured ? "captured" : "not captured");
+    }
     if (x.verdict != y.verdict) {
       return detail::differ(out, p, false, 0, "verdict", detail::verdict_name(x.verdict), detail::verdict_name(y.verdict));
     }

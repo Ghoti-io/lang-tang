@@ -950,7 +950,7 @@ the same programs on lang-tang alone (determinism, that every one compiles and
 finishes, that the avoided constructs never appear, that the whole language is
 reached), so the lang-tang side is also run under torture.
 
-First measurements: 12,000 programs (seeds 1 to 6,000, both modes) ran in 61
+First measurements: a campaign of 12,000 programs (seeds 1 to 6,000, both modes; it includes the fixed batch's seeds) ran in 61
 seconds with no divergence once the findings below were fixed or recorded. The first run of 440 had 35 divergences and 5 distinct causes.
 
 **Rejected alternatives.** Random bytes through the parser (the libFuzzer
@@ -998,8 +998,8 @@ depth) as the numbers the inspector prints, which are the same in every
 configuration. It reads no engine structure, so story 15 can use it for
 interpreter against JIT and story 12 for a debugger attached against absent.
 
-`tests/unit/test_observer.cpp` runs 76 programs - forty corpus files, twelve
-generated programs, twelve sites (pauses inside calls, three-deep template
+`tests/unit/test_observer.cpp` runs 76 programs - forty script and twelve
+template corpus files, twelve generated programs (six seeds, both modes), twelve sites (pauses inside calls, three-deep template
 calls, scopes of each policy exhausted by a loop and by a native, errors across
 a boundary, 40 children), all pausing and resuming - four ways: plain,
 torture+verify, a stack that moves at every push, and phase-shuffled (AD-5). The
@@ -1031,7 +1031,7 @@ build if a poll names no entry, if an entry is named by nothing, or if an
 unbounded entry has no row in the table - so a new native without a gate row is
 a failing build. Each row has a **build** (makes the operand; its fuel and bytes
 are the baseline, measured first on its own) and an **op** (the adversarial
-operation, on a budget of its own beyond the build): 28 rows, at least one per
+operation, on a budget of its own beyond the build): 27 rows (26 under the instruments), at least one per
 unbounded native, from `s = "x"; while (true) { s = s + s; }` under 1,000 fuel to
 repeating an array into 8 GB under a 4 MiB memory budget. A row requires an
 outcome that is a verdict (paused, unwound with `GRCORE_ERR_LIMIT`, or the
