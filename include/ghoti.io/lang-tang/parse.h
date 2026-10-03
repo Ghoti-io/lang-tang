@@ -101,7 +101,9 @@ typedef struct GLTANG_Tree GLTANG_Tree;
  *   an octal escape over 255, `%>` in script mode, a character that is not a
  *   token, invalid UTF-8 in a string or template text, an integer too large,
  *   `a[i] += 1`, truncated input); ::GLTANG_ERR_LIMIT when the parser's own
- *   stack limit is reached by nesting thousands deep; ::GLTANG_ERR_OOM when an
+ *   stack limit is reached by nesting thousands deep (bison reports a stack it
+ *   could not grow the same way, so a real out-of-memory there also reads as
+ *   this result); ::GLTANG_ERR_OOM when an
  *   allocation fails; ::GLTANG_ERR_INVALID for a NULL `source` or `tree_out`
  *   or a bad mode. A refusal allocates nothing the caller must free.
  */
@@ -150,7 +152,7 @@ GLTANG_API void gltang_tree_print(const GLTANG_Tree * tree);
  * @param node A node, or NULL.
  * @return The count; 0 for NULL.
  */
-GLTANG_API size_t gltang_tang_node_count(GLTANG_Ast_Node * node);
+GLTANG_API size_t gltang_ast_node_count(GLTANG_Ast_Node * node);
 
 #ifdef __cplusplus
 }

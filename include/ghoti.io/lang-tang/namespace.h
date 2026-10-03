@@ -274,7 +274,7 @@
 #define gltang_parser_error_kind GHOTIIO_LANG_TANG(gltang_parser_error_kind)
 #define gltang_result_string GHOTIIO_LANG_TANG(gltang_result_string)
 #define gltang_scanner_get_next_token GHOTIIO_LANG_TANG(gltang_scanner_get_next_token)
-#define gltang_tang_node_count GHOTIIO_LANG_TANG(gltang_tang_node_count)
+#define gltang_ast_node_count GHOTIIO_LANG_TANG(gltang_ast_node_count)
 #define gltang_tree_destroy GHOTIIO_LANG_TANG(gltang_tree_destroy)
 #define gltang_tree_node_count GHOTIIO_LANG_TANG(gltang_tree_node_count)
 #define gltang_tree_print GHOTIIO_LANG_TANG(gltang_tree_print)

@@ -10,7 +10,7 @@
  *
  * Ported from ctang's fuzz_template.c. The contract is the interface's: any bytes
  * give OK, FORMAT, LIMIT or OOM, never a crash and never a leak, and the tree
- * of an accepted source is walked and released.
+ * of an accepted source is counted and released.
  *
  * Build with: make fuzz-template     Run: make fuzz-run-template
  * Replay the corpus without libFuzzer: make fuzz-replay

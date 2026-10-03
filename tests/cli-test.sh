@@ -93,6 +93,17 @@ check "stdin, 0xFF byte: both prints survive" "2" "$nodes"
 big="$(awk 'BEGIN { while (i++ < 5000) printf "print(\"x\");" }' | "$TANG" -s | grep -c 'Print')"
 check "stdin, large input" "5000" "$big"
 
+# Nesting past the parser's own stack is a refusal (exit 1), not a crash and
+# not a success.
+deep="$(awk 'BEGIN { while (i++ < 20000) printf "(" }')"
+status "nesting limit exits 1" 1 sh -c "printf '%s' '$deep' | '$TANG' -s >/dev/null 2>&1"
+
+# A NUL inside a file would end the source early; it is refused.
+nulfile="$(mktemp)"
+printf 'print(1);\000print(2);' > "$nulfile"
+status "a NUL byte in a file exits 3" 3 "$TANG" -s "$nulfile"
+rm -f "$nulfile"
+
 # A syntax error: name:line:column: message on stderr, nothing on stdout, and
 # exit 1. The position is 1-based.
 out="$("$TANG" -s "$CORPUS/script/reject-syntax-error.tang" 2>&1 >/dev/null)"

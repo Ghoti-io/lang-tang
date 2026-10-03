@@ -74,7 +74,7 @@ TEST(Parse, NodeCountsMatchWhatCtangsOwnTestsStatedBeforeSimplifying) {
     Parsed parsed(c.source, kScript);
     ASSERT_EQ(parsed.result, GLTANG_OK) << c.source;
     EXPECT_EQ(gltang_tree_node_count(parsed.tree), c.count) << c.source;
-    EXPECT_EQ(gltang_tang_node_count(gltang_tree_root(parsed.tree)), c.count) << c.source;
+    EXPECT_EQ(gltang_ast_node_count(gltang_tree_root(parsed.tree)), c.count) << c.source;
   }
 }
 
@@ -242,7 +242,7 @@ TEST(Parse, NullTreeQueriesAreSafe) {
   EXPECT_EQ(gltang_tree_root(nullptr), nullptr);
   gltang_tree_print(nullptr);
   gltang_tree_destroy(nullptr);
-  EXPECT_EQ(gltang_tang_node_count(nullptr), 0u);
+  EXPECT_EQ(gltang_ast_node_count(nullptr), 0u);
 }
 
 TEST(Parse, NestingPastTheParsersStackIsALimitNotACrash) {

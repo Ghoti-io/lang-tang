@@ -322,7 +322,7 @@ allocates. It is not installed, so it cannot shadow ctang's `tang`.
 
 **Destroy, walk and print recurse with the depth of the tree.** A source such as
 `1+1+1+...` is left-associative, so a chain of 10^5 terms is a tree 10^5 deep,
-and `gltang_tree_destroy`, `gltang_tang_node_count` and `gltang_tree_print` each
+and `gltang_tree_destroy`, `gltang_ast_node_count` and `gltang_tree_print` each
 recurse once per level. Measured here on the release build with an 8 MiB stack,
 100,000 terms parse, count and destroy, and 400,000 overflow the C stack; the
 limit moves with the compiler, the optimisation level and the sanitizer, since

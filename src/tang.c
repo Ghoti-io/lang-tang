@@ -158,6 +158,13 @@ int main(int argc, const char * argv[]) {
     buffer = contents;
     source = buffer;
     name = file_name;
+    // The parser takes a NUL-terminated string, so a NUL inside the file would
+    // end the source early and the rest would be dropped without a word.
+    if (strlen(buffer) != length) {
+      fprintf(stderr, "tang: %s contains a NUL byte\n", file_name);
+      gcu_free(buffer);
+      return EXIT_READ;
+    }
   }
   else {
     int failure = read_stdin(&buffer);
@@ -184,6 +191,8 @@ int main(int argc, const char * argv[]) {
     fprintf(stderr, "%s: %s\n", name, gltang_result_string(result));
     status = (result == GLTANG_ERR_OOM) ? EXIT_MEMORY : EXIT_REFUSED;
   }
-  gcu_free(buffer);
+  if (buffer) {
+    gcu_free(buffer);
+  }
   return status;
 }

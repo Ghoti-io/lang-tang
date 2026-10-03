@@ -62,7 +62,7 @@ static void count_nodes(GLTANG_MAYBE_UNUSED(GLTANG_Ast_Node * self), GLTANG_MAYB
 }
 
 
-size_t gltang_tang_node_count(GLTANG_Ast_Node * node) {
+size_t gltang_ast_node_count(GLTANG_Ast_Node * node) {
   size_t count = 0;
   if (node) {
     gltang_ast_node_walk(node, count_nodes, 0, &count);
@@ -176,7 +176,7 @@ GLTANG_Result gltang_parse(const char * source, GLTANG_ParseMode mode, GLTANG_Pa
   }
 
   tree->root = ast;
-  tree->node_count = gltang_tang_node_count(ast);
+  tree->node_count = gltang_ast_node_count(ast);
   *tree_out = tree;
   return GLTANG_OK;
 }

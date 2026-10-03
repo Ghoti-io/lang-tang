@@ -157,7 +157,7 @@ TEST(Corpus, EveryAcceptedTreeCountsTheSameWaysOverAndWalksOnce) {
     }
     Parsed parsed(read_file(kCorpus + "/" + file), mode_of(file));
     ASSERT_EQ(parsed.result, GLTANG_OK) << file;
-    EXPECT_EQ(gltang_tree_node_count(parsed.tree), gltang_tang_node_count(gltang_tree_root(parsed.tree))) << file;
+    EXPECT_EQ(gltang_tree_node_count(parsed.tree), gltang_ast_node_count(gltang_tree_root(parsed.tree))) << file;
   }
 }
 

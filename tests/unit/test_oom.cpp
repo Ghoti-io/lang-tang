@@ -65,7 +65,7 @@ TEST(AllocationFailure, EachAllocationFailedInTurnGivesAnAnswerAndLeaksNothing) 
     }
     long total = 0;
     int oom_count = 0;
-    int format_count = 0;
+    bool reached_undisturbed_run = false;
     for (long n = 1; n <= 20000; n++) {
       GLTANG_ParseError error = {0, 0, {0}};
       GLTANG_Tree * tree = nullptr;
@@ -87,18 +87,23 @@ TEST(AllocationFailure, EachAllocationFailedInTurnGivesAnAnswerAndLeaksNothing) 
       if (!fired) {
         // n is past the last allocation: the run was undisturbed.
         EXPECT_EQ(result, expected) << subject.name << " n=" << n;
+        reached_undisturbed_run = true;
         break;
       }
       // An allocation that failed and was delivered must not be swallowed: a
       // parse that "succeeds" after losing memory has dropped part of the tree.
       EXPECT_NE(result, GLTANG_OK) << subject.name << ": allocation " << n << " failed and the parse still succeeded";
       EXPECT_TRUE(result == GLTANG_ERR_OOM || result == GLTANG_ERR_FORMAT) << subject.name << " n=" << n << " gave " << gltang_result_string(result);
+      // A source that parses cleanly has no syntax error to report, so a lost
+      // allocation there can only be out of memory.
+      if (expected == GLTANG_OK) {
+        EXPECT_EQ(result, GLTANG_ERR_OOM) << subject.name << " n=" << n;
+      }
       oom_count += result == GLTANG_ERR_OOM;
-      format_count += result == GLTANG_ERR_FORMAT;
     }
     EXPECT_GT(total, 3) << subject.name << " made suspiciously few allocations";
     EXPECT_GT(oom_count, 0) << subject.name << ": no failed allocation was reported as out of memory";
-    (void)format_count;
+    EXPECT_TRUE(reached_undisturbed_run) << subject.name << ": the sweep never reached a run with no failed allocation";
   }
 }
 
