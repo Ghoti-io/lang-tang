@@ -110,17 +110,41 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 
   LOAD_FRAME();
 
+resume_loop:
   for (;;) {
     uint32_t word = code[pc++];
     GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(word);
     uint32_t a = GLTANG_INSTRUCTION_A(word);
     exec->pending_fuel += gltang_opcode_cost_table[op];
     switch (op) {
-      case GLTANG_OP_HALT:
+      case GLTANG_OP_HALT: {
         gltang_vm_flush_fuel(exec);
+        if (exec->act == &exec->main_act) {
+          grcore_stack_pop(stack);
+          exec->state = GLTANG_EXECUTION_FINISHED;
+          return GRCORE_STEP_FINISHED;
+        }
+        // The end of a template call: its frame comes off, its budget scope is
+        // closed, and the call's value is what it printed, each segment still
+        // tagged with its encoding. The fuel it spent was charged to the scope
+        // just now, before the scope closed.
+        GLTANG_Activation * done = exec->act;
+        SYNC();
         grcore_stack_pop(stack);
-        exec->state = GLTANG_EXECUTION_FINISHED;
-        return GRCORE_STEP_FINISHED;
+        (void)grcore_budget_scope_close(stack, (GRCORE_BudgetScope){done->scope_id});
+        // A final value that is an error is lost across the template boundary.
+        gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_TEMPLATE_RESULT, done->result, done);
+        gltang_vm_activation_leave(exec, done);
+        GLTANG_Value text = gltang_vm_output_string(exec, &done->out, done->out.length);
+        gltang_vm_activation_free(exec, done);
+        frame = grcore_stack_top(stack);
+        LOAD_FRAME();
+        if (text == GLTANG_V_UNWIND) {
+          goto unwound;
+        }
+        PUSH(text);
+        break;
+      }
 
       case GLTANG_OP_POLL: {
         gltang_vm_flush_fuel(exec);
@@ -461,6 +485,79 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
             // the arguments where they are on the operand stack.
             r = gltang_vm_call_native(exec, callee, argc, &S[sp - argc]);
           }
+          else if (gltang_v_is_kind(callee, GLTANG_OBJ_TEMPLATE)) {
+            const GLTANG_LibraryMember * member = gltang_vm_template_member(callee);
+            if (argc != 0) {
+              r = gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+              goto call_result;
+            }
+            if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+              r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+              goto call_result;
+            }
+            uint32_t callee_program;
+            if (!gltang_vm_program_index(exec, member->program, &callee_program)) {
+              r = exec->roots[GLTANG_ROOT_OOM];
+              goto call_result;
+            }
+            GLTANG_Activation * act = gltang_vm_activation_new(exec, callee_program, member->name);
+            if (!act) {
+              r = exec->roots[GLTANG_ROOT_OOM];
+              goto call_result;
+            }
+            const GLTANG_Function * top = &member->program->functions[0];
+            SAVE();
+            grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
+            // Before the callee's frame is pushed: what has been spent so far
+            // belongs to the caller, so the fuel is flushed, and then the
+            // callee's scope is opened at the top of the stack as it stands.
+            gltang_vm_flush_fuel(exec);
+            GRCORE_BudgetScope scope;
+            GRCORE_ScopePolicy policy = member->policy == GLTANG_SCOPE_PAUSE ? GRCORE_SCOPE_POLICY_PAUSE : GRCORE_SCOPE_POLICY_UNWIND;
+            GRCORE_Result opened = grcore_budget_scope_open(stack, member->scope_fuel, policy, &scope);
+            GRCORE_FrameRef callee_frame;
+            GRCORE_Result pushed = GRCORE_ERR_INTERNAL;
+            if (opened == GRCORE_OK) {
+              pushed = grcore_stack_push(stack, exec->engine, top->frame_slots, &callee_frame);
+              if (pushed != GRCORE_OK) {
+                (void)grcore_budget_scope_close(stack, scope);
+              }
+            }
+            if (opened != GRCORE_OK || pushed != GRCORE_OK) {
+              gltang_vm_activation_free(exec, act);
+              // The memory budget's verdict comes first, as for any call.
+              GRCORE_Result refused = opened != GRCORE_OK ? opened : pushed;
+              if (refused == GRCORE_ERR_LIMIT && gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
+                goto unwound;
+              }
+              r = exec->roots[GLTANG_ROOT_OOM];
+              goto call_result;
+            }
+            act->scope_id = scope.id;
+            act->policy = member->policy;
+            gltang_vm_activation_enter(exec, act, fidx, (uint32_t)(pc - 1u));
+            {
+              uint64_t * caller = grcore_stack_slots(stack, frame);
+              uint64_t * callee_slots = grcore_stack_slots(stack, callee_frame);
+              caller[sp - 1u] = 0;
+              --sp;
+              caller[GLTANG_F_SP] = sp;
+              callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(callee_program, 0);
+              callee_slots[GLTANG_F_PC] = 0;
+              callee_slots[GLTANG_F_SP] = H + top->local_count;
+              callee_slots[GLTANG_F_FLAGS] = act->depth;
+              frame = callee_frame;
+              S = callee_slots;
+              program = member->program;
+              fidx = 0;
+              fword = callee_slots[GLTANG_F_FUNCTION];
+              fn = top;
+              code = top->code;
+              pc = 0;
+              sp = H + top->local_count;
+            }
+            break;
+          }
           else {
             r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
           }
@@ -607,6 +704,54 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 
 unwound:
   gltang_vm_flush_fuel(exec);
+  if (exec->act != &exec->main_act && exec->act->policy != GLTANG_SCOPE_PAUSE
+      && grcore_budget_scope_exhausted(stack, (GRCORE_BudgetScope){exec->act->scope_id})) {
+    // A template call's own budget ran out, and nothing else voted to stop
+    // (not the request's ceiling, not a terminate, not memory): the unwind is
+    // the call's and not the run's (AD-21). It is reached from a poll
+    // instruction and from the runtime poll inside a native operation alike.
+    GLTANG_Activation * stopped = exec->act;
+    gltang_vm_error_scope_limit(exec, stopped);
+    size_t popped = 0;
+    if (grcore_budget_scope_unwind(stack, (GRCORE_BudgetScope){stopped->scope_id}, &popped) == GRCORE_OK) {
+      // The callee's half-built objects are released: whatever it had pinned
+      // while it was stopped is let go, and the frames are gone.
+      while (exec->temp_count > stopped->temp_base) {
+        gltang_vm_temp_pop(exec);
+      }
+      exec->unwinding = false;
+      gltang_vm_activation_leave(exec, stopped);
+      // The call's value, made where the call was: EMPTY is the limit error,
+      // SEGMENTS is what the callee had finished printing, up to a whole print.
+      exec->current_function = stopped->call_function;
+      exec->current_offset = stopped->call_offset;
+      GLTANG_Value value = stopped->policy == GLTANG_SCOPE_SEGMENTS
+        ? gltang_vm_output_string(exec, &stopped->out, stopped->out.committed)
+        : gltang_vm_make_limit_error(exec);
+      gltang_vm_activation_free(exec, stopped);
+      if (value != GLTANG_V_UNWIND) {
+        frame = grcore_stack_top(stack);
+        LOAD_FRAME();
+        PUSH(value);
+        goto resume_loop;
+      }
+      // Making the value ran into a limit that is the run's: fall through.
+    }
+    else {
+      // Cannot happen: the scope is open. Treat it as the run's own end.
+      exec->unwinding = true;
+    }
+  }
+  // The run's own end. Every template call still open is let go of, innermost
+  // first, and the stack is emptied (the scopes close with it).
+  while (exec->act != &exec->main_act) {
+    GLTANG_Activation * open = exec->act;
+    gltang_vm_activation_leave(exec, open);
+    gltang_vm_activation_free(exec, open);
+  }
+  while (exec->temp_count) {
+    gltang_vm_temp_pop(exec);
+  }
   grcore_unwind_all(stack, NULL);
   // The program did not finish, so what an earlier statement left as its
   // result is not an answer.

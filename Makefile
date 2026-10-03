@@ -658,7 +658,7 @@ endif
 # collecting before every allocation and checking every store (torture and
 # verify), and again with a guest stack that moves on every push; test-torture
 # runs them under ASan as well.
-TORTURE_SUITES := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors
+TORTURE_SUITES := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate
 
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
 	@for test_exe in $(TEST_EXECUTABLES); do \

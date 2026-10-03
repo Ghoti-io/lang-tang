@@ -483,6 +483,7 @@ GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
   if (too_deep) {
     return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
   }
+  exec->out->committed = exec->out->length;
   return GLTANG_V_NULL;
 }
 
@@ -490,7 +491,42 @@ GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_Stri
   GLTANG_Sink sink;
   gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
   GLTANG_Status st = sink_block(&sink, s);
-  return st == GLTANG_ST_OK ? GLTANG_V_NULL : gltang_vm_failure_value(exec, st);
+  if (st == GLTANG_ST_OK) {
+    exec->out->committed = exec->out->length;
+    return GLTANG_V_NULL;
+  }
+  return gltang_vm_failure_value(exec, st);
+}
+
+GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBuf * out, size_t length) {
+  GLTANG_Sink sink;
+  gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);
+  GLTANG_Status st = GLTANG_ST_OK;
+  for (size_t i = 0; i < out->segment_count && st == GLTANG_ST_OK; ++i) {
+    size_t from = out->segments[i].offset;
+    size_t to = i + 1u < out->segment_count ? out->segments[i + 1u].offset : out->length;
+    if (to > length) {
+      to = length;
+    }
+    if (from >= to) {
+      continue;
+    }
+    // Each piece is a string of its own (which re-breaks its graphemes), copied
+    // into the result before anything else can collect it.
+    GLTANG_Value piece = gltang_vm_string_from_utf8(exec, out->bytes + from, to - from, out->segments[i].type);
+    if (piece == GLTANG_V_UNWIND) {
+      st = GLTANG_ST_UNWIND;
+    }
+    else if (gltang_v_is_kind(piece, GLTANG_OBJ_STRING)) {
+      st = sink_block(&sink, gltang_vm_string(piece));
+    }
+    else if (piece != GLTANG_V_NULL) {
+      st = GLTANG_ST_OOM;
+    }
+  }
+  GLTANG_Value result = st == GLTANG_ST_OK ? gltang_sink_finish(&sink) : gltang_vm_failure_value(exec, st);
+  gltang_sink_free(&sink);
+  return result;
 }
 
 GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v) {

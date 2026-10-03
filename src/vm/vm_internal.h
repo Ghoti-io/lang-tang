@@ -58,6 +58,7 @@
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/lang-tang/value.h>
+#include <ghoti.io/runtime-core/a/budget_scope.h>
 #include <ghoti.io/runtime-core/a/engine.h>
 #include <ghoti.io/runtime-core/a/frame.h>
 #include <ghoti.io/runtime-core/a/stack.h>
@@ -318,6 +319,7 @@ typedef struct GLTANG_OutBuf {
   GLTANG_OutputSegment * segments;
   size_t segment_count;
   size_t segment_capacity;
+  size_t committed;             ///< `length` as of the last print that finished: a cut lands between prints.
 } GLTANG_OutBuf;
 
 /** @brief One program an execution has run frames of: the main one, or a template's. */
@@ -708,6 +710,31 @@ void gltang_vm_errors_free(GLTANG_Execution * exec);
 GLTANG_Value gltang_vm_make_limit_error(GLTANG_Execution * exec);
 /** @brief Replaces an activation's result; a lost error it held is entered first. */
 void gltang_vm_set_result(GLTANG_Execution * exec, GLTANG_Value v, bool listed);
+
+// ---------------------------------------------------------------------------
+// Template calls (template.c)
+// ---------------------------------------------------------------------------
+
+/** @brief The index of a program in the execution's table; adds it (retained) on first use. False when memory runs out. */
+bool gltang_vm_program_index(GLTANG_Execution * exec, GLTANG_Program * program, uint32_t * out_index);
+/**
+ * @brief Makes the record of a template call: fresh variables, an empty output.
+ *
+ * Not yet the innermost activation: ::gltang_vm_activation_enter does that once
+ * the callee's frame is pushed. NULL when memory runs out.
+ */
+GLTANG_Activation * gltang_vm_activation_new(GLTANG_Execution * exec, uint32_t program_index, const char * name);
+/** @brief Makes `act` the innermost activation, a child of the current one. */
+void gltang_vm_activation_enter(GLTANG_Execution * exec, GLTANG_Activation * act, uint32_t call_function, uint32_t call_offset);
+/** @brief Makes the parent of `act` (the innermost) the innermost again; `act` is not freed. */
+void gltang_vm_activation_leave(GLTANG_Execution * exec, GLTANG_Activation * act);
+/** @brief Frees a record that has left (or never entered). */
+void gltang_vm_activation_free(GLTANG_Execution * exec, GLTANG_Activation * act);
+/**
+ * @brief An output's segments, up to `length` bytes, as a string with every
+ *   segment's encoding tag kept.
+ */
+GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBuf * out, size_t length);
 
 /** @brief Makes `act` the innermost activation: points the execution's variables, constants and output at it. */
 void gltang_vm_set_activation(GLTANG_Execution * exec, GLTANG_Activation * act);
