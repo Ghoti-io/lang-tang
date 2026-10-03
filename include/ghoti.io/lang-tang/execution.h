@@ -253,6 +253,25 @@ GLTANG_API GLTANG_Result gltang_execution_set_halt_on_error(
     GLTANG_Execution * execution, bool enabled);
 
 /**
+ * @brief Asks the execution to poll at the start of every statement.
+ *
+ * Off by default, and then a statement boundary (the `LINE` instruction) does
+ * nothing: polls, fuel, pause locations and frame traces are exactly what they
+ * are without the instruction. On, each boundary is a poll like a function
+ * entry or a loop back-edge, which is what a debugger needs for a breakpoint
+ * on a line or a single step. The instruction costs no fuel either way, so the
+ * fuel a program is charged does not depend on this option. The engine never
+ * asks whether a debugger is attached (AD-2); the host that attaches one turns
+ * this on.
+ *
+ * @param execution The execution.
+ * @param enabled Whether statements poll.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_statement_polls(
+    GLTANG_Execution * execution, bool enabled);
+
+/**
  * @brief Caps the error list (default 1,024 entries).
  *
  * Entries past the cap are counted in ::gltang_execution_errors_dropped and not

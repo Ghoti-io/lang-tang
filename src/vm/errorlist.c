@@ -314,6 +314,14 @@ GLTANG_Result gltang_execution_set_halt_on_error(GLTANG_Execution * execution, b
   return GLTANG_OK;
 }
 
+GLTANG_Result gltang_execution_set_statement_polls(GLTANG_Execution * execution, bool enabled) {
+  if (!settable(execution)) {
+    return GLTANG_ERR_INVALID;
+  }
+  execution->statement_polls = enabled;
+  return GLTANG_OK;
+}
+
 GLTANG_Result gltang_execution_set_error_limit(GLTANG_Execution * execution, size_t limit) {
   if (!settable(execution)) {
     return GLTANG_ERR_INVALID;

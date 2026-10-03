@@ -222,6 +222,18 @@ TEST(Program, ADumpListsEveryFunctionWithOpcodeNames) {
   EXPECT_NE(text.find("RET"), std::string::npos);
 }
 
+TEST(Program, ADumpNamesTheStatementBoundaryAndEveryStatementHasOne) {
+  // Three statements at the top level, and one in the function's body: four
+  // LINE instructions. A block is not a statement, so `{` and `}` add none.
+  tt::Compiled compiled("function f(a) {\n  return a + 1;\n}\nx = f(2);\ny = 3;\n");
+  ASSERT_TRUE(compiled.ok());
+  std::string text = dump_of(compiled.program);
+  EXPECT_EQ(count_of(text, "LINE"), 4u) << text;
+  tt::Compiled empty("");
+  ASSERT_TRUE(empty.ok());
+  EXPECT_EQ(count_of(dump_of(empty.program), "LINE"), 0u) << "a program with no statement has no boundary";
+}
+
 TEST(Program, RetainAndReleaseCountReferencesAndSurviveTheTree) {
   GLTANG_Tree * tree = nullptr;
   GLTANG_ParseError error = {0, 0, {0}};

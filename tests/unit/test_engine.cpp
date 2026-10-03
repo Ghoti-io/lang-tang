@@ -7,6 +7,7 @@
 // (see exec_harness.h).
 
 #include "exec_harness.h"
+#include "observer.h"
 #include "test_helpers.h"
 #include <ghoti.io/lang-tang/bytecode.h>
 
@@ -970,9 +971,13 @@ TEST(Fuel, TheSameProgramCostsTheSameFuelOnEveryRunAndEveryTier) {
 
 TEST(Fuel, EveryOpcodeHasACostAndTheTableIsWhatTheInterpreterCharges) {
   for (int op = 0; op < GLTANG_OP_COUNT; ++op) {
-    EXPECT_GE(gltang_opcode_cost((GLTANG_Opcode)op), 1u) << gltang_opcode_name((GLTANG_Opcode)op);
+    // LINE, the statement boundary, is the one opcode that costs nothing: the
+    // fuel a program is charged must not depend on the statement-poll option.
+    EXPECT_GE(gltang_opcode_cost((GLTANG_Opcode)op), op == GLTANG_OP_LINE ? 0u : 1u) << gltang_opcode_name((GLTANG_Opcode)op);
     EXPECT_STRNE(gltang_opcode_name((GLTANG_Opcode)op), "?") << op;
   }
+  EXPECT_EQ(gltang_opcode_cost(GLTANG_OP_LINE), 0u);
+  EXPECT_STREQ(gltang_opcode_name(GLTANG_OP_LINE), "LINE");
   EXPECT_EQ(gltang_opcode_cost(GLTANG_OP_COUNT), 0u);
   EXPECT_STREQ(gltang_opcode_name(GLTANG_OP_COUNT), "?");
 }
@@ -986,6 +991,153 @@ TEST(Fuel, TheFuelAPausedRunHasUsedIsExactlyWhatWasChargedUpToThePoll) {
   uint64_t used = grcore_context_fuel_used(context.context);
   EXPECT_GE(used, 1000u);
   EXPECT_LT(used, 1010u) << "a pause is taken at the first poll after the budget is spent";
+}
+
+// ---------------------------------------------------------------------------
+// The opt-in statement poll (LINE): what a debugger needs for a line breakpoint
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char * const STRAIGHT = "a = 1;\nb = 2;\nc = a + b;\nd = c * 2;\nd;\n";
+
+struct StatementRun {
+  uint64_t fuel_used = 0;
+  uint64_t polls = 0;
+  std::string output;
+  std::string result;
+  bool finished = false;
+};
+
+/// Runs a program with every poll recorded by the frame observer.
+StatementRun run_counting_polls(const char * source, bool statement_polls, const char * file = "page.tang") {
+  StatementRun out;
+  Compiled compiled(source, Mode::Script, file);
+  EXPECT_TRUE(compiled.ok());
+  Context context(compiled.program);
+  EXPECT_TRUE(context.ok());
+  if (statement_polls) {
+    EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
+  }
+  observer::Observer obs;
+  obs.trace.limit = 0;
+  EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
+  out.finished = context.execute();
+  out.fuel_used = grcore_context_fuel_used(context.context);
+  out.polls = obs.trace.total;
+  out.output = context.raw();
+  out.result = context.describe();
+  return out;
+}
+
+}  // namespace
+
+TEST(StatementPolls, OffIsTheDefaultAndALineBoundaryThenPollsNothingAndCostsNothing) {
+  StatementRun off = run_counting_polls(STRAIGHT, false);
+  ASSERT_TRUE(off.finished);
+  EXPECT_EQ(off.polls, 1u) << "the straight-line program polls once, at its entry";
+  // A program whose only polls are its own: the instruction is in the bytecode
+  // and is not a poll.
+  Compiled compiled(STRAIGHT);
+  ASSERT_TRUE(compiled.ok());
+  Context context(compiled.program);
+  ASSERT_TRUE(context.execute());
+  Context twin(compiled.program);
+  ASSERT_EQ(gltang_execution_set_statement_polls(twin.execution, false), GLTANG_OK);
+  ASSERT_TRUE(twin.execute());
+  EXPECT_EQ(grcore_context_fuel_used(context.context), grcore_context_fuel_used(twin.context));
+}
+
+TEST(StatementPolls, OnPollsAtEveryStatementAndChargesTheFuelOffCharges) {
+  StatementRun off = run_counting_polls(STRAIGHT, false);
+  StatementRun on = run_counting_polls(STRAIGHT, true);
+  ASSERT_TRUE(off.finished);
+  ASSERT_TRUE(on.finished);
+  EXPECT_EQ(on.polls, off.polls + 5u) << "five statements, five more polls";
+  EXPECT_EQ(on.fuel_used, off.fuel_used) << "LINE costs no fuel, so the budget does not depend on the option";
+  EXPECT_EQ(on.output, off.output);
+  EXPECT_EQ(on.result, off.result);
+}
+
+TEST(StatementPolls, OnWithNothingPendingEqualsOffInOutputOutcomeAndFuelForLoopsAndCalls) {
+  const char * source = "function f(n) {\n  s = 0;\n  for (i = 0; i < n; i += 1) {\n    s += i;\n  }\n  return s;\n}\nprint(f(40));\nf(7);\n";
+  StatementRun off = run_counting_polls(source, false);
+  StatementRun on = run_counting_polls(source, true);
+  ASSERT_TRUE(off.finished);
+  ASSERT_TRUE(on.finished);
+  EXPECT_EQ(on.fuel_used, off.fuel_used);
+  EXPECT_EQ(on.output, off.output);
+  EXPECT_EQ(on.result, off.result);
+  EXPECT_GT(on.polls, off.polls);
+}
+
+TEST(StatementPolls, AFuelPauseLandsOnTheNextStatementWhenOnAndNowhereWhenOff) {
+  // Off: nothing in this program polls after its entry, so a budget spent on
+  // the first statement does not stop it. On: the boundary of the next
+  // statement is a poll, and the run pauses there, at that statement's line.
+  Config config;
+  config.fuel = 3;
+  {
+    Compiled compiled(STRAIGHT, Mode::Script, "page.tang");
+    Context context(compiled.program, config);
+    ASSERT_TRUE(context.execute()) << "no poll after the entry, so the budget is not looked at";
+  }
+  Compiled compiled(STRAIGHT, Mode::Script, "page.tang");
+  Context context(compiled.program, config);
+  ASSERT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
+  ASSERT_FALSE(context.execute());
+  ASSERT_TRUE(context.paused());
+  EXPECT_EQ(grcore_context_pause_key(context.context, 0), grcore_core_key(GRCORE_REQUEST_FUEL));
+  GRCORE_Location where = grcore_context_pause_location(context.context);
+  ASSERT_NE(where.file, nullptr);
+  EXPECT_STREQ(where.file, "page.tang");
+  EXPECT_EQ(where.line, 2) << "the first statement was charged to the budget; the second one's boundary pauses";
+  // Raise the budget and go on: the same answer as an uninterrupted run.
+  ASSERT_TRUE(context.finished_after_raising(1000));
+  StatementRun plain = run_counting_polls(STRAIGHT, false);
+  EXPECT_EQ(context.describe(), plain.result);
+  EXPECT_EQ(context.raw(), plain.output);
+}
+
+TEST(StatementPolls, AMultiLineStatementPausesAtItsFirstLine) {
+  const char * source = "x = 1;\ny = [\n  1,\n  2,\n  3];\nz = 2;\n";
+  Config config;
+  config.fuel = 3;
+  Compiled compiled(source, Mode::Script, "page.tang");
+  Context context(compiled.program, config);
+  ASSERT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
+  ASSERT_FALSE(context.execute());
+  ASSERT_TRUE(context.paused());
+  GRCORE_Location where = grcore_context_pause_location(context.context);
+  EXPECT_EQ(where.line, 2) << "the array statement starts on line 2 and spans four";
+}
+
+TEST(StatementPolls, TheSetterRefusesNullAndAnExecutionThatHasStarted) {
+  EXPECT_EQ(gltang_execution_set_statement_polls(nullptr, true), GLTANG_ERR_INVALID);
+  Compiled compiled(STRAIGHT);
+  Context context(compiled.program);
+  ASSERT_TRUE(context.execute());
+  EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_ERR_INVALID);
+}
+
+TEST(StatementPolls, ATemplateCalledFromAProgramPollsToo) {
+  Compiled page("use row;\nprint(row());\n", Mode::Script, "page.tang");
+  Compiled row("a = 1;\nb = 2;\nprint(a + b);\n", Mode::Script, "row.tang");
+  ASSERT_TRUE(page.ok());
+  ASSERT_TRUE(row.ok());
+  Context context(page.program);
+  ASSERT_EQ(gltang_library_add_template(context.library(), "row", row.program, GRCORE_UNLIMITED, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+  ASSERT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
+  observer::Observer obs;
+  ASSERT_EQ(obs.attach(context.context), GRCORE_OK);
+  ASSERT_TRUE(context.execute());
+  bool saw_row_line = false;
+  for (const auto & poll : obs.trace.polls) {
+    if (!poll.frames.empty() && poll.frames[0].file == "row.tang" && poll.frames[0].line == 2) {
+      saw_row_line = true;
+    }
+  }
+  EXPECT_TRUE(saw_row_line) << "a statement of the called template is a poll";
 }
 
 int main(int argc, char ** argv) {

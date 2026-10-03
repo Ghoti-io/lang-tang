@@ -281,9 +281,11 @@ instructions either way.
 | `ITER_INIT` | `v -- bool`: start iterating array `v` over locals `a`, `a+1`. |
 | `ITER_NEXT` | `-- e` or jump: two words, the second is the exhausted target. |
 | `DISCARD` | `v --`: the value of an expression statement that can lose an error; an error is entered in the error list. |
+| `LINE` | The start of a statement. A poll if the execution asked for statement polls, otherwise nothing. Costs no fuel. |
 
 `ITER_NEXT` takes two words: the second is the exhausted target. Every
-instruction costs one unit of fuel; the operations that do work proportional to
+instruction costs one unit of fuel, except `LINE`, which costs none (see
+"Statement polls" below); the operations that do work proportional to
 a size (copy, concatenate, compare, print, render) add one unit per
 `GLTANG_WORK_BYTES_PER_FUEL` (64) bytes, and an element of a container counts
 as 8 bytes.
@@ -336,6 +338,83 @@ error value `Out of memory`, which is preallocated per execution (so producing
 it cannot itself fail). The execution is a root source reporting `roots[]`
 (result, that error, the program-scope variables, a cache of materialised
 constants) and `temps[]`.
+
+### Statement polls
+
+AD-4 puts a poll at function entry, at every loop back-edge and at throw points,
+and that is all a budget needs. A debugger needs more: a breakpoint can only
+fire where the engine polls, so with those sites alone a breakpoint on a line in
+a straight run of statements never fires, and a step over a statement has
+nowhere to stop (runtime-debug's design.md states that as the contract an engine
+has to meet). **This is an extension of AD-4's list of poll sites, recorded here
+and in the Auto Run Result of story 13 for Corey to ratify or reject.** It is
+opt-in, so that nothing in the suite moves unless a host asks.
+
+The `LINE` instruction is emitted at the start of every statement
+`compile_statement` handles, except a block (a block is the list of the
+statements inside it, each of which has its own, so a brace on a line of its
+own is not a place to stop), and at the top level of a template or a script: the
+text of a template is a statement per piece of text, a `<% %>` tag is its
+statements. It is mapped into the line table like any instruction, so it has the
+statement's first line. It costs **zero fuel** (`gltang_opcode_cost_table`), so
+the fuel a program is charged is the same with the option on or off, and a
+budget means the same thing to a host that turns it on. Its body is
+
+    case GLTANG_OP_LINE:
+      if (exec->statement_polls) { /* exactly the POLL body */ }
+      break;
+
+so with `gltang_execution_set_statement_polls(execution, false)` (the default)
+it is one load and one branch, and polls, fuel, pause locations and frame traces
+are what they were before the opcode existed (the suite shows it: no existing
+expected value changed except the two that are properties of the bytecode, the
+cost table's "every opcode costs at least one" and the disassembly counts). With
+it on it is the `POLL` body, so the debugger, the observer and the fuel check see
+nothing new but a more frequent engine. The engine never asks whether a debugger
+is attached (AD-2): the host that attaches one turns the option on, on that
+execution, and the setting is per execution because a program is shared by
+every context (refcounted bytecode, AD-14).
+
+**Granularity, stated and not hidden.** A line breakpoint fires at the first
+`LINE` poll of a statement that starts on that line. A line on which no
+statement starts (a blank line, a comment, the second line of a statement that
+began on the line before, a closing brace) never fires; the DAP adapter still
+reports it `verified`, which is the limitation runtime-debug records. A
+multi-line statement fires at its first line. A line shared by an entry poll or a
+loop's back-edge poll and the statement that follows it is more than one poll
+and a breakpoint stops at each: a loop on a line of its own stops at the
+statement `LINE` and then at its back-edge `POLL`, which is the same line and
+one `continue` away; stepping is not affected, because a step stops only at a
+poll whose (location, depth) differs from where it started.
+
+**Cost.** Measured with `make bench` (gcc -O2, best of five, same machine, the
+calibration case beside it, run-to-run noise about 3%). Statement polls off: the
+instruction is executed and does nothing, about 3 ns a statement executed (the
+dispatch, and the table lookup that adds its zero to the pending fuel), which
+shows up as about 4% to 5% on the 1,000-iteration loop (one statement an
+iteration), `fib(15)` and the template-call case (62.5 to 64.4 us before the
+opcode, 66.3 to 66.7 us after, for the loop). On with nothing pending, the poll's
+unarmed fast path (flush the fuel, save the frame, `grcore_stack_poll`) is
+about 16 ns a statement: the four-statement loop body of
+`run-statements-1000-polls-*` goes from about 64 us to about 128 us. Both
+numbers are in the table under "Benchmarks". No budget is asserted (AD-26).
+
+**Rejected alternatives.**
+
+- *Poll at every instruction.* It moves every pause location, every fuel flush
+  and every observer trace in the suite, and costs an order of magnitude more.
+- *Patch the bytecode per context when a debugger attaches.* A program is
+  shared by every context and refcounted; per-context patching would mean a copy
+  of the code per context, or a patch that other contexts see.
+- *A debugger flag on the program.* It would make a property of the host's
+  context a property of a shared, immutable program.
+- *A breakpoint opcode swapped in at the line.* The classic debugger design
+  needs writable code and a map from lines to instruction offsets that the
+  engine would have to keep; it is the same patching, and the same sharing
+  problem, with a harder undo.
+- *Poll in `compile` only on lines that have a breakpoint.* The compiler would
+  have to know the host's breakpoints, which are set after compilation, are
+  per context, and change while a program runs.
 
 ### Names
 
@@ -1307,9 +1386,21 @@ reading future figures against the calibration beside them:
 | run: a template call, 200 times (three prints each) | about 101 us (about 510 ns a call: the activation, the scope's open and close, the prints and the output string) |
 | run: 2,000 swallowed errors, the list full after 1,024 | about 208 us (about 100 ns an error; the 976 past the cap are only counted) |
 | run: `random.global.next_int % 7` 1,000 times | about 123 us (about 120 ns an iteration, a boxed integer or two included) |
+| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 64 us (the `LINE` instruction is executed and does nothing) |
+| run: the same, statement polls on with nothing pending | about 128 us (about 16 ns a poll on the unarmed fast path) |
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
 are where they were, within the noise of the machine.
+
+**The statement-boundary instruction (story 13).** `LINE` is executed even with
+statement polls off, and the other cases above moved by it: the loop, `fib(15)`
+and the template call are each about 4% to 5% slower than the figures in the
+table, which were taken before it existed (the loop 62.5 to 64.4 us before and
+66.3 to 66.7 us after; `fib(15)` 176 to 181 us before, 189 to 191 us after;
+the template call 106 to 108 us before, 108 to 120 us after). The calibration
+case moved by 3% between the same runs, so the figures are good to about that.
+That is the price of making a statement a place a host may ask to stop at without
+patching a shared program; the alternatives are listed under "Statement polls".
 
 ## Fuzzing
 

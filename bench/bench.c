@@ -32,7 +32,8 @@
  * budget) and of the host API (a `use` with a member access, a native function
  * called in a loop, a template call that opens and closes a budget scope, a
  * loop of swallowed errors with the error list at its cap, and a generator
- * drawn in a loop). An engine case's unit is one run of a fixed program; the
+ * drawn in a loop), and of the opt-in statement poll (a loop of four statements
+ * an iteration with statement polls off, and on with nothing pending). An engine case's unit is one run of a fixed program; the
  * clock covers the run and not the building or the tearing down of the context.
  *
  * The calibration case is a fixed amount of integer work that touches no
@@ -392,6 +393,15 @@ static void setup_template(GLTANG_Execution * execution) {
   gltang_library_release(library);
 }
 
+/* The host asks for a poll at every statement, as a host that attaches a
+ * debugger does. Nothing is pending, so every one of them is the unarmed fast
+ * path of a poll. */
+static void setup_statement_polls(GLTANG_Execution * execution) {
+  if (gltang_execution_set_statement_polls(execution, true) != GLTANG_OK) {
+    setup_failed("statement polls");
+  }
+}
+
 static void setup_seeds(GLTANG_Execution * execution) {
   GLTANG_SeedSequence * seeds = NULL;
   if (gltang_seeds_create(1, &seeds) != GLTANG_OK || gltang_execution_set_seeds(execution, seeds) != GLTANG_OK) {
@@ -422,6 +432,20 @@ static uint64_t random_global_run(uint64_t iterations, double * elapsed) {
   return run_source_with("use random; s = 0; for (i = 0; i < 1000; i += 1) { s += random.global.next_int % 7; } s;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_seeds);
 }
 
+/* Four statements to a loop iteration, so that the statement boundary is a
+ * visible share of the work: the same program with statement polls off (the
+ * boundary is a load and a branch) and on with nothing pending (each is a
+ * poll's fast path). */
+#define STATEMENTS_SOURCE "s = 0; t = 0; for (i = 0; i < 1000; i += 1) { s += i; t = s; u = t; w = u; } s;"
+
+static uint64_t statements_off_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(STATEMENTS_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+}
+
+static uint64_t statements_on_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(STATEMENTS_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_statement_polls);
+}
+
 static const Case cases[] = {
     {"calibration", calibration_run, 200u * 1000u * 1000u, 1000u * 1000u},
     {"parse-small-script", parse_small_script_run, 100000u, 100u},
@@ -439,6 +463,8 @@ static const Case cases[] = {
     {"run-template-call-200", template_call_run, 2000u, 5u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
+    {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},
+    {"run-statements-1000-polls-on", statements_on_run, 5000u, 5u},
 };
 
 #define REPEATS 7

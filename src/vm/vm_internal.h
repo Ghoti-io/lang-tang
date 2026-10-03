@@ -392,6 +392,7 @@ struct GLTANG_Execution {
   uint64_t errors_dropped;
   bool log_all_errors;
   bool halt_on_error;
+  bool statement_polls;         ///< `LINE` polls like `POLL` (the host asked for it; default off).
   bool halted;                  ///< The first error has ended the run.
   bool halt_registered;
   GRCORE_RequestKind halt_kind;

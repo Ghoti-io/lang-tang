@@ -387,6 +387,7 @@
 #define gltang_execution_errors_dropped GHOTIIO_LANG_TANG(gltang_execution_errors_dropped)
 #define gltang_execution_set_error_limit GHOTIIO_LANG_TANG(gltang_execution_set_error_limit)
 #define gltang_execution_set_halt_on_error GHOTIIO_LANG_TANG(gltang_execution_set_halt_on_error)
+#define gltang_execution_set_statement_polls GHOTIIO_LANG_TANG(gltang_execution_set_statement_polls)
 #define gltang_execution_set_log_all_errors GHOTIIO_LANG_TANG(gltang_execution_set_log_all_errors)
 
 /// @endcond

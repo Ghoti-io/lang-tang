@@ -79,6 +79,7 @@ static const char * const opcode_names[GLTANG_OP_COUNT] = {
   [GLTANG_OP_ITER_INIT] = "ITER_INIT",
   [GLTANG_OP_ITER_NEXT] = "ITER_NEXT",
   [GLTANG_OP_DISCARD] = "DISCARD",
+  [GLTANG_OP_LINE] = "LINE",
 };
 
 const char * gltang_opcode_name(GLTANG_Opcode op) {
@@ -145,6 +146,7 @@ const uint32_t gltang_opcode_cost_table[GLTANG_OP_COUNT] = {
   [GLTANG_OP_ITER_INIT] = 1,
   [GLTANG_OP_ITER_NEXT] = 1,
   [GLTANG_OP_DISCARD] = 1,
+  [GLTANG_OP_LINE] = 0, // a statement boundary: free, so fuel does not depend on the option (design.md)
 };
 
 uint32_t gltang_opcode_cost(GLTANG_Opcode op) {

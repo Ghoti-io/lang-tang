@@ -56,12 +56,18 @@ struct RunConfig {
   int moving = 0;
   bool shuffle = false;
   uint64_t seed = 0;
+  bool statement_polls = false;  ///< The execution polls at every statement (the debugger's setting).
 };
 
 const RunConfig kPlain = {"plain", 0, 0, 0, false, 0};
 const RunConfig kTorture = {"torture+verify", 1, 1, 0, false, 0};
 const RunConfig kMoving = {"moving stack", 0, 0, 1, false, 0};
 const RunConfig kShuffled = {"phase-shuffled", 0, 0, 0, true, 0x5eed};
+// The same four with statement polls on (the setting a debugger needs).
+const RunConfig kLinesPlain = {"statement polls, plain", 0, 0, 0, false, 0, true};
+const RunConfig kLinesTorture = {"statement polls, torture+verify", 1, 1, 0, false, 0, true};
+const RunConfig kLinesMoving = {"statement polls, moving stack", 0, 0, 1, false, 0, true};
+const RunConfig kLinesShuffled = {"statement polls, phase-shuffled", 0, 0, 0, true, 0x5eed, true};
 
 struct Observed {
   observer::Trace trace;
@@ -96,6 +102,9 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
     return out;
   }
   EXPECT_EQ(gltang_execution_set_name(context.execution, "page"), GLTANG_OK);
+  if (rc.statement_polls) {
+    EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
+  }
   std::vector<std::unique_ptr<tt::Compiled>> compiled;
   for (const Part & part : c.parts) {
     compiled.push_back(std::make_unique<tt::Compiled>(part.source, part.mode, (part.name + ".tang").c_str()));
@@ -307,7 +316,7 @@ TEST(Observer, TheCaseSetHoldsAtLeastFortyPrograms) {
 TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutputResultAndErrors) {
   std::vector<Case> cases = all_cases();
   ASSERT_GE(cases.size(), 40u);
-  size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0;
+  size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0, polls_with_statements = 0;
   // Under Valgrind a poll costs fifty milliseconds to record: each program
   // records its first few polls and compares the count of the rest. The other
   // modes record up to the case's limit.
@@ -339,12 +348,27 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     EXPECT_TRUE(same(c, plain, kPlain.label, moving, kMoving.label));
     Observed shuffled = observe(c, kShuffled, nullptr, cap);
     EXPECT_TRUE(same(c, plain, kPlain.label, shuffled, kShuffled.label));
+
+    // With statement polls on the polls are different ones (the program is
+    // paused at statements, so the pauses and the trace are not the plain
+    // run's), but the four configurations must agree among themselves, and the
+    // output, the result and the error list must be the plain run's.
+    Observed lines = observe(c, kLinesPlain, nullptr, cap);
+    EXPECT_GE(lines.trace.total, plain.trace.total) << c.name << ": statement polls only add polls";
+    polls_with_statements += lines.trace.total;
+    if (lines.finished && plain.finished) {
+      EXPECT_EQ(lines.describe(), plain.describe()) << c.name << ": statement polls changed what the program did";
+    }
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesTorture, nullptr, cap), kLinesTorture.label));
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesMoving, nullptr, cap), kLinesMoving.label));
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesShuffled, nullptr, cap), kLinesShuffled.label));
   }
   EXPECT_GT(polls, RUNNING_ON_VALGRIND ? 200u : 1800u);
   EXPECT_GT(pauses, 50u) << "the set includes runs that pause and resume";
   EXPECT_GT(deep, 20u) << "the set includes polls inside nested calls";
   EXPECT_GT(scopes_with_variables, 100u) << "scopes and their variables are recorded";
-  std::printf("  observer: %zu programs x 4 configurations, %zu polls, %zu pauses\n", cases.size(), polls, pauses);
+  EXPECT_GT(polls_with_statements, polls) << "the statement-poll runs have polls the plain ones lack";
+  std::printf("  observer: %zu programs x 8 configurations (4 with statement polls), %zu polls, %zu pauses\n", cases.size(), polls, pauses);
 }
 
 TEST(Observer, AllInstrumentsTogetherAlsoGiveTheSameTrace) {

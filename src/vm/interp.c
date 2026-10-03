@@ -162,6 +162,28 @@ resume_loop:
         break;
       }
 
+      case GLTANG_OP_LINE: {
+        // A statement boundary: costs no fuel, and polls only when the host
+        // asked for statement polls on this execution. With the option off
+        // this is one load and one branch, and nothing else changes.
+        if (!exec->statement_polls) {
+          break;
+        }
+        gltang_vm_flush_fuel(exec);
+        SAVE();
+        SYNC();
+        GRCORE_Verdict verdict = grcore_stack_poll(context, fword, pc - 1u);
+        RELOAD();
+        if (verdict == GRCORE_VERDICT_PAUSE) {
+          exec->state = GLTANG_EXECUTION_PAUSED;
+          return GRCORE_STEP_PAUSED;
+        }
+        if (verdict == GRCORE_VERDICT_UNWIND) {
+          goto unwound;
+        }
+        break;
+      }
+
       case GLTANG_OP_POP:
         S[--sp] = 0;
         break;

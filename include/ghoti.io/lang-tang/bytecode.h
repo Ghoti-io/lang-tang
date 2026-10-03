@@ -101,6 +101,7 @@ typedef enum {
   GLTANG_OP_ITER_INIT,  ///< `v -- bool`: start iterating array `v` over locals `a`, `a+1`.
   GLTANG_OP_ITER_NEXT,  ///< `-- e` or jump: two words, the second is the exhausted target.
   GLTANG_OP_DISCARD,    ///< `v --`: drop the value of an expression statement; an error that nothing holds is entered in the error list.
+  GLTANG_OP_LINE,       ///< The start of a statement: a poll when the execution asked for statement polls, otherwise nothing. Costs no fuel.
   GLTANG_OP_COUNT       ///< Not an opcode: closes the enum.
 } GLTANG_Opcode;
 
