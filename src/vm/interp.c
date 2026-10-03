@@ -578,6 +578,9 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 unwound:
   gltang_vm_flush_fuel(exec);
   grcore_unwind_all(stack, NULL);
+  // The program did not finish, so what an earlier statement left as its
+  // result is not an answer.
+  exec->roots[GLTANG_ROOT_RESULT] = GLTANG_V_NULL;
   exec->state = GLTANG_EXECUTION_UNWOUND;
   return GRCORE_STEP_UNWOUND;
 

@@ -134,9 +134,9 @@ GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index) {
 // ---------------------------------------------------------------------------
 
 GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock * path) {
-  // The one place a library is looked up. Story 10 puts the registry here;
-  // until then a host may give names through its resolver, and a name nobody
-  // provides is null (reference 9.1).
+  // The one place a library is looked up. There is no registry yet: a host
+  // may give names through its resolver, and a name nobody provides is null
+  // (reference 9.1).
   if (!exec->resolver) {
     return GLTANG_V_NULL;
   }
@@ -190,6 +190,11 @@ static size_t descriptor_inspect(const GRCORE_Context * context, GRCORE_SlotKind
     return n < 0 ? 0 : (size_t)n;
   }
   GLTANG_Execution * exec = execution_of(context);
+  if (!exec || exec->destroyed) {
+    // Without a live execution there is no heap to read the value from.
+    int n = snprintf(buffer, size, "%llu", (unsigned long long)value);
+    return n < 0 ? 0 : (size_t)n;
+  }
   GLTANG_Sink sink;
   gltang_sink_init_buffer(&sink, buffer, size);
   sink.exec = exec;

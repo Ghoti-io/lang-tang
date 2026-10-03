@@ -121,7 +121,9 @@ tang --fuel 10000 -e 'while (true) {}'   # a budget; the pause names file and li
 
 A syntax or compile error is `name:line:column: message` on stderr and exit
 status 1; usage errors exit 2, a file that cannot be read 3, out of memory 4, a
-run paused for fuel 5, a run unwound 6.
+run paused for fuel 5 (at a poll), a run unwound 6 (a limit reached
+inside one operation, such as a huge repeat or copy, cannot pause), the runtime
+could not be set up for a reason other than memory 7.
 
 ## Documentation
 

@@ -117,6 +117,7 @@ esac
 status "a paused run exits 5" 5 "$TANG" --fuel 5000 -e 'while (true) {}'
 check "the output so far is written when it pauses" "start" \
   "$("$TANG" --fuel 5000 -e 'print("start"); while (true) {}' 2>/dev/null)"
+status "a limit reached inside one operation unwinds and exits 6" 6 "$TANG" --fuel 5000 -e 'x = [0, 0, 0, 0] * 20000000;'
 status "--fuel without a number exits 2" 2 "$TANG" --fuel
 status "--fuel with a word exits 2" 2 "$TANG" --fuel many -e 1
 status "--script and --template together exit 2" 2 "$TANG" -s -t -e 1

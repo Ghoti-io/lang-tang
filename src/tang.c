@@ -58,6 +58,7 @@
 #define EXIT_MEMORY 4
 #define EXIT_PAUSED 5
 #define EXIT_UNWOUND 6
+#define EXIT_SETUP 7
 
 /** ctang's default for the deepest a call may nest (language reference 10.3). */
 #define DEFAULT_CALL_DEPTH 512
@@ -75,7 +76,9 @@ static void print_help_text(void) {
     "  --template, -t                Run the --evaluate source as a template\n"
     "  --tree                        Parse and print the syntax tree; run nothing\n"
     "  --fuel N                      Give the run N units of fuel; if it is not\n"
-    "                                finished by then it pauses (exit status 5)\n"
+    "                                finished by then it pauses (exit status 5); a\n"
+    "                                limit reached inside one operation (a huge\n"
+    "                                repeat or copy) unwinds it instead (exit 6)\n"
     "  --depth N                     Allow calls to nest N deep (default %d)\n"
     "  --cleanup, -c                 Accepted for ctang compatibility; this\n"
     "                                command always releases what it allocates\n"
@@ -83,7 +86,8 @@ static void print_help_text(void) {
     "\n"
     "Exit status: 0 ran; 1 refused (name:line:column: message on stderr);\n"
     "2 usage error; 3 the source could not be read; 4 out of memory;\n"
-    "5 paused at a poll (reported on stderr); 6 unwound by a limit.\n",
+    "5 paused at a poll (reported on stderr); 6 unwound by a limit;\n"
+    "7 the runtime could not be set up for a reason other than memory.\n",
     DEFAULT_CALL_DEPTH);
 }
 
@@ -150,27 +154,54 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, 
     return compiled == GLTANG_ERR_OOM ? EXIT_MEMORY : EXIT_REFUSED;
   }
 
-  int status = EXIT_MEMORY;
+  int status = EXIT_SETUP;
+  const char * setup_step = "the runtime could not be set up";
   GRCORE_Group * group = NULL;
   GRCORE_Options * options = NULL;
   GRCORE_Context * context = NULL;
   GRHEAP_Options * heap_options = NULL;
   GRHEAP_Heap * heap = NULL;
   GLTANG_Execution * execution = NULL;
-  if (grcore_group_create(NULL, NULL, &group) != GRCORE_OK
-      || grcore_options_create(NULL, &options) != GRCORE_OK
-      || grheap_options_create(NULL, &heap_options) != GRHEAP_OK) {
-    goto done;
+  GRCORE_Result step = grcore_group_create(NULL, NULL, &group);
+  if (step == GRCORE_OK) {
+    step = grcore_options_create(NULL, &options);
   }
-  if (has_fuel) {
-    grcore_options_set_fuel(options, fuel);
+  GRHEAP_Result heap_step = GRHEAP_OK;
+  if (step == GRCORE_OK) {
+    heap_step = grheap_options_create(NULL, &heap_options);
   }
-  // ctang's depth counts the calls, and the program's own frame is one more.
-  grcore_options_set_guest_depth(options, depth == UINT64_MAX ? depth : depth + 1u);
-  gltang_heap_options_configure(heap_options);
-  if (grcore_context_create(group, options, &context) != GRCORE_OK
-      || grheap_heap_create(context, heap_options, &heap) != GRHEAP_OK
-      || gltang_execution_create(context, program, &execution) != GLTANG_OK) {
+  if (step == GRCORE_OK && heap_step == GRHEAP_OK) {
+    if (has_fuel) {
+      step = grcore_options_set_fuel(options, fuel);
+    }
+    // ctang's depth counts the calls, and the program's own frame is one more.
+    if (step == GRCORE_OK) {
+      step = grcore_options_set_guest_depth(options, depth == UINT64_MAX ? depth : depth + 1u);
+    }
+    if (step == GRCORE_OK && gltang_heap_options_configure(heap_options) != GLTANG_OK) {
+      step = GRCORE_ERR_INTERNAL;
+    }
+  }
+  if (step == GRCORE_OK && heap_step == GRHEAP_OK) {
+    step = grcore_context_create(group, options, &context);
+    if (step == GRCORE_OK) {
+      heap_step = grheap_heap_create(context, heap_options, &heap);
+    }
+  }
+  GLTANG_Result created = GLTANG_OK;
+  if (step == GRCORE_OK && heap_step == GRHEAP_OK) {
+    created = gltang_execution_create(context, program, &execution);
+  }
+  if (step != GRCORE_OK || heap_step != GRHEAP_OK || created != GLTANG_OK) {
+    if (step == GRCORE_ERR_OOM || heap_step == GRHEAP_ERR_OOM || created == GLTANG_ERR_OOM) {
+      status = EXIT_MEMORY;
+    }
+    else {
+      fprintf(stderr, "%s: %s: %s\n", name, setup_step,
+          step != GRCORE_OK ? grcore_result_string(step)
+          : heap_step != GRHEAP_OK ? grheap_result_string(heap_step)
+          : gltang_result_string(created));
+    }
     goto done;
   }
 
@@ -181,6 +212,13 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, bool has_fuel, 
   if (gltang_execution_output_render(execution, &text, &length) == GLTANG_OK) {
     fwrite(text, 1, length, stdout);
     gltang_buffer_free(text);
+  }
+  else {
+    // The output could not be built, so what the program printed is lost:
+    // that is the same failure as running out of memory, and not a success.
+    fflush(stdout);
+    status = EXIT_MEMORY;
+    goto done;
   }
   fflush(stdout);
   if (ran == GRCORE_OK && outcome == GRCORE_OUTCOME_FINISHED) {

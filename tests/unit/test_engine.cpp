@@ -117,6 +117,20 @@ TEST(Pause, UnwindingAPausedRunReturnsLimitAndTheProcessSurvives) {
   EXPECT_GE(gltang_execution_unwound_frames(context.execution), 1u);
 }
 
+TEST(Pause, AnUnwoundRunHasNoResultNotTheValueOfAnEarlierStatement) {
+  Compiled compiled("1; while (true) { }");
+  ASSERT_TRUE(compiled.ok());
+  Config config;
+  config.fuel = 300;
+  Context context(compiled.program, config);
+  ASSERT_FALSE(context.execute());
+  ASSERT_TRUE(context.paused());
+  ASSERT_EQ(grcore_context_terminate(context.context), GRCORE_OK);
+  EXPECT_EQ(grcore_resume(context.context, &context.outcome), GRCORE_ERR_LIMIT);
+  EXPECT_EQ(gltang_execution_state(context.execution), GLTANG_EXECUTION_UNWOUND);
+  EXPECT_EQ(context.kind(), GLTANG_KIND_NULL) << "the 1 was not the program's answer";
+}
+
 TEST(Pause, UnwindingFromDeepInACallPopsEveryFrame) {
   const uint64_t depth = deep(400, 200);
   std::string source = "function d(n) { if (n <= 0) { while (true) { } } return d(n - 1); } d(" + std::to_string(depth) + ");";
@@ -212,16 +226,26 @@ TEST(Threads, AnUnwoundRunOnAnotherThreadReportsTheLimit) {
   Context context(compiled.program, config);
   ASSERT_FALSE(context.execute());
   ASSERT_EQ(grcore_context_release(context.context), GRCORE_OK);
+  GRCORE_Result acquired = GRCORE_ERR_INTERNAL;
+  GRCORE_Result terminated = GRCORE_ERR_INTERNAL;
   GRCORE_Result result = GRCORE_OK;
   std::thread t([&]() {
-    ASSERT_EQ(grcore_context_acquire(context.context), GRCORE_OK);
-    ASSERT_EQ(grcore_context_terminate(context.context), GRCORE_OK);
-    result = grcore_resume(context.context, &context.outcome);
-    grcore_context_release(context.context);
+    acquired = grcore_context_acquire(context.context);
+    if (acquired == GRCORE_OK) {
+      terminated = grcore_context_terminate(context.context);
+      result = grcore_resume(context.context, &context.outcome);
+      grcore_context_release(context.context);
+    }
   });
   t.join();
   ASSERT_EQ(grcore_context_acquire(context.context), GRCORE_OK);
+  EXPECT_EQ(acquired, GRCORE_OK);
+  EXPECT_EQ(terminated, GRCORE_OK);
   EXPECT_EQ(result, GRCORE_ERR_LIMIT);
+  EXPECT_EQ(grcore_context_unwind_result(context.context), GRCORE_ERR_LIMIT);
+  EXPECT_EQ(gltang_execution_state(context.execution), GLTANG_EXECUTION_UNWOUND);
+  EXPECT_EQ(grcore_stack_frame_count(grcore_context_stack(context.context)), 0u);
+  EXPECT_EQ(context.kind(), GLTANG_KIND_NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,22 +269,22 @@ TEST(Natives, ARepetitionOfAHugeArrayIsStoppedByTheFuelNotByTheClock) {
 }
 
 TEST(Natives, ARepetitionOfAHugeArrayUnderAMemoryBudgetRunsACollectionAndThenStops) {
-  Compiled compiled("x = [0] * 1000000000; x.size;");
+  Compiled compiled("x = [0] * 1000000000; x;");
   ASSERT_TRUE(compiled.ok());
   Config config;
   config.memory_bytes = 8u << 20;
   Context context(compiled.program, config);
   ASSERT_TRUE(context.ok());
   GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  // Either the budget unwinds the run, or the allocation fails as a value and
-  // the program finishes with an error; never a hang, never a crash.
-  if (r == GRCORE_OK) {
-    EXPECT_TRUE(context.outcome == GRCORE_OUTCOME_FINISHED || context.paused());
-  }
-  else {
-    EXPECT_EQ(r, GRCORE_ERR_LIMIT);
-  }
-  EXPECT_LE(grcore_context_memory_peak(context.context), (8u << 20) + GRCORE_DEFAULT_MEMORY_RESERVE + (1u << 20));
+  // The allocation is refused after the collection, and the program goes on
+  // with the error value in x.
+  EXPECT_EQ(r, GRCORE_OK);
+  EXPECT_EQ(context.outcome, GRCORE_OUTCOME_FINISHED);
+  EXPECT_TRUE(context.is_error());
+  EXPECT_EQ(context.error_kind(), GLTANG_ERROR_OUT_OF_MEMORY);
+  GRHEAP_Stats stats;
+  ASSERT_EQ(grheap_stats(context.heap, &stats), GRHEAP_OK);
+  EXPECT_GT(stats.collections, 0u) << "a collection runs before the memory verdict is given";
 }
 
 TEST(Natives, BuildingAStringByDoublingIsStoppedInsideTheCopy) {
@@ -292,56 +316,73 @@ TEST(Natives, ADoublingStringInAnInfiniteLoopUnderAMemoryBudgetReachesAVerdict) 
   EXPECT_GT(stats.collections, 0u) << "memory over budget runs a collection before the verdict";
 }
 
-TEST(Natives, PrintingAHugeContainerIsPacedByTheRuntimePoll) {
-  Compiled compiled("a = [1, 2, 3]; a = a * 3000000; print(a);");
-  ASSERT_TRUE(compiled.ok());
+namespace {
+
+/// The fuel a whole run of `source` uses with no budget at all, and whether it finished.
+uint64_t unlimited_cost(const std::string & source, bool * finished) {
+  Compiled compiled(source);
+  Context context(compiled.program);
+  *finished = compiled.ok() && context.ok() && context.execute();
+  return grcore_context_fuel_used(context.context);
+}
+
+/// Whether `source` is stopped by the limit when given `fuel`.
+bool unwinds_with(const std::string & source, uint64_t fuel) {
+  Compiled compiled(source);
   Config config;
-  config.fuel = 300000;
+  config.fuel = fuel;
   Context context(compiled.program, config);
-  ASSERT_TRUE(context.ok());
+  if (!compiled.ok() || !context.ok()) {
+    return false;
+  }
   GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  EXPECT_EQ(r, GRCORE_ERR_LIMIT);
-  EXPECT_LT(grcore_context_fuel_used(context.context), 3000000u);
+  return r == GRCORE_ERR_LIMIT && grcore_context_unwind_result(context.context) == GRCORE_ERR_LIMIT;
+}
+
+/// A native is paced if the fuel it alone uses is about its work, and a budget
+/// that covers building its operand but not that work stops it. The operand is
+/// built identically in both programs, so the difference is the native.
+void expect_native_paced(const std::string & build, const std::string & native, uint64_t least_native_fuel) {
+  bool built = false;
+  bool whole = false;
+  uint64_t build_cost = unlimited_cost(build + " 0;", &built);
+  uint64_t total_cost = unlimited_cost(build + " " + native, &whole);
+  ASSERT_TRUE(built) << build;
+  ASSERT_TRUE(whole) << native;
+  ASSERT_GE(total_cost, build_cost);
+  EXPECT_GE(total_cost - build_cost, least_native_fuel) << native << " cost " << (total_cost - build_cost) << " on its own";
+  EXPECT_FALSE(unwinds_with(build + " 0;", build_cost + 100)) << "the build alone fits the budget used below";
+  EXPECT_TRUE(unwinds_with(build + " " + native, build_cost + least_native_fuel / 4)) << native << " was not stopped by a budget below its own work";
+}
+
+}  // namespace
+
+TEST(Natives, PrintingAHugeContainerIsPacedByTheRuntimePoll) {
+  expect_native_paced("a = [1, 2, 3] * 300000;", "print(a);", 20000);
 }
 
 TEST(Natives, ComparingTwoHugeArraysIsPaced) {
-  Compiled compiled("a = [1, 2, 3] * 3000000; b = [1, 2, 3] * 3000000; a == b;");
-  ASSERT_TRUE(compiled.ok());
-  Config config;
-  config.fuel = 300000;
-  Context context(compiled.program, config);
-  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  EXPECT_EQ(r, GRCORE_ERR_LIMIT);
+  expect_native_paced("a = [1, 2, 3] * 300000; b = [1, 2, 3] * 300000;", "a == b;", 10000);
 }
 
 TEST(Natives, SlicingAndReversingAHugeStringIsPaced) {
-  Compiled compiled("s = \"abcdefgh\"; for (i = 0; i < 24; i += 1) { s = s + s; } t = s[::-1]; t.length;");
-  ASSERT_TRUE(compiled.ok());
-  Config config;
-  config.fuel = 1000000;
-  Context context(compiled.program, config);
-  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  EXPECT_EQ(r, GRCORE_ERR_LIMIT);
+  expect_native_paced("s = \"abcdefgh\"; for (i = 0; i < 20; i += 1) { s = s + s; }", "t = s[::-1]; t.length;", 1800000);   // two passes of about 1M each
 }
 
-TEST(Natives, RenderingAHugeStringIsPaced) {
-  Compiled compiled("s = \"<>&<>&<>&\"; for (i = 0; i < 22; i += 1) { s = s + s; } t = s.html.render; t.length;");
-  ASSERT_TRUE(compiled.ok());
-  Config config;
-  config.fuel = 800000;
-  Context context(compiled.program, config);
-  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  EXPECT_EQ(r, GRCORE_ERR_LIMIT);
+TEST(Natives, RenderingAContainerToTextIsPaced) {
+  expect_native_paced("a = [1, 2, 3] * 300000;", "t = \"x\" + a; t.length;", 20000);
+}
+
+TEST(Natives, RenderingAContainerHoldingAHugeStringToTextIsPaced) {
+  expect_native_paced("s = \"abcdefgh\"; for (i = 0; i < 20; i += 1) { s = s + s; } a = [s];", "t = \"x\" + a; t.length;", 200000);
+}
+
+TEST(Natives, ConcatenatingTwoHugeStringsIsPaced) {
+  expect_native_paced("s = \"abcdefgh\"; for (i = 0; i < 20; i += 1) { s = s + s; } u = s[1:];", "t = s + u; t.length;", 200000);
 }
 
 TEST(Natives, DeepCopyingAHugeArrayIsPaced) {
-  Compiled compiled("a = [1, 2, 3] * 4000000; b = [a]; b.size;");
-  ASSERT_TRUE(compiled.ok());
-  Config config;
-  config.fuel = 400000;
-  Context context(compiled.program, config);
-  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
-  EXPECT_EQ(r, GRCORE_ERR_LIMIT);
+  expect_native_paced("a = [1, 2, 3] * 300000;", "b = [a]; b.size;", 10000);
 }
 
 // ---------------------------------------------------------------------------
@@ -668,6 +709,36 @@ TEST(Execution, DestroyingItEarlyReleasesItsPartsAndLeavesTheAccessorsSafe) {
   EXPECT_EQ(context.rendered(), "");
   EXPECT_EQ(context.size(), 0u);
   EXPECT_EQ(gltang_execution_entry(context.context, context.execution), GRCORE_STEP_FINISHED) << "nothing to run";
+}
+
+TEST(Execution, TheDescriptorCallbacksAreSafeAfterTheExecutionIsDestroyed) {
+  Compiled compiled("a = [1, \"two\"]; while (true) { }");
+  ASSERT_TRUE(compiled.ok());
+  Config config;
+  config.fuel = 300;
+  Context context(compiled.program, config);
+  ASSERT_FALSE(context.execute());
+  GRCORE_FrameWalk walk;
+  ASSERT_EQ(grcore_frame_walk_begin(context.context, &walk), GRCORE_OK);
+  GRCORE_AbstractFrame frame;
+  ASSERT_TRUE(grcore_frame_walk_next(&walk, &frame));
+  const GRCORE_EngineDescriptor * descriptor = grcore_engine_descriptor(context.context, 1);
+  ASSERT_NE(descriptor, nullptr);
+  // Take a heap value's word while the execution is alive.
+  GRCORE_SlotKind kind;
+  uint64_t word = 0;
+  ASSERT_EQ(grcore_frame_slot(&frame, 4, &kind, &word), GRCORE_OK);
+
+  gltang_execution_destroy(context.execution);
+
+  char text[64];
+  EXPECT_NO_FATAL_FAILURE((void)descriptor->inspect(context.context, GRCORE_SLOT_VALUE, word, text, sizeof(text)));
+  EXPECT_EQ(descriptor->scopes.scope_count(&frame), 0u);
+  GRCORE_ScopeInfo scope;
+  EXPECT_NE(descriptor->scopes.scope(&frame, 0, &scope), GRCORE_OK);
+  GRCORE_Variable variable;
+  EXPECT_NE(descriptor->scopes.variable(&frame, 0, 0, &variable), GRCORE_OK);
+  EXPECT_EQ(descriptor->locate(context.context, 0, 0).file, nullptr);
 }
 
 TEST(Execution, TheAccessorsAnswerForNullAndForAnExecutionThatNeverRan) {

@@ -31,7 +31,7 @@
  * and then an integer, a float, a boolean or text, and it describes its own
  * values to the engine as ::GLTANG_HostValue, which is plain data.
  *
- * This header is `free`: story 10 designs the stable host API over it.
+ * This header is `free`: the stable host API that wraps it is not part of it.
  */
 
 #ifndef GHOTI_IO_GLTANG_VALUE_H

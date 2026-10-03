@@ -47,6 +47,11 @@ TEST(CompileErrors, EachRefusalNamesItsLineAndColumn) {
     {"function f(a, a) { }", 1, 1, "Parameter 'a' is declared twice."},
     {"global y;", 1, 1, "A global declaration is only permitted inside a function."},
     {"x = 1; function x() {}", 1, 8, "'x' is already declared in this scope."},
+    // Inside a function (ctang refuses each of these too).
+    {"function g() { function h() {} h = 1; }", 1, 32, "'h' is already declared in this scope."},
+    {"function g() { x = 1; global x; }", 1, 23, "'x' is already declared in this scope."},
+    {"function g() { function h() {} function h() {} }", 1, 32, "'h' is already declared in this scope."},
+    {"function a() {} function g() { a = 1; }", 1, 32, "'a' is already declared in this scope."},
     {"function f() { return 1; } f = 2;", 1, 28, "'f' is already declared in this scope."},
   };
   for (const Refusal & row : rows) {
@@ -222,7 +227,9 @@ TEST(TreeDepth, TheRefusalLeaksNothing) {
   alloc_sweep::track(false);
 }
 
-TEST(TreeDepth, NestedBlocksAndCallsCountToo) {
+TEST(TreeDepth, DeeplyNestedBlocksHitTheParsersOwnNestingLimit) {
+  // Blocks nest in the grammar's stack before they can make the tree too tall,
+  // so this is the parser's limit (the same figure) and the same result.
   std::string source;
   for (int i = 0; i < 20000; ++i) {
     source += "{";
@@ -233,7 +240,23 @@ TEST(TreeDepth, NestedBlocksAndCallsCountToo) {
   }
   GLTANG_ParseError error = {0, 0, {0}};
   GLTANG_Tree * tree = nullptr;
-  EXPECT_NE(gltang_parse(source.c_str(), GLTANG_PARSE_SCRIPT, &error, &tree) , GLTANG_OK) << "20,000 nested blocks are past the budget or the parser's own limit";
+  EXPECT_EQ(gltang_parse(source.c_str(), GLTANG_PARSE_SCRIPT, &error, &tree), GLTANG_ERR_LIMIT);
+  EXPECT_EQ(tree, nullptr);
+}
+
+TEST(TreeDepth, DeeplyNestedCallsAreRefusedToo) {
+  std::string source = "f";
+  for (int i = 0; i < 20000; ++i) {
+    source += "(f";
+  }
+  for (int i = 0; i < 20000; ++i) {
+    source += ")";
+  }
+  source += ";";
+  GLTANG_ParseError error = {0, 0, {0}};
+  GLTANG_Tree * tree = nullptr;
+  EXPECT_EQ(gltang_parse(source.c_str(), GLTANG_PARSE_SCRIPT, &error, &tree), GLTANG_ERR_LIMIT);
+  EXPECT_EQ(tree, nullptr);
 }
 
 TEST(TreeDepth, PrintingATallTreeIsLinearNotQuadratic) {
@@ -244,18 +267,39 @@ TEST(TreeDepth, PrintingATallTreeIsLinearNotQuadratic) {
   std::string source = chain(GLTANG_MAX_TREE_DEPTH - 1);
   ASSERT_EQ(gltang_parse(source.c_str(), GLTANG_PARSE_SCRIPT, &error, &tree), GLTANG_OK);
   // The printer writes to stdout; point stdout at a file to measure it.
-  FILE * file = tmpfile();
-  ASSERT_NE(file, nullptr);
-  fflush(stdout);
-  int saved = dup(1);
-  ASSERT_GE(saved, 0);
-  dup2(fileno(file), 1);
+  // Restores fd 1 on every path out of the scope.
+  struct Redirect {
+    FILE * file = tmpfile();
+    int saved = -1;
+    Redirect() {
+      if (file) {
+        fflush(stdout);
+        saved = dup(1);
+        if (saved >= 0) {
+          dup2(fileno(file), 1);
+        }
+      }
+    }
+    ~Redirect() {
+      restore();
+      if (file) {
+        fclose(file);
+      }
+    }
+    void restore() {
+      if (saved >= 0) {
+        fflush(stdout);
+        dup2(saved, 1);
+        close(saved);
+        saved = -1;
+      }
+    }
+  } redirect;
+  ASSERT_NE(redirect.file, nullptr);
+  ASSERT_GE(redirect.saved, 0);
   gltang_tree_print(tree);
-  fflush(stdout);
-  dup2(saved, 1);
-  close(saved);
-  long length = ftell(file);
-  fclose(file);
+  redirect.restore();
+  long length = ftell(redirect.file);
   gltang_tree_destroy(tree);
   EXPECT_GT(length, 10000);
   EXPECT_LT(length, 10000L * 1200) << "the indent is capped";

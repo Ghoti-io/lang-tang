@@ -35,8 +35,8 @@
  *
  * What this header does not have, on purpose: a library registry, `math`,
  * `random`, native function values, the error list, the halt option and
- * template calls. Those are story 10. `use` resolves through one function
- * (see ::GLTANG_Resolver) that story 10 replaces.
+ * template calls. They are not provided yet. `use` resolves through one function
+ * (see ::GLTANG_Resolver), the seam a registry would fill.
  *
  * Threads: an execution belongs to its context. Call it from the thread that
  * owns the context, and let it migrate with the context
@@ -80,8 +80,8 @@ typedef enum {
  * Called with the dotted path of a `use` (`a`, or `random.global.next_int`).
  * Returns true and fills `out` for a name the host provides, false for a name
  * it does not (the variable is then bound to `null`, as the reference says).
- * This is the one place a library is looked up; story 10 replaces its
- * implementation with the library registry and keeps the seam.
+ * This is the one place a library is looked up; there is no library
+ * registry behind it yet, so a host's resolver is the only source of names.
  */
 typedef bool (*GLTANG_Resolver)(
     void * user, const char * path, GLTANG_HostValue * out);

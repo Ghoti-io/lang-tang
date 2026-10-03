@@ -500,7 +500,7 @@ GLTANG_Value gltang_vm_op_adopt(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index);
 /** @brief Where the current instruction is, for a native's poll. */
 GRCORE_Location gltang_vm_location(const GLTANG_Execution * exec);
-/** @brief The one place a `use` is resolved; story 10 replaces its body. */
+/** @brief The one place a `use` is resolved; the library registry is not here yet. */
 GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock * path);
 /** @brief The interpreter. */
 GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context);
