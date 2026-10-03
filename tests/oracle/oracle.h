@@ -129,6 +129,37 @@ inline bool agree(const Verdict & lang_tang, const Verdict & ctang) {
   return lang_tang.kind != Kind::Accept || lang_tang.nodes == ctang.nodes;
 }
 
+/// Where two finished runs part company, in a few words: the first byte at
+/// which the outputs differ with a little of each around it, or the results.
+/// A verdict's own text is cut at 200 bytes and a long output can differ only
+/// after that.
+inline std::string difference(const Verdict & lang_tang, const Verdict & ctang) {
+  if (lang_tang.kind != Kind::Output || ctang.kind != Kind::Output) {
+    return "lang-tang " + lang_tang.str() + ", ctang " + ctang.str();
+  }
+  auto around = [](const std::string & s, size_t at) {
+    size_t from = at > 30 ? at - 30 : 0;
+    return Verdict::shown(s.substr(from, 70));
+  };
+  if (lang_tang.output != ctang.output) {
+    size_t k = 0;
+    while (k < lang_tang.output.size() && k < ctang.output.size() && lang_tang.output[k] == ctang.output[k]) {
+      ++k;
+    }
+    return "output differs at byte " + std::to_string(k) + " of " + std::to_string(lang_tang.output.size()) + " and " +
+        std::to_string(ctang.output.size()) + ": lang-tang `" + around(lang_tang.output, k) + "`, ctang `" + around(ctang.output, k) + "`";
+  }
+  if (lang_tang.result_kind != ctang.result_kind) {
+    return "result kind: lang-tang " + lang_tang.result_kind + ", ctang " + ctang.result_kind;
+  }
+  size_t k = 0;
+  while (k < lang_tang.result_text.size() && k < ctang.result_text.size() && lang_tang.result_text[k] == ctang.result_text[k]) {
+    ++k;
+  }
+  return "result " + lang_tang.result_kind + " differs at byte " + std::to_string(k) + ": lang-tang `" + around(lang_tang.result_text, k) +
+      "`, ctang `" + around(ctang.result_text, k) + "`";
+}
+
 // -------------------------------------------------------------------------
 // The child-process driver
 // -------------------------------------------------------------------------
@@ -503,7 +534,8 @@ inline Judgement judge(const std::vector<Entry> & entries, const Ledger & ledger
       j.recorded.push_back(e.file + " (" + row->id + "): lang-tang " + e.lang_tang.str() + ", ctang " + e.ctang.str());
     }
     else {
-      j.failures.push_back("unrecorded divergence: " + e.file + ": lang-tang " + e.lang_tang.str() + ", ctang " + e.ctang.str());
+      j.failures.push_back("unrecorded divergence: " + e.file + ": lang-tang " + e.lang_tang.str() + ", ctang " + e.ctang.str() +
+          "\n    first difference: " + difference(e.lang_tang, e.ctang));
     }
   }
   return j;

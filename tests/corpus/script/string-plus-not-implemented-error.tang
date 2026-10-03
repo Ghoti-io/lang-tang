@@ -1,0 +1,1 @@
+n = (1 / 0) as string; x = "a" + n; print("after"); x;

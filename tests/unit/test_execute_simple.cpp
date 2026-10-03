@@ -3919,3 +3919,23 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+TEST(Slice, AVariableHoldingNullIsAnOmittedPartAsInCtang) {
+  // ctang's parser pushes a null for each part the source leaves out, and its
+  // slice takes a null to mean "the default", so a null in a part is an omitted
+  // part whether it was written as nothing, as `null` or as a variable that
+  // holds it. lang-tang compiled the first two to an omitted part and gave the
+  // third `Invalid index`, which the differential fuzz run found (seed 8).
+  TT_EXPECT_OUTPUT(
+      "y = null; print([1, 2, 3][y:2]); print(\"|\"); print([1, 2, 3][1:y]); print(\"|\"); print([1, 2, 3][1:3:y]); print(\"|\");"
+      " print(\"abcd\"[y:y:y]); print(\"|\"); print([][y:-1]); print(\"|\"); print([1, 2, 3][null:2]);",
+      "[1, 2]|[2, 3]|[2, 3]|abcd|[]|[1, 2]");
+}
+
+TEST(Slice, APartThatIsNotAnIntegerOrNullIsStillInvalid) {
+  TT_EXPECT_ERROR("[1, 2, 3][\"a\":2];", "Error: Invalid index");
+  TT_EXPECT_ERROR("[1, 2, 3][1.5:3];", "Error: Invalid index");
+  TT_EXPECT_ERROR("x = true; \"abc\"[0:x];", "Error: Invalid index");
+  TT_EXPECT_ERROR("[1, 2, 3][::0];", "Error: Invalid index");
+  TT_EXPECT_ERROR("y = null; [1, 2, 3][::y][0:1:0];", "Error: Invalid index");
+}

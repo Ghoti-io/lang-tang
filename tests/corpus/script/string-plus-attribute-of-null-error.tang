@@ -1,0 +1,1 @@
+n = null.x; x = "a" + n; print("after"); x;

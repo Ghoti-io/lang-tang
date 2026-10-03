@@ -621,6 +621,15 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   if (!is_array && !is_string) {
     return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
+  // A part whose value is null is an omitted part, as in ctang, whose parser
+  // pushes a null for each part the source leaves out and whose slice takes a
+  // null to mean "the default". A variable that holds null is therefore the
+  // same as no part, and not an invalid index.
+  for (unsigned bit = 0; bit < 3; ++bit) {
+    if ((flags & (1u << bit)) && values[bit] == GLTANG_V_NULL) {
+      flags &= ~(1u << bit);
+    }
+  }
   int64_t numbers[3] = {0, 0, 1};
   for (unsigned bit = 0; bit < 3; ++bit) {
     if (flags & (1u << bit)) {

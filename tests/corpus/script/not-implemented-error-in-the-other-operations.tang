@@ -1,0 +1,1 @@
+n = (1 / 0) as string; print(1 + n); print(n + 1); print(n + "a"); print(n * 2); print(-n); print(n == 1); y = [n]; print(y.size); n;

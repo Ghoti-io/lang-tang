@@ -481,7 +481,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS)
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing
-.PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle cli-test fuzz-replay fuzz-parse
+.PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 .PHONY: fuzz fuzz-clean
@@ -987,9 +987,36 @@ $(ORACLE_TEST): $(OBJ_DIR)/oracle/test_oracle.o $(TEST_HELPER_OBJ) $(APP_DIR)/$(
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ_DIR)/oracle/test_oracle.o $(TEST_HELPER_OBJ) $(LDFLAGS) $(TEST_LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
 
-test-oracle: oracle-present $(ORACLE_RUNNER) $(ORACLE_TEST) ## Compare lang-tang with ctang over the corpus (fails, never skips, without ctang)
+# The differential fuzz run: programs from tests/fuzz/gen.h, each run on both
+# engines, compared as the corpus is. It needs the same runner, so it is built
+# here and run by test-oracle (a fixed batch) and fuzz-diff (a campaign).
+FUZZDIFF_TEST := $(APP_DIR)/testFuzzDiff$(EXE_EXTENSION)
+-include $(OBJ_DIR)/fuzz/test_fuzzdiff.d
+
+$(OBJ_DIR)/fuzz/test_fuzzdiff.o: tests/fuzz/test_fuzzdiff.cpp $(FLAGS_STAMP) | $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+
+$(FUZZDIFF_TEST): $(OBJ_DIR)/fuzz/test_fuzzdiff.o $(TEST_HELPER_OBJ) $(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJ_DIR)/fuzz/test_fuzzdiff.o $(TEST_HELPER_OBJ) $(LDFLAGS) $(TEST_LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
+
+test-oracle: oracle-present $(ORACLE_RUNNER) $(ORACLE_TEST) $(FUZZDIFF_TEST) ## Compare lang-tang with ctang over the corpus and a fixed batch of generated programs (fails, never skips, without ctang)
 	@printf '\n### Oracle differential ###\n\n'
 	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(ORACLE_TEST) --gtest_brief=1
+	@printf '\n### Differential fuzz run, fixed batch ###\n\n'
+	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1
+
+# A campaign: FUZZ_DIFF_COUNT programs from seed FUZZ_DIFF_SEED, both modes
+# alternating. A divergence prints its seed and the whole program.
+FUZZ_DIFF_SEED ?= 1
+fuzz-diff: oracle-present $(ORACLE_RUNNER) $(FUZZDIFF_TEST) ## Differential fuzz campaign: make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S
+	@if [ -z "$(FUZZ_DIFF_COUNT)" ]; then \
+		printf 'fuzz-diff: set FUZZ_DIFF_COUNT, for example: make fuzz-diff FUZZ_DIFF_COUNT=2000 FUZZ_DIFF_SEED=1\n' >&2; exit 1; \
+	fi
+	@printf '\n### Differential fuzz campaign: %s programs from seed %s ###\n\n' "$(FUZZ_DIFF_COUNT)" "$(FUZZ_DIFF_SEED)"
+	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) FUZZ_DIFF_COUNT=$(FUZZ_DIFF_COUNT) FUZZ_DIFF_SEED=$(FUZZ_DIFF_SEED) \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1 --gtest_filter=FuzzDiff.Campaign
 
 ####################################################################
 # Fuzzing
