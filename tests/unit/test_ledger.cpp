@@ -45,20 +45,20 @@ TEST(Ledger, TheRealLedgerIsValid) {
 TEST(Ledger, EverySectionThirteenItemThatIsNotFixedHasARow) {
   // Language reference section 13: items 9 ("not a defect, described
   // wrongly") and 13 ("still open") are the two whose status is not Fixed.
-  // Item 9 waits for the error list (story 10 and 11) and so is `open`. Item
-  // 13 (dates) was closed by the compiler story, which adds no syntax: its
-  // row is `fixed`, and the test requires that the row exists and has not
-  // been dropped.
+  // Item 9 was `open` until the host API (story 10): the error list is what
+  // closes it, so its row is `recorded` (D-001, resolved by 10). Item 13
+  // (dates) was closed by the compiler story, which adds no syntax: its row is
+  // `fixed`. The test requires that each row exists and has not been dropped.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   for (const char * ref : {"9", "13"}) {
+    std::string wanted = std::string(ref) == "9" ? "recorded" : "fixed";
     bool found = false;
     for (const auto & r : ledger.rows) {
-      std::string wanted = std::string(ref) == "9" ? "open" : "fixed";
       if (r.ref == ref && r.category == "ctang-defect" && r.status == wanted) {
         found = true;
       }
     }
-    EXPECT_TRUE(found) << "no " << (std::string(ref) == "9" ? "open" : "fixed") << " ctang-defect row for section 13 item " << ref;
+    EXPECT_TRUE(found) << "no " << wanted << " ctang-defect row for section 13 item " << ref;
   }
 }
 
@@ -78,9 +78,18 @@ TEST(Ledger, TheRecordedDeparturesAreSeeded) {
   EXPECT_GE(reporting, 1);
 }
 
-TEST(Ledger, IsNotClosedWhileARowIsOpen) {
+TEST(Ledger, IsClosedExactlyWhenNoRowIsOpen) {
+  // After the host API (story 10) section 13.9, the last open row, is a
+  // recorded departure: the error is listed. The execution differential
+  // (story 11) may open rows again, and then this reads false.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
-  EXPECT_FALSE(ledger.closed());
+  ASSERT_TRUE(ledger.valid());
+  size_t open = 0;
+  for (const auto & row : ledger.rows) {
+    open += row.status == "open";
+  }
+  EXPECT_EQ(ledger.closed(), open == 0);
+  EXPECT_EQ(open, 0u) << "D-001 was the last open row, and story 10 recorded it";
 }
 
 TEST(Ledger, ClosedMeansNoRowIsOpen) {

@@ -412,6 +412,17 @@ TEST(Scope, ANativeOperationInTheCalleeIsStoppedByTheScopeAndTheHalfBuiltValueIs
   EXPECT_EQ(site->error(0).e.how, GLTANG_ERROR_HOW_SCOPE_LIMIT);
 }
 
+TEST(Scope, APauseScopeThatRunsOutInsideANativeOperationEndsTheRunWithTheLimit) {
+  // A native cannot pause (AD-21): the verdict is the run's own unwind.
+  Site site("use nav; print(\"a\"); print(nav()); print(\"b\");",
+      {{"nav", "x = [0] * 4000000; print(\"unreachable\");", 500, GLTANG_SCOPE_PAUSE, tt::Mode::Script}});
+  EXPECT_FALSE(site->execute());
+  EXPECT_EQ(site->ran, GRCORE_ERR_LIMIT);
+  EXPECT_EQ(site->raw(), "a");
+  EXPECT_EQ(grcore_context_fuel_scope_depth(site->context), 0u);
+  EXPECT_EQ(grcore_stack_frame_count(grcore_context_stack(site->context)), 0u);
+}
+
 TEST(Scope, StringBuildingInTheCalleeIsStoppedByTheScopeAndTheCollectorKeepsThePage) {
   Site site("use nav; keep = [1, 2, 3]; s = nav(); print(keep.size); print(\"x\");",
       {{"nav", "s = \"x\"; while (true) { s = s + s; }", 800, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});

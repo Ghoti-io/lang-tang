@@ -87,6 +87,10 @@ expect_fail 'labels/planted-stable-in-free (stable where free is required)' \
   'astNode.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-in-free"
 expect_fail 'labels/planted-stable-engine (the execution API labelled stable)' \
   'execution.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-engine"
+expect_fail 'labels/planted-stable-library (the host library API labelled stable)' \
+  'library.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-library"
+expect_fail 'labels/planted-free-seeds (the seed sequence labelled free)' \
+  'seeds.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-seeds"
 expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"
