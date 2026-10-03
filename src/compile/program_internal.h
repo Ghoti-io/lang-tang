@@ -35,6 +35,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
 
 /** @brief What a pool constant is. */
@@ -86,6 +87,7 @@ struct GLTANG_Program {
   uint32_t constant_count;
   char ** global_names;         ///< Owned; the program-scope variables.
   uint32_t global_count;
+  GLTANG_Library * libraries;   ///< Retained; the second layer of a `use`. Set only while the program is unshared.
 };
 
 /** @brief Frees every part of a program and the program. */

@@ -33,10 +33,12 @@
  * so a pause saves nothing outside it: ::grcore_resume calls the same entry
  * again, on this thread or another, and the run carries on.
  *
- * What this header does not have, on purpose: a library registry, `math`,
- * `random`, native function values, the error list, the halt option and
- * template calls. They are not provided yet. `use` resolves through one function
- * (see ::GLTANG_Resolver), the seam a registry would fill.
+ * What the host gives the program is in library.h (`math`, `random`, values,
+ * native functions and templates, attached with ::gltang_execution_set_libraries
+ * or ::gltang_program_set_libraries), and where its random numbers come from is
+ * in seeds.h. The setters here are refused with ::GLTANG_ERR_INVALID once the
+ * execution has started, and from inside a host function (a native function or
+ * a factory): see library.h for that contract.
  *
  * Threads: an execution belongs to its context. Call it from the thread that
  * owns the context, and let it migrate with the context
@@ -49,7 +51,9 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <ghoti.io/lang-tang/core.h>
+#include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
+#include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/b/context.h>
 #include <ghoti.io/runtime-core/b/run.h>
@@ -73,18 +77,6 @@ typedef enum {
   GLTANG_EXECUTION_FINISHED,  ///< The program ran to its end.
   GLTANG_EXECUTION_UNWOUND    ///< A poll unwound it; the frames are gone.
 } GLTANG_ExecutionState;
-
-/**
- * @brief How `use` finds a value (language reference, section 9.1).
- *
- * Called with the dotted path of a `use` (`a`, or `random.global.next_int`).
- * Returns true and fills `out` for a name the host provides, false for a name
- * it does not (the variable is then bound to `null`, as the reference says).
- * This is the one place a library is looked up; there is no library
- * registry behind it yet, so a host's resolver is the only source of names.
- */
-typedef bool (*GLTANG_Resolver)(
-    void * user, const char * path, GLTANG_HostValue * out);
 
 /**
  * @brief Creates the execution of `program` in `context`.
@@ -137,15 +129,49 @@ GLTANG_API GRCORE_Step gltang_execution_entry(
 GLTANG_API void gltang_execution_destroy(GLTANG_Execution * execution);
 
 /**
- * @brief Sets how `use` resolves names.
+ * @brief Attaches the execution's libraries: the first layer of every `use`
+ *   (language reference, section 9.1), ahead of the program's and the built-ins.
+ *
+ * This is how a host injects a context: one compiled program, many executions,
+ * each with its own `user` library. The library is sealed and retained; a
+ * second call replaces the first.
  *
  * @param execution The execution.
- * @param resolver The resolver, or NULL for none (every name is `null`).
- * @param user Handed to it.
- * @return ::GLTANG_OK, or ::GLTANG_ERR_INVALID for NULL.
+ * @param library The library, or NULL for none.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL execution, one that has
+ *   started, or a call from inside a host function.
  */
-GLTANG_API GLTANG_Result gltang_execution_set_resolver(
-    GLTANG_Execution * execution, GLTANG_Resolver resolver, void * user);
+GLTANG_API GLTANG_Result gltang_execution_set_libraries(
+    GLTANG_Execution * execution, GLTANG_Library * library);
+
+/**
+ * @brief Sets the seed sequence the execution's generators are seeded from.
+ *
+ * `random.global` takes the next seed the first time it is read, and every read
+ * of `random.default` takes one. Without a sequence, the execution makes a
+ * private one from operating-system entropy when it first needs a seed. The
+ * sequence is retained.
+ *
+ * @param execution The execution.
+ * @param seeds The sequence, or NULL for none.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_seeds(
+    GLTANG_Execution * execution, GLTANG_SeedSequence * seeds);
+
+/**
+ * @brief Names the main program for the error list (the template an error
+ *   belongs to when no template call is above it).
+ *
+ * The default is the program's file name, and `main` for a program with no file
+ * name. Copied.
+ *
+ * @param execution The execution.
+ * @param name The name.
+ * @return As ::gltang_execution_set_libraries; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_name(
+    GLTANG_Execution * execution, const char * name);
 
 /**
  * @brief Where the execution is.

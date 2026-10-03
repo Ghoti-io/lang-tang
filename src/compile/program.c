@@ -33,6 +33,7 @@
 #include <ghoti.io/lang-tang/bytecode.h>
 #include <ghoti.io/lang-tang/program.h>
 #include "program_internal.h"
+#include "../library/library_internal.h"
 #include "../vm/string_layout.h"
 
 GLTANG_Program * gltang_program_retain(GLTANG_Program * program) {
@@ -69,6 +70,7 @@ void gltang_program_free(GLTANG_Program * program) {
     }
     gcu_free(program->global_names);
   }
+  gltang_library_release(program->libraries);
   gcu_free(program->file);
   gcu_free(program);
 }
@@ -82,6 +84,18 @@ void gltang_program_release(GLTANG_Program * program) {
   if (atomic_fetch_sub_explicit(&program->references, 1, memory_order_acq_rel) == 1) {
     gltang_program_free(program);
   }
+}
+
+GLTANG_Result gltang_program_set_libraries(GLTANG_Program * program, GLTANG_Library * library) {
+  // A program is shared by every context that runs it (AD-22), so it is
+  // written only while one reference exists: the caller's.
+  if (!program || atomic_load_explicit(&program->references, memory_order_acquire) != 1) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Library * attached = gltang_library_attach(library);
+  gltang_library_release(program->libraries);
+  program->libraries = attached;
+  return GLTANG_OK;
 }
 
 const char * gltang_program_file(const GLTANG_Program * program) {

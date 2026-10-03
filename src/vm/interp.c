@@ -46,12 +46,13 @@
 
 GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   GRCORE_Stack * stack = grcore_context_stack(context);
-  const GLTANG_Program * program = exec->program;
+  const GLTANG_Program * program;
   GRCORE_FrameRef frame;
   uint64_t * S;
   const GLTANG_Function * fn;
   const uint32_t * code;
   uint32_t fidx;
+  uint64_t fword;
   size_t pc;
   size_t sp;
 
@@ -59,26 +60,27 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
     if (exec->state != GLTANG_EXECUTION_NEW) {
       return exec->state == GLTANG_EXECUTION_UNWOUND ? GRCORE_STEP_UNWOUND : GRCORE_STEP_FINISHED;
     }
-    const GLTANG_Function * top = &program->functions[0];
+    const GLTANG_Function * top = &exec->program->functions[0];
     GRCORE_Result pushed = grcore_stack_push(stack, exec->engine, top->frame_slots, &frame);
     if (pushed != GRCORE_OK) {
       // The program cannot even start: no depth, or no memory for its frame.
       // It finishes with the error as its result.
       exec->current_function = 0;
       exec->current_offset = 0;
-      exec->roots[GLTANG_ROOT_RESULT] = pushed == GRCORE_ERR_LIMIT && grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)
+      exec->act->result = pushed == GRCORE_ERR_LIMIT && grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)
         ? gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT)
         : exec->roots[GLTANG_ROOT_OOM];
-      if (exec->roots[GLTANG_ROOT_RESULT] == GLTANG_V_UNWIND) {
-        exec->roots[GLTANG_ROOT_RESULT] = GLTANG_V_NULL;
+      if (exec->act->result == GLTANG_V_UNWIND) {
+        exec->act->result = GLTANG_V_NULL;
       }
       exec->state = GLTANG_EXECUTION_FINISHED;
       return GRCORE_STEP_FINISHED;
     }
     S = grcore_stack_slots(stack, frame);
-    S[GLTANG_F_FUNCTION] = 0;
+    S[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(0, 0);
     S[GLTANG_F_PC] = 0;
     S[GLTANG_F_SP] = H + top->local_count;
+    S[GLTANG_F_FLAGS] = exec->act->depth;
   }
 
   exec->state = GLTANG_EXECUTION_RUNNING;
@@ -88,7 +90,9 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 #define LOAD_FRAME() \
   do { \
     RELOAD(); \
-    fidx = (uint32_t)S[GLTANG_F_FUNCTION]; \
+    fword = S[GLTANG_F_FUNCTION]; \
+    fidx = GLTANG_FN_INDEX(fword); \
+    program = exec->programs[GLTANG_FN_PROGRAM(fword)].program; \
     fn = &program->functions[fidx]; \
     code = fn->code; \
     pc = (size_t)S[GLTANG_F_PC]; \
@@ -121,7 +125,8 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
       case GLTANG_OP_POLL: {
         gltang_vm_flush_fuel(exec);
         SAVE();
-        GRCORE_Verdict verdict = grcore_stack_poll(context, fidx, pc - 1u);
+        SYNC();
+        GRCORE_Verdict verdict = grcore_stack_poll(context, fword, pc - 1u);
         RELOAD();
         if (verdict == GRCORE_VERDICT_PAUSE) {
           exec->state = GLTANG_EXECUTION_PAUSED;
@@ -184,11 +189,11 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
         break;
 
       case GLTANG_OP_SET_RESULT:
-        exec->roots[GLTANG_ROOT_RESULT] = S[sp - 1u];
+        exec->act->result = S[sp - 1u];
         S[--sp] = 0;
         break;
       case GLTANG_OP_CLEAR_RESULT:
-        exec->roots[GLTANG_ROOT_RESULT] = GLTANG_V_NULL;
+        exec->act->result = GLTANG_V_NULL;
         break;
 
       case GLTANG_OP_USE: {
@@ -438,7 +443,18 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
         GLTANG_Value callee = S[sp - 1u - argc];
         GLTANG_Value r = GLTANG_V_NULL;
         SYNC();
-        if (!gltang_v_is_function(callee) || gltang_v_function_index(callee) >= program->function_count) {
+        if (!gltang_v_is_function(callee)) {
+          if (gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
+            // A host function, or one of the engine's own: synchronous, with
+            // the arguments where they are on the operand stack.
+            r = gltang_vm_call_native(exec, callee, argc, &S[sp - argc]);
+          }
+          else {
+            r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+          }
+          goto call_result;
+        }
+        if (gltang_v_function_index(callee) >= program->function_count) {
           r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
           goto call_result;
         }
@@ -456,7 +472,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
           goto call_result;
         }
         SAVE();
-        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fidx, pc - 1u});
+        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
         GRCORE_FrameRef callee_frame;
         GRCORE_Result pushed = grcore_stack_push(stack, exec->engine, cf->frame_slots, &callee_frame);
         if (pushed != GRCORE_OK) {
@@ -479,12 +495,14 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
           caller[sp - 1u - argc] = 0;
           sp -= argc + 1u;
           caller[GLTANG_F_SP] = sp;
-          callee_slots[GLTANG_F_FUNCTION] = target;
+          callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(GLTANG_FN_PROGRAM(fword), target);
           callee_slots[GLTANG_F_PC] = 0;
           callee_slots[GLTANG_F_SP] = H + cf->local_count;
+          callee_slots[GLTANG_F_FLAGS] = exec->act->depth;
           frame = callee_frame;
           S = callee_slots;
           fidx = (uint32_t)target;
+          fword = callee_slots[GLTANG_F_FUNCTION];
           fn = cf;
           code = cf->code;
           pc = 0;
@@ -550,7 +568,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
             goto unwound;
           }
           RELOAD();
-          exec->roots[GLTANG_ROOT_RESULT] = e;
+          exec->act->result = e;
           S[sp - 1u] = GLTANG_V_FALSE;
         }
         break;
@@ -580,7 +598,7 @@ unwound:
   grcore_unwind_all(stack, NULL);
   // The program did not finish, so what an earlier statement left as its
   // result is not an answer.
-  exec->roots[GLTANG_ROOT_RESULT] = GLTANG_V_NULL;
+  exec->act->result = GLTANG_V_NULL;
   exec->state = GLTANG_EXECUTION_UNWOUND;
   return GRCORE_STEP_UNWOUND;
 

@@ -758,7 +758,9 @@ TEST(Execution, TheAccessorsAnswerForNullAndForAnExecutionThatNeverRan) {
   EXPECT_STREQ(gltang_execution_output_raw(nullptr, &length), "");
   EXPECT_EQ(length, 0u);
   gltang_buffer_free(nullptr);
-  EXPECT_EQ(gltang_execution_set_resolver(nullptr, nullptr, nullptr), GLTANG_ERR_INVALID);
+  EXPECT_EQ(gltang_execution_set_libraries(nullptr, nullptr), GLTANG_ERR_INVALID);
+  EXPECT_EQ(gltang_execution_set_seeds(nullptr, nullptr), GLTANG_ERR_INVALID);
+  EXPECT_EQ(gltang_execution_set_name(nullptr, "x"), GLTANG_ERR_INVALID);
 
   Compiled compiled("1;");
   Context context(compiled.program);
@@ -916,33 +918,15 @@ TEST(Output, AnEmptyProgramHasAnEmptyOutput) {
 }
 
 // ---------------------------------------------------------------------------
-// The resolver seam
+// `use`: the values a host provides
 // ---------------------------------------------------------------------------
 
-TEST(Resolver, ADottedPathIsGivenWhole) {
-  Compiled compiled("use random.global.next_int as n; n;");
-  Context context(compiled.program);
-  std::vector<std::string> seen;
-  gltang_execution_set_resolver(context.execution,
-      [](void * user, const char * path, GLTANG_HostValue * out) -> bool {
-        static_cast<std::vector<std::string> *>(user)->push_back(path);
-        out->kind = GLTANG_HOST_INTEGER;
-        out->integer = 41;
-        return true;
-      },
-      &seen);
-  ASSERT_TRUE(context.execute());
-  ASSERT_EQ(seen.size(), 1u);
-  EXPECT_EQ(seen[0], "random.global.next_int");
-  EXPECT_EQ(context.integer(), 41);
-}
-
-TEST(Resolver, ANameNobodyProvidesIsNullAndNotAnError) {
+TEST(Use, ANameNobodyProvidesIsNullAndNotAnError) {
   tt::Run run("use nothing; use also.nothing as x; [nothing, x];");
   EXPECT_EQ(run.context.describe(), "[null, null]");
 }
 
-TEST(Resolver, TheVariableBoundByUseIsOrdinary) {
+TEST(Use, TheVariableBoundByUseIsOrdinary) {
   Compiled compiled("use a; a = 42; a;");
   Context context(compiled.program);
   context.add_library("a", tt::Host::integer(3));
@@ -950,7 +934,7 @@ TEST(Resolver, TheVariableBoundByUseIsOrdinary) {
   EXPECT_EQ(context.integer(), 42);
 }
 
-TEST(Resolver, AStringFromTheHostKeepsItsEncodingAndAnInvalidOneIsNull) {
+TEST(Use, AStringFromTheHostKeepsItsEncodingAndAnInvalidOneIsNull) {
   Compiled compiled("use s; use bad; print(s); [s, bad];");
   Context context(compiled.program);
   context.add_library("s", tt::Host::string("a<b", GLTANG_UNICODE_STRING_TYPE_HTML));

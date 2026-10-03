@@ -53,7 +53,10 @@
 #include <stdint.h>
 #include <ghoti.io/lang-tang/ast/astNodeCast.h>
 #include <ghoti.io/lang-tang/bytecode.h>
+#include <ghoti.io/cutil/random.h>
 #include <ghoti.io/lang-tang/execution.h>
+#include <ghoti.io/lang-tang/library.h>
+#include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/a/engine.h>
 #include <ghoti.io/runtime-core/a/frame.h>
@@ -69,6 +72,7 @@
 #include <ghoti.io/runtime-heap/store.h>
 #include <ghoti.io/runtime-heap/type.h>
 #include "../compile/program_internal.h"
+#include "../library/library_internal.h"
 #include "string_layout.h"
 
 /** @brief One output segment: bytes from `offset` carry `type`. */
@@ -150,7 +154,11 @@ typedef enum {
   GLTANG_OBJ_ARRAY_STORE,   ///< An array's element storage.
   GLTANG_OBJ_MAP,           ///< The header of a map.
   GLTANG_OBJ_MAP_STORE,     ///< A map's entries and index.
-  GLTANG_OBJ_ERROR          ///< An error value.
+  GLTANG_OBJ_ERROR,         ///< An error value.
+  GLTANG_OBJ_LIBRARY,       ///< A library: a pointer to a sealed GLTANG_Library.
+  GLTANG_OBJ_NATIVE,        ///< A native function, perhaps bound to a value.
+  GLTANG_OBJ_TEMPLATE,      ///< A template: a pointer to its library member.
+  GLTANG_OBJ_RNG            ///< A random number generator, its state inline.
 } GLTANG_ObjectKind;
 
 typedef struct GLTANG_IntegerObject {
@@ -202,12 +210,50 @@ typedef struct GLTANG_MapObject {
   } store;
 } GLTANG_MapObject;
 
+/** @brief Set in GLTANG_ErrorObject::flags once the error is in the error list. */
+#define GLTANG_ERROR_FLAG_LOGGED 1u
+
 typedef struct GLTANG_ErrorObject {
   uint32_t kind;
   uint32_t error_kind;
   uint32_t function;
   uint32_t offset;
+  uint32_t program;  ///< Index into the execution's programs: where `function` is.
+  uint32_t flags;
 } GLTANG_ErrorObject;
+
+/** @brief A library as a value. The library is kept alive by the execution. */
+typedef struct GLTANG_LibraryObject {
+  uint32_t kind;
+  uint32_t reserved;
+  const GLTANG_Library * library;
+} GLTANG_LibraryObject;
+
+/**
+ * @brief A native function as a value: a host function (`member`), or one of the
+ *   engine's own (`builtin`), possibly bound to a value (a generator's method).
+ */
+typedef struct GLTANG_NativeObject {
+  uint32_t kind;
+  uint32_t builtin;                     ///< GLTANG_BuiltinId, or 0 for a host function.
+  const GLTANG_LibraryMember * member;  ///< The host function's member.
+  GLTANG_Value bound;                   ///< Traced; the receiver of a method.
+} GLTANG_NativeObject;
+
+/** @brief A template as a value. */
+typedef struct GLTANG_TemplateObject {
+  uint32_t kind;
+  uint32_t reserved;
+  const GLTANG_LibraryMember * member;
+} GLTANG_TemplateObject;
+
+/** @brief A generator: std::mt19937_64's state, inline. */
+typedef struct GLTANG_RngObject {
+  uint32_t kind;
+  uint32_t is_global;
+  uint64_t seed;
+  GCU_Random_MT64_State state;
+} GLTANG_RngObject;
 
 static inline uint32_t gltang_object_kind(GLTANG_Value v) {
   return *(const uint32_t *)(const void *)(uintptr_t)v;
@@ -225,6 +271,25 @@ static inline uint32_t * gltang_map_index(const GLTANG_MapStore * store) {
   return (uint32_t *)(void *)((char *)store + sizeof(GLTANG_MapStore) + (size_t)store->capacity * 2u * sizeof(GLTANG_Value));
 }
 
+/** @brief What a host function is given; see library.h. */
+struct GLTANG_NativeCall {
+  GLTANG_Execution * exec;
+  const GLTANG_Value * args;    ///< Into the operand stack; valid for the call (a host function cannot reach a GC point).
+  size_t argc;
+  enum {
+    GLTANG_CALL_NONE = 0, GLTANG_CALL_NULL, GLTANG_CALL_BOOL, GLTANG_CALL_INTEGER,
+    GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR
+  } set;
+  bool boolean;
+  int64_t integer;
+  double number;
+  char * text;                  ///< STRING: a copy, cutil's allocator.
+  size_t length;
+  GLTANG_String_Type encoding;
+  GLTANG_ErrorKind error;
+  bool failed_to_copy;
+};
+
 /** @brief The deepest a container nests for the recursive operations. */
 #define GLTANG_MAX_VALUE_DEPTH 2048
 
@@ -234,43 +299,87 @@ static inline uint32_t * gltang_map_index(const GLTANG_MapStore * store) {
 
 
 /** @brief Where the roots live in GLTANG_Execution::roots. */
-#define GLTANG_ROOT_RESULT 0u
-#define GLTANG_ROOT_OOM 1u
+#define GLTANG_ROOT_OOM 0u
+#define GLTANG_ROOT_RANDOM 1u
 #define GLTANG_ROOT_FIXED 2u
+
+/** @brief An output: bytes, and the typed segments that cover them. */
+typedef struct GLTANG_OutBuf {
+  char * bytes;
+  size_t length;
+  size_t capacity;
+  GLTANG_OutputSegment * segments;
+  size_t segment_count;
+  size_t segment_capacity;
+} GLTANG_OutBuf;
+
+/** @brief One program an execution has run frames of: the main one, or a template's. */
+typedef struct GLTANG_ProgramEntry {
+  GLTANG_Program * program;     ///< Retained.
+  GLTANG_Value * constants;     ///< The program's constants made into heap values; roots.
+} GLTANG_ProgramEntry;
+
+/**
+ * @brief One running program: the main one, or a template call.
+ *
+ * Everything per call that is not on the guest stack lives here, in the
+ * execution, so a paused context migrates with it (AD-20) and the collector
+ * finds the values in it (a root source).
+ */
+typedef struct GLTANG_Activation {
+  struct GLTANG_Activation * parent;
+  size_t depth;                 ///< 0 for the main program; a frame's flags word holds its activation's.
+  uint32_t program_index;       ///< Into GLTANG_Execution::programs.
+  GLTANG_Value result;          ///< The value of the last top-level statement; a root.
+  bool result_lost;             ///< `result` is an error no variable holds: listed if replaced.
+  GLTANG_Value * globals;       ///< The program-scope variables; roots.
+  bool owns_globals;
+  GLTANG_OutBuf out;
+  uint32_t call_function;       ///< Where in the parent's program this call was made.
+  uint32_t call_offset;
+  const char * name;            ///< The template's name.
+  uint64_t scope_id;            ///< The call's budget scope; 0 for the main program.
+  GLTANG_ScopePolicy policy;
+  size_t temp_base;             ///< GLTANG_Execution::temp_count when the call began.
+} GLTANG_Activation;
 
 struct GLTANG_Execution {
   GRCORE_Context * context;
   GRHEAP_Heap * heap;
   const GRCORE_Allocator * allocator;
   GRCORE_EngineId engine;
-  GLTANG_Program * program;
+  GLTANG_Program * program;     ///< The main program.
   GLTANG_ExecutionState state;
   bool destroyed;
   bool unwinding;               ///< A runtime poll ordered the run to stop.
+  bool in_host;                 ///< Inside a native function or a factory.
 
-  // Roots, reported to the collector as precise slots: the result, the
-  // preallocated Out of memory error, the program-scope variables, and the
-  // constants that have been made into heap values.
+  // Roots, reported to the collector as precise slots: the Out of memory
+  // error, the execution's random generator, the main program's variables,
+  // and the constants that have been made into heap values.
   GLTANG_Value * roots;
   size_t root_count;
-  GLTANG_Value * globals;       ///< Into roots.
-  GLTANG_Value * constants;     ///< Into roots.
+
+  // The programs frames belong to, and the running programs.
+  GLTANG_ProgramEntry * programs;
+  size_t program_count;
+  size_t program_capacity;
+  GLTANG_Activation main_act;
+  GLTANG_Activation * act;      ///< The innermost running program.
+  GLTANG_Value * globals;       ///< act's.
+  GLTANG_Value * constants;     ///< act's program's.
+  GLTANG_OutBuf * out;          ///< act's.
 
   // Temporary roots for an operation that builds more than one object.
   GLTANG_Value * temps;
   size_t temp_count;
   size_t temp_capacity;
 
-  // The output, as typed segments.
-  char * output;
-  size_t output_length;
-  size_t output_capacity;
-  GLTANG_OutputSegment * segments;
-  size_t segment_count;
-  size_t segment_capacity;
-
-  GLTANG_Resolver resolver;
-  void * resolver_user;
+  // What the host attached.
+  GLTANG_Library * libraries;
+  GLTANG_SeedSequence * seeds;
+  const char * name;            ///< The main template's name, for the error list; NULL for the default.
+  char * name_storage;          ///< Owns `name`.
 
   // Where the instruction being executed is, for errors and for natives.
   uint32_t current_function;
@@ -278,6 +387,25 @@ struct GLTANG_Execution {
   uint64_t pending_fuel;        ///< Charged to the context at the next poll.
   uint64_t frames_unwound;
 };
+
+/**
+ * @brief The function word of a frame header and of a poll identity: the
+ *   function index in the low 32 bits and the program's index (into
+ *   GLTANG_Execution::programs; 0 is the main program) in the high 32.
+ */
+#define GLTANG_FN_WORD(program, function) (((uint64_t)(program) << 32) | (uint64_t)(uint32_t)(function))
+#define GLTANG_FN_PROGRAM(word) ((uint32_t)((word) >> 32))
+#define GLTANG_FN_INDEX(word) ((uint32_t)(word))
+
+/** @brief The program at an index, or NULL. */
+static inline const GLTANG_Program * gltang_exec_program(const GLTANG_Execution * exec, uint32_t index) {
+  return index < exec->program_count ? exec->programs[index].program : NULL;
+}
+
+/** @brief The program the innermost activation is running. */
+static inline const GLTANG_Program * gltang_exec_current_program(const GLTANG_Execution * exec) {
+  return exec->programs[exec->act->program_index].program;
+}
 
 /** @brief The cost of each opcode; see bytecode.c. */
 extern const uint32_t gltang_opcode_cost_table[GLTANG_OP_COUNT];
@@ -334,6 +462,10 @@ extern const GRHEAP_Type gltang_type_array_store;
 extern const GRHEAP_Type gltang_type_map;
 extern const GRHEAP_Type gltang_type_map_store;
 extern const GRHEAP_Type gltang_type_error;
+extern const GRHEAP_Type gltang_type_library;
+extern const GRHEAP_Type gltang_type_native;
+extern const GRHEAP_Type gltang_type_template;
+extern const GRHEAP_Type gltang_type_rng;
 
 GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v);
 bool gltang_vm_truthy(GLTANG_Value v);
@@ -487,6 +619,8 @@ GLTANG_Value gltang_vm_op_neg(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type);
 GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index);
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name);
+/** @brief The attribute rule on a name given as bytes. */
+GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length);
 GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container, unsigned flags, const GLTANG_Value * parts);
 GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index, GLTANG_Value v, bool adopt);
 GLTANG_Value gltang_vm_op_set_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name, GLTANG_Value v, bool adopt);
@@ -500,8 +634,29 @@ GLTANG_Value gltang_vm_op_adopt(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index);
 /** @brief Where the current instruction is, for a native's poll. */
 GRCORE_Location gltang_vm_location(const GLTANG_Execution * exec);
-/** @brief The one place a `use` is resolved; the library registry is not here yet. */
+// ---------------------------------------------------------------------------
+// Libraries, native functions, generators (libvalue.c)
+// ---------------------------------------------------------------------------
+
+/** @brief Resolves the dotted path of a `use`: the execution's libraries, the program's, the built-ins. */
 GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock * path);
+/** @brief The value of a library member (a factory is called here). */
+GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member);
+/** @brief `library.name`: the member, or `Not implemented`. */
+GLTANG_Value gltang_vm_library_attr(GLTANG_Execution * exec, GLTANG_Value library, const char * name, size_t length);
+/** @brief `rng.name`: `next_int`, `next_float`, `next_bool` draw; `set_seed` is a method. */
+GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length);
+/** @brief Calls a native function value (a host's, or one of the engine's). */
+GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args);
+/** @brief The member of a template value. */
+static inline const GLTANG_LibraryMember * gltang_vm_template_member(GLTANG_Value v) {
+  return ((const GLTANG_TemplateObject *)gltang_object(v))->member;
+}
+
+/** @brief Makes `act` the innermost activation: points the execution's variables, constants and output at it. */
+void gltang_vm_set_activation(GLTANG_Execution * exec, GLTANG_Activation * act);
+/** @brief Frees an output's buffers. */
+void gltang_vm_outbuf_free(GLTANG_Execution * exec, GLTANG_OutBuf * out);
 /** @brief The interpreter. */
 GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context);
 

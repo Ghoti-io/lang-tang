@@ -160,31 +160,32 @@ static GLTANG_Status sink_pace(GLTANG_Sink * sink, size_t bytes) {
   return GLTANG_ST_OK;
 }
 
-static bool output_add_segment(GLTANG_Execution * exec, GLTANG_String_Type type) {
-  if (exec->segment_count && exec->segments[exec->segment_count - 1u].type == type) {
+static bool output_add_segment(GLTANG_Execution * exec, GLTANG_OutBuf * out, GLTANG_String_Type type) {
+  if (out->segment_count && out->segments[out->segment_count - 1u].type == type) {
     return true;
   }
-  void * segments = exec->segments;
-  if (!grow(exec, &segments, &exec->segment_capacity, exec->segment_count + 1u, sizeof(GLTANG_OutputSegment))) {
+  void * segments = out->segments;
+  if (!grow(exec, &segments, &out->segment_capacity, out->segment_count + 1u, sizeof(GLTANG_OutputSegment))) {
     return false;
   }
-  exec->segments = segments;
-  exec->segments[exec->segment_count++] = (GLTANG_OutputSegment){.offset = exec->output_length, .type = type};
+  out->segments = segments;
+  out->segments[out->segment_count++] = (GLTANG_OutputSegment){.offset = out->length, .type = type};
   return true;
 }
 
 /** Appends bytes to the execution's output, with the tag they carry. */
 static GLTANG_Status output_append(GLTANG_Sink * sink, const char * text, size_t length, GLTANG_String_Type type) {
   GLTANG_Execution * exec = sink->exec;
+  GLTANG_OutBuf * out = exec->out;
   if (!length) {
     return GLTANG_ST_OK;
   }
-  void * output = exec->output;
-  if (!grow(exec, &output, &exec->output_capacity, exec->output_length + length + 1u, 1)) {
+  void * output = out->bytes;
+  if (!grow(exec, &output, &out->capacity, out->length + length + 1u, 1)) {
     return GLTANG_ST_OOM;
   }
-  exec->output = output;
-  if (!output_add_segment(exec, type)) {
+  out->bytes = output;
+  if (!output_add_segment(exec, out, type)) {
     return GLTANG_ST_OOM;
   }
   for (size_t done = 0; done < length;) {
@@ -192,9 +193,9 @@ static GLTANG_Status output_append(GLTANG_Sink * sink, const char * text, size_t
     if (n > GLTANG_POLL_BYTES) {
       n = GLTANG_POLL_BYTES;
     }
-    memcpy(exec->output + exec->output_length, text + done, n);
-    exec->output_length += n;
-    exec->output[exec->output_length] = '\0';
+    memcpy(out->bytes + out->length, text + done, n);
+    out->length += n;
+    out->bytes[out->length] = '\0';
     done += n;
     GLTANG_Status st = sink_pace(sink, n);
     if (st != GLTANG_ST_OK) {
@@ -428,15 +429,32 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
       if (mode == GLTANG_RENDER_PRINT) {
         return GLTANG_ST_OK;
       }
-      uint64_t index = gltang_v_function_index(v);
-      unsigned parameters = 0;
-      if (sink->exec && sink->exec->program && index < sink->exec->program->function_count) {
-        parameters = sink->exec->program->functions[index].parameter_count;
-      }
       char name[48];
-      snprintf(name, sizeof(name), "Function(%u)", parameters);
+      if (gltang_v_is_function(v)) {
+        uint64_t index = gltang_v_function_index(v);
+        unsigned parameters = 0;
+        const GLTANG_Program * program = sink->exec && sink->exec->act ? gltang_exec_current_program(sink->exec) : NULL;
+        if (program && index < program->function_count) {
+          parameters = program->functions[index].parameter_count;
+        }
+        snprintf(name, sizeof(name), "Function(%u)", parameters);
+      }
+      else {
+        // A template takes no arguments; a host function's count is its own.
+        snprintf(name, sizeof(name), gltang_object_kind(v) == GLTANG_OBJ_TEMPLATE ? "Function(0)" : "Function(native)");
+      }
       return text(sink, name);
     }
+    case GLTANG_KIND_LIBRARY: {
+      if (mode == GLTANG_RENDER_PRINT) {
+        return GLTANG_ST_OK;
+      }
+      const char * library_name = gltang_library_name(((const GLTANG_LibraryObject *)gltang_object(v))->library);
+      GLTANG_Status st = text(sink, "Library: ");
+      return st == GLTANG_ST_OK && library_name ? text(sink, library_name) : st;
+    }
+    case GLTANG_KIND_RNG:
+      return mode == GLTANG_RENDER_PRINT ? GLTANG_ST_OK : text(sink, "RNG");
     case GLTANG_KIND_ERROR: {
       GLTANG_ErrorKind kind = gltang_vm_error_kind(v);
       if (gltang_error_kind_is_marker(kind)) {

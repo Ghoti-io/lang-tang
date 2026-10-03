@@ -13,14 +13,18 @@
 # of a header nor a quiet edit can move one across the line:
 #
 #   stable   the C embedding API: core.h, parse.h, libver.h, macros.h,
-#            namespace.h, allocator.h, and the umbrella lang-tang.h.
+#            namespace.h, allocator.h, seeds.h, and the umbrella lang-tang.h.
+#            seeds.h is the one host header that includes only stable ones.
 #   free     the syntax tree's node classes (everything under ast/) and the
 #            two headers they are built on, location.h and unicodeString.h,
 #            and tangScanner.h, which the generated scanner and parser share.
 #            The compiler reads these, so their shape may change.
-#   free     also the engine's: bytecode.h, program.h, compile.h, value.h and
-#            execution.h. They are new and unproven; a header joins the stable
-#            set by a decision to freeze it, taken here.
+#   free     also the engine's: bytecode.h, program.h, compile.h, value.h,
+#            execution.h and library.h (a library holds templates, which are
+#            programs, and native functions that name error kinds; both are
+#            free, and a stable header may include only stable ones). They
+#            are new and unproven; a header joins the stable set by a decision
+#            to freeze it, taken here.
 #
 # A header in neither list fails: a new header is a decision about its
 # stability, and it is taken by adding it to a list on purpose.
@@ -37,8 +41,8 @@ set -eu
 ROOT="${1:?usage: check-labels.sh <root>}"
 BASE="$ROOT/include/ghoti.io/lang-tang"
 
-STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h lang-tang.h'
-FREE='location.h unicodeString.h tangScanner.h bytecode.h program.h compile.h value.h execution.h'
+STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h seeds.h lang-tang.h'
+FREE='location.h unicodeString.h tangScanner.h bytecode.h program.h compile.h value.h execution.h library.h'
 
 if [ ! -d "$BASE" ]; then
   printf 'check-labels: %s does not exist; this gate is measuring nothing\n' \

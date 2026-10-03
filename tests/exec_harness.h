@@ -28,6 +28,8 @@
 #include <ghoti.io/lang-tang/compile.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/lang-tang.h>
+#include <ghoti.io/lang-tang/library.h>
+#include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 
@@ -245,7 +247,8 @@ class Context {
   GRCORE_Outcome outcome = GRCORE_OUTCOME_FINISHED;
   bool has_run = false;
   bool arena = false;  ///< Arena mode never collects, so torture has nothing to count.
-  std::map<std::string, Host> libraries;
+  GLTANG_Library * root = nullptr;   ///< The execution's library, attached when the run starts.
+  bool attached = false;
 
   explicit Context(GLTANG_Program * program, const Config & config = Config()) {
     tracker.fail_at = config.fail_at;
@@ -286,7 +289,6 @@ class Context {
       if (created != GLTANG_OK) {
         break;
       }
-      gltang_execution_set_resolver(execution, &Context::resolve, this);
       if (moving_stack_requested()) {
         grcore_stack_set_always_move(grcore_context_stack(context), true);
       }
@@ -304,6 +306,8 @@ class Context {
 
   /// Destroys the context and the group, and checks that nothing is left.
   void destroy() {
+    gltang_library_release(root);
+    root = nullptr;
     if (context && heap) {
       GRHEAP_Stats stats;
       if (grheap_stats(heap, &stats) == GRHEAP_OK) {
@@ -330,14 +334,43 @@ class Context {
 
   bool ok() const { return created == GLTANG_OK && execution != nullptr; }
 
-  /// A library `use` finds by name.
+  /// The execution's unnamed library, made on first use and attached by the
+  /// first run. A test adds natives, templates and sub-libraries to it.
+  GLTANG_Library * library() {
+    if (!root && gltang_library_create(nullptr, &root) != GLTANG_OK) {
+      root = nullptr;
+    }
+    return root;
+  }
+
+  /// A value `use` finds by name.
   bool add_library(const std::string & name, const Host & value) {
-    libraries[name] = value;
-    return true;
+    GLTANG_Library * lib = library();
+    if (!lib) {
+      return false;
+    }
+    GLTANG_Result r = GLTANG_ERR_INVALID;
+    switch (value.value.kind) {
+      case GLTANG_HOST_NULL: r = gltang_library_add_null(lib, name.c_str()); break;
+      case GLTANG_HOST_BOOL: r = gltang_library_add_bool(lib, name.c_str(), value.value.boolean); break;
+      case GLTANG_HOST_INTEGER: r = gltang_library_add_integer(lib, name.c_str(), value.value.integer); break;
+      case GLTANG_HOST_FLOAT: r = gltang_library_add_float(lib, name.c_str(), value.value.number); break;
+      case GLTANG_HOST_STRING: r = gltang_library_add_string(lib, name.c_str(), value.text.data(), value.text.size(), value.value.encoding); break;
+    }
+    return r == GLTANG_OK;
+  }
+
+  /// Attaches the library, once, before the run begins.
+  void attach() {
+    if (!attached && root && execution) {
+      EXPECT_EQ(gltang_execution_set_libraries(execution, root), GLTANG_OK);
+      attached = true;
+    }
   }
 
   /// Runs to the end. Returns true if the program finished.
   bool execute() {
+    attach();
     has_run = true;
     ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
     return ran == GRCORE_OK && outcome == GRCORE_OUTCOME_FINISHED;
@@ -428,18 +461,6 @@ class Context {
     return s;
   }
 
- private:
-  static bool resolve(void * user, const char * path, GLTANG_HostValue * out) {
-    Context * self = static_cast<Context *>(user);
-    auto found = self->libraries.find(path);
-    if (found == self->libraries.end()) {
-      return false;
-    }
-    *out = found->second.value;
-    out->text = found->second.text.c_str();
-    out->length = found->second.text.size();
-    return true;
-  }
 };
 
 /// A source compiled and run to its end, in one object.

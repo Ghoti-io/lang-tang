@@ -60,8 +60,10 @@ typedef enum {
   GLTANG_KIND_STRING,   ///< A grapheme string with segment-tagged encodings.
   GLTANG_KIND_ARRAY,    ///< A mutable array.
   GLTANG_KIND_MAP,      ///< A mutable map from strings to values.
-  GLTANG_KIND_FUNCTION, ///< A function declared by the program.
-  GLTANG_KIND_ERROR     ///< An error value (language reference, section 10.2).
+  GLTANG_KIND_FUNCTION, ///< A function declared by the program, a native function, or a template.
+  GLTANG_KIND_ERROR,    ///< An error value (language reference, section 10.2).
+  GLTANG_KIND_LIBRARY,  ///< A library: a named table of members (language reference, section 9).
+  GLTANG_KIND_RNG       ///< A random number generator (`random.seeded(n)`).
 } GLTANG_ValueKind;
 
 /**
@@ -84,6 +86,9 @@ typedef enum {
   GLTANG_ERROR_INTEGER_TOO_LARGE,      ///< A marker: prints as `[INTEGER TOO LARGE]`.
   GLTANG_ERROR_INTEGER_TOO_SMALL,      ///< A marker: prints as `[INTEGER TOO SMALL]`.
   GLTANG_ERROR_NOT_A_NUMBER,           ///< A marker: prints as `[NOT A NUMBER]`.
+  GLTANG_ERROR_LIMIT_EXCEEDED,         ///< The value of a template call that its budget scope stopped.
+  GLTANG_ERROR_GLOBAL_SEED,            ///< `random.global.set_seed(n)`: the global generator's seed is not the guest's to change.
+  GLTANG_ERROR_HOST_FAILED,            ///< A native function reported failure.
   GLTANG_ERROR_KIND_COUNT              ///< Not an error: closes the enum.
 } GLTANG_ErrorKind;
 

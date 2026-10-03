@@ -55,10 +55,11 @@ void gltang_vm_flush_fuel(GLTANG_Execution * exec) {
 
 GRCORE_Location gltang_vm_location(const GLTANG_Execution * exec) {
   GRCORE_Location where = {NULL, 0};
-  if (exec->program) {
-    where.file = exec->program->file;
+  const GLTANG_Program * program = exec->act ? gltang_exec_current_program(exec) : NULL;
+  if (program) {
+    where.file = program->file;
     int line = 0;
-    if (gltang_program_locate(exec->program, exec->current_function, exec->current_offset, &line) == GLTANG_OK) {
+    if (gltang_program_locate(program, exec->current_function, exec->current_offset, &line) == GLTANG_OK) {
       where.line = line;
     }
   }
@@ -115,7 +116,7 @@ GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index) {
   if (cached) {
     return cached;
   }
-  const GLTANG_Const * c = &exec->program->constants[index];
+  const GLTANG_Const * c = &gltang_exec_current_program(exec)->constants[index];
   GLTANG_Value v;
   switch (c->kind) {
     case GLTANG_CONST_INTEGER: v = gltang_vm_make_int(exec, c->integer); break;
@@ -127,36 +128,6 @@ GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index) {
   }
   exec->constants[index] = v;
   return v;
-}
-
-// ---------------------------------------------------------------------------
-// Use
-// ---------------------------------------------------------------------------
-
-GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock * path) {
-  // The one place a library is looked up. There is no registry yet: a host
-  // may give names through its resolver, and a name nobody provides is null
-  // (reference 9.1).
-  if (!exec->resolver) {
-    return GLTANG_V_NULL;
-  }
-  GLTANG_HostValue host;
-  memset(&host, 0, sizeof(host));
-  if (!exec->resolver(exec->resolver_user, gltang_string_bytes(path), &host)) {
-    return GLTANG_V_NULL;
-  }
-  switch (host.kind) {
-    case GLTANG_HOST_BOOL: return gltang_v_from_bool(host.boolean);
-    case GLTANG_HOST_INTEGER: return gltang_vm_make_int(exec, host.integer);
-    case GLTANG_HOST_FLOAT: return gltang_vm_make_float(exec, host.number);
-    case GLTANG_HOST_STRING:
-      if (!host.text) {
-        return GLTANG_V_NULL;
-      }
-      return gltang_vm_string_from_utf8(exec, host.text, host.length, host.encoding);
-    default:
-      return GLTANG_V_NULL;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,12 +144,17 @@ static GRCORE_SlotKind descriptor_slot_kind(const GRCORE_AbstractFrame * frame, 
 static GRCORE_Location descriptor_locate(const GRCORE_Context * context, uint64_t function, uint64_t offset) {
   GRCORE_Location where = {NULL, 0};
   GLTANG_Execution * exec = execution_of(context);
-  if (!exec || exec->destroyed || !exec->program) {
+  if (!exec || exec->destroyed) {
     return where;
   }
-  where.file = exec->program->file;
+  // The identity's function word carries the program index in its high half.
+  const GLTANG_Program * program = gltang_exec_program(exec, GLTANG_FN_PROGRAM(function));
+  if (!program) {
+    return where;
+  }
+  where.file = program->file;
   int line = 0;
-  if (gltang_program_locate(exec->program, function, offset, &line) == GLTANG_OK) {
+  if (gltang_program_locate(program, GLTANG_FN_INDEX(function), offset, &line) == GLTANG_OK) {
     where.line = line;
   }
   return where;
@@ -211,15 +187,23 @@ static GLTANG_Execution * frame_execution(const GRCORE_AbstractFrame * frame) {
   return exec && !exec->destroyed ? exec : NULL;
 }
 
-static bool frame_function(const GRCORE_AbstractFrame * frame, uint64_t * function) {
+/** Reads a frame's function word and finds its program. */
+static bool frame_function(const GRCORE_AbstractFrame * frame, const GLTANG_Execution * exec, const GLTANG_Program ** program, uint64_t * function) {
   GRCORE_Stack * stack = grcore_context_stack(frame->context);
-  return stack && grcore_stack_slot_get(stack, frame->frame, GLTANG_F_FUNCTION, function) == GRCORE_OK;
+  uint64_t word;
+  if (!stack || grcore_stack_slot_get(stack, frame->frame, GLTANG_F_FUNCTION, &word) != GRCORE_OK) {
+    return false;
+  }
+  *program = gltang_exec_program(exec, GLTANG_FN_PROGRAM(word));
+  *function = GLTANG_FN_INDEX(word);
+  return *program && *function < (*program)->function_count;
 }
 
 static size_t descriptor_scope_count(const GRCORE_AbstractFrame * frame) {
   GLTANG_Execution * exec = frame_execution(frame);
+  const GLTANG_Program * program;
   uint64_t function;
-  if (!exec || !frame_function(frame, &function) || function >= exec->program->function_count) {
+  if (!exec || !frame_function(frame, exec, &program, &function)) {
     return 0;
   }
   return function == 0 ? 1u : 2u;
@@ -235,17 +219,18 @@ static size_t named_locals(const GLTANG_Function * f) {
 
 static GRCORE_Result descriptor_scope(const GRCORE_AbstractFrame * frame, size_t index, GRCORE_ScopeInfo * out) {
   GLTANG_Execution * exec = frame_execution(frame);
+  const GLTANG_Program * program;
   uint64_t function;
-  if (!exec || !frame_function(frame, &function) || function >= exec->program->function_count) {
+  if (!exec || !frame_function(frame, exec, &program, &function)) {
     return GRCORE_ERR_INVALID;
   }
-  const GLTANG_Function * f = &exec->program->functions[function];
+  const GLTANG_Function * f = &program->functions[function];
   if (function != 0 && index == 0) {
     *out = (GRCORE_ScopeInfo){GRCORE_SCOPE_LOCAL, f->name, named_locals(f)};
     return GRCORE_OK;
   }
   if (index == (function == 0 ? 0u : 1u)) {
-    *out = (GRCORE_ScopeInfo){GRCORE_SCOPE_GLOBAL, "program", exec->program->global_count};
+    *out = (GRCORE_ScopeInfo){GRCORE_SCOPE_GLOBAL, "program", program->global_count};
     return GRCORE_OK;
   }
   return GRCORE_ERR_INVALID;
@@ -253,11 +238,12 @@ static GRCORE_Result descriptor_scope(const GRCORE_AbstractFrame * frame, size_t
 
 static GRCORE_Result descriptor_variable(const GRCORE_AbstractFrame * frame, size_t scope, size_t index, GRCORE_Variable * out) {
   GLTANG_Execution * exec = frame_execution(frame);
+  const GLTANG_Program * program;
   uint64_t function;
-  if (!exec || !frame_function(frame, &function) || function >= exec->program->function_count) {
+  if (!exec || !frame_function(frame, exec, &program, &function)) {
     return GRCORE_ERR_INVALID;
   }
-  const GLTANG_Function * f = &exec->program->functions[function];
+  const GLTANG_Function * f = &program->functions[function];
   if (function != 0 && scope == 0) {
     size_t seen = 0;
     for (uint32_t i = 0; i < f->local_count; ++i) {
@@ -276,8 +262,27 @@ static GRCORE_Result descriptor_variable(const GRCORE_AbstractFrame * frame, siz
     }
     return GRCORE_ERR_INVALID;
   }
-  if (scope == (function == 0 ? 0u : 1u) && index < exec->program->global_count) {
-    *out = (GRCORE_Variable){exec->program->global_names[index], GRCORE_SLOT_VALUE, exec->globals[index]};
+  if (scope == (function == 0 ? 0u : 1u) && index < program->global_count) {
+    // The globals of the activation this frame belongs to: its depth is in
+    // the frame's flags word.
+    const GLTANG_Value * globals = NULL;
+    uint64_t depth = 0;
+    {
+      GRCORE_Stack * stack = grcore_context_stack(frame->context);
+      if (!stack || grcore_stack_slot_get(stack, frame->frame, GLTANG_F_FLAGS, &depth) != GRCORE_OK) {
+        return GRCORE_ERR_INVALID;
+      }
+    }
+    for (const GLTANG_Activation * a = exec->act; a; a = a->parent) {
+      if (a->depth == depth) {
+        globals = a->globals;
+        break;
+      }
+    }
+    if (!globals) {
+      return GRCORE_ERR_INVALID;
+    }
+    *out = (GRCORE_Variable){program->global_names[index], GRCORE_SLOT_VALUE, globals[index]};
     return GRCORE_OK;
   }
   return GRCORE_ERR_INVALID;
@@ -320,6 +325,24 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
   for (size_t i = 0; i < exec->temp_count; ++i) {
     visitor->slot(visitor->user, &exec->temps[i]);
   }
+  // Every running program: its result, and (for a template call) its own
+  // variables. The main program's variables are in `roots`.
+  for (GLTANG_Activation * a = exec->act; a; a = a->parent) {
+    visitor->slot(visitor->user, &a->result);
+    if (a->owns_globals) {
+      uint32_t count = gltang_exec_program(exec, a->program_index)->global_count;
+      for (uint32_t i = 0; i < count; ++i) {
+        visitor->slot(visitor->user, &a->globals[i]);
+      }
+    }
+  }
+  // The constants of the templates that have run.
+  for (size_t p = 1; p < exec->program_count; ++p) {
+    uint32_t count = exec->programs[p].program->constant_count;
+    for (uint32_t i = 0; i < count; ++i) {
+      visitor->slot(visitor->user, &exec->programs[p].constants[i]);
+    }
+  }
 }
 
 static const GRCORE_RootSource root_source = {"lang-tang execution", enumerate_roots};
@@ -328,21 +351,56 @@ static const GRCORE_RootSource root_source = {"lang-tang execution", enumerate_r
 // Create and destroy
 // ---------------------------------------------------------------------------
 
+void gltang_vm_outbuf_free(GLTANG_Execution * exec, GLTANG_OutBuf * out) {
+  gcu_allocator_free(exec->allocator, out->bytes);
+  gcu_allocator_free(exec->allocator, out->segments);
+  memset(out, 0, sizeof(*out));
+}
+
+void gltang_vm_set_activation(GLTANG_Execution * exec, GLTANG_Activation * act) {
+  exec->act = act;
+  exec->globals = act->globals;
+  exec->constants = exec->programs[act->program_index].constants;
+  exec->out = &act->out;
+}
+
 static void release_parts(GLTANG_Execution * exec) {
   if (exec->destroyed) {
     return;
   }
   exec->destroyed = true;
   grcore_context_remove_root_source(exec->context, &root_source, exec);
+  // Any template activations still open (a destroyed run): their parts.
+  while (exec->act && exec->act != &exec->main_act) {
+    GLTANG_Activation * act = exec->act;
+    exec->act = act->parent;
+    gltang_vm_outbuf_free(exec, &act->out);
+    gcu_allocator_free(exec->allocator, act->globals);
+    gcu_allocator_free(exec->allocator, act);
+  }
+  gltang_vm_outbuf_free(exec, &exec->main_act.out);
+  for (size_t p = 1; p < exec->program_count; ++p) {
+    gcu_allocator_free(exec->allocator, exec->programs[p].constants);
+    gltang_program_release(exec->programs[p].program);
+  }
+  gcu_allocator_free(exec->allocator, exec->programs);
   gcu_allocator_free(exec->allocator, exec->roots);
   gcu_allocator_free(exec->allocator, exec->temps);
-  gcu_allocator_free(exec->allocator, exec->output);
-  gcu_allocator_free(exec->allocator, exec->segments);
+  exec->programs = NULL;
+  exec->program_count = 0;
   exec->roots = exec->globals = exec->constants = exec->temps = NULL;
-  exec->output = NULL;
-  exec->segments = NULL;
+  exec->out = NULL;
+  exec->act = NULL;
+  exec->main_act.result = 0;
+  exec->main_act.globals = NULL;
   exec->root_count = exec->temp_count = 0;
-  exec->output_length = exec->segment_count = 0;
+  gltang_library_release(exec->libraries);
+  exec->libraries = NULL;
+  gcu_allocator_free(exec->allocator, exec->name_storage);
+  exec->name_storage = NULL;
+  exec->name = NULL;
+  gltang_seeds_destroy(exec->seeds);
+  exec->seeds = NULL;
   gltang_program_release(exec->program);
   exec->program = NULL;
 }
@@ -389,13 +447,24 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
   exec->allocator = allocator;
   exec->root_count = GLTANG_ROOT_FIXED + program->global_count + program->constant_count;
   exec->roots = gcu_allocator_calloc(allocator, exec->root_count, sizeof(GLTANG_Value));
-  if (!exec->roots) {
+  exec->programs = gcu_allocator_calloc(allocator, 1, sizeof(GLTANG_ProgramEntry));
+  if (!exec->roots || !exec->programs) {
+    gcu_allocator_free(allocator, exec->roots);
+    gcu_allocator_free(allocator, exec->programs);
     gcu_allocator_free(allocator, exec);
     return GLTANG_ERR_OOM;
   }
-  exec->globals = exec->roots + GLTANG_ROOT_FIXED;
-  exec->constants = exec->globals + program->global_count;
   exec->program = gltang_program_retain(program);
+  exec->program_capacity = 1;
+  exec->program_count = 1;
+  // The main program is entry 0 and is retained once, by `program`.
+  exec->programs[0].program = exec->program;
+  exec->programs[0].constants = exec->roots + GLTANG_ROOT_FIXED + program->global_count;
+  exec->main_act.program_index = 0;
+  exec->main_act.globals = exec->roots + GLTANG_ROOT_FIXED;
+  exec->main_act.name = NULL;
+  gltang_vm_set_activation(exec, &exec->main_act);
+  exec->name = NULL;
 
   // The engine is registered once per context. A create that failed after
   // this point leaves it registered, so a second attempt finds it again.
@@ -427,6 +496,7 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
       GLTANG_ErrorObject * error = object;
       error->kind = GLTANG_OBJ_ERROR;
       error->error_kind = GLTANG_ERROR_OUT_OF_MEMORY;
+      error->flags = GLTANG_ERROR_FLAG_LOGGED;
       exec->roots[GLTANG_ROOT_OOM] = gltang_value_of(error);
     }
   }
@@ -439,6 +509,7 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
     }
     exec->destroyed = true;  // the root source is already gone
     gcu_allocator_free(allocator, exec->roots);
+    gcu_allocator_free(allocator, exec->programs);
     gltang_program_release(exec->program);
     gcu_allocator_free(allocator, exec);
     return result;
@@ -448,17 +519,49 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
 }
 
 void gltang_execution_destroy(GLTANG_Execution * execution) {
-  if (execution) {
+  if (execution && !execution->in_host) {
     release_parts(execution);
   }
 }
 
-GLTANG_Result gltang_execution_set_resolver(GLTANG_Execution * execution, GLTANG_Resolver resolver, void * user) {
-  if (!execution) {
+/** A setter is refused once the run has started, and from inside a host function. */
+static bool settable(const GLTANG_Execution * execution) {
+  return execution && !execution->destroyed && !execution->in_host && execution->state == GLTANG_EXECUTION_NEW;
+}
+
+GLTANG_Result gltang_execution_set_libraries(GLTANG_Execution * execution, GLTANG_Library * library) {
+  if (!settable(execution)) {
     return GLTANG_ERR_INVALID;
   }
-  execution->resolver = resolver;
-  execution->resolver_user = user;
+  GLTANG_Library * attached = gltang_library_attach(library);
+  gltang_library_release(execution->libraries);
+  execution->libraries = attached;
+  return GLTANG_OK;
+}
+
+GLTANG_Result gltang_execution_set_seeds(GLTANG_Execution * execution, GLTANG_SeedSequence * seeds) {
+  if (!settable(execution)) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_SeedSequence * retained = gltang_seeds_retain(seeds);
+  gltang_seeds_destroy(execution->seeds);
+  execution->seeds = retained;
+  return GLTANG_OK;
+}
+
+GLTANG_Result gltang_execution_set_name(GLTANG_Execution * execution, const char * name) {
+  if (!settable(execution) || !name) {
+    return GLTANG_ERR_INVALID;
+  }
+  size_t length = strlen(name);
+  char * copy = gcu_allocator_malloc(execution->allocator, length + 1u);
+  if (!copy) {
+    return GLTANG_ERR_OOM;
+  }
+  memcpy(copy, name, length + 1u);
+  gcu_allocator_free(execution->allocator, execution->name_storage);
+  execution->name_storage = copy;
+  execution->name = copy;
   return GLTANG_OK;
 }
 
@@ -478,7 +581,7 @@ static GLTANG_Value result_of(const GLTANG_Execution * execution) {
   if (!execution || execution->destroyed || !execution->roots) {
     return GLTANG_V_NULL;
   }
-  return execution->roots[GLTANG_ROOT_RESULT];
+  return execution->main_act.result;
 }
 
 GLTANG_ValueKind gltang_execution_result_kind(const GLTANG_Execution * execution) {
@@ -513,6 +616,16 @@ const char * gltang_execution_result_text(const GLTANG_Execution * execution, si
       *out_length = strlen(message);
     }
     return message;
+  }
+  if (gltang_vm_kind(v) == GLTANG_KIND_LIBRARY) {
+    const char * name = gltang_library_name(((const GLTANG_LibraryObject *)gltang_object(v))->library);
+    if (!name) {
+      name = "";
+    }
+    if (out_length) {
+      *out_length = strlen(name);
+    }
+    return name;
   }
   return NULL;
 }
@@ -564,11 +677,12 @@ bool gltang_execution_result_error(const GLTANG_Execution * execution, GLTANG_Er
     *out_kind = (GLTANG_ErrorKind)error->error_kind;
   }
   if (out_origin) {
-    out_origin->file = execution->program ? execution->program->file : NULL;
+    const GLTANG_Program * program = execution->destroyed ? NULL : gltang_exec_program(execution, error->program);
+    out_origin->file = program ? program->file : NULL;
     out_origin->function = error->function;
     out_origin->offset = error->offset;
     int line = 0;
-    if (execution->program && gltang_program_locate(execution->program, error->function, error->offset, &line) != GLTANG_OK) {
+    if (program && gltang_program_locate(program, error->function, error->offset, &line) != GLTANG_OK) {
       line = 0;
     }
     out_origin->line = line;
@@ -623,16 +737,16 @@ bool gltang_execution_result_member(const GLTANG_Execution * execution, const ch
 }
 
 const char * gltang_execution_output_raw(const GLTANG_Execution * execution, size_t * out_length) {
-  if (!execution || execution->destroyed || !execution->output) {
+  if (!execution || execution->destroyed || !execution->main_act.out.bytes) {
     if (out_length) {
       *out_length = 0;
     }
     return "";
   }
   if (out_length) {
-    *out_length = execution->output_length;
+    *out_length = execution->main_act.out.length;
   }
-  return execution->output;
+  return execution->main_act.out.bytes;
 }
 
 GLTANG_Result gltang_execution_output_render(const GLTANG_Execution * execution, char ** out_text, size_t * out_length) {
@@ -641,7 +755,7 @@ GLTANG_Result gltang_execution_output_render(const GLTANG_Execution * execution,
   }
   char * rendered;
   size_t length;
-  if (execution->destroyed || !execution->output) {
+  if (execution->destroyed || !execution->main_act.out.bytes) {
     rendered = gcu_malloc(1);
     if (!rendered) {
       return GLTANG_ERR_OOM;
@@ -649,7 +763,7 @@ GLTANG_Result gltang_execution_output_render(const GLTANG_Execution * execution,
     rendered[0] = '\0';
     length = 0;
   }
-  else if (!gltang_vm_render_segments(execution->output, execution->output_length, execution->segments, execution->segment_count, &rendered, &length)) {
+  else if (!gltang_vm_render_segments(execution->main_act.out.bytes, execution->main_act.out.length, execution->main_act.out.segments, execution->main_act.out.segment_count, &rendered, &length)) {
     return GLTANG_ERR_OOM;
   }
   *out_text = rendered;

@@ -280,7 +280,8 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
         if (gltang_vm_is_error(other)) {
           return other;
         }
-        if (other == GLTANG_V_NULL || gltang_v_is_function(other)) {
+        GLTANG_ValueKind other_kind = gltang_vm_kind(other);
+        if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG) {
           return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
         }
         if (a_string && b_string) {
@@ -427,7 +428,7 @@ GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_C
   if (kind == GLTANG_KIND_ERROR) {
     return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }
-  if (kind == GLTANG_KIND_FUNCTION) {
+  if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG) {
     return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   switch (type) {
@@ -499,42 +500,45 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
   }
 }
 
-static bool name_is(const GLTANG_StringBlock * name, const char * text) {
-  size_t length = strlen(text);
-  return name->byte_length == length && !memcmp(gltang_string_bytes(name), text, length);
+static bool name_is(const char * name, size_t length, const char * text) {
+  return length == strlen(text) && !memcmp(name, text, length);
 }
 
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name_value) {
   const GLTANG_StringBlock * name = gltang_vm_string(name_value);
+  return gltang_vm_op_attr_named(exec, container, gltang_string_bytes(name), (size_t)name->byte_length);
+}
+
+GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length) {
   switch (gltang_vm_kind(container)) {
     case GLTANG_KIND_STRING:
-      if (name_is(name, "length")) {
+      if (name_is(name, length, "length")) {
         return gltang_vm_make_int(exec, (int64_t)gltang_vm_string(container)->grapheme_length);
       }
-      if (name_is(name, "byte_length")) {
+      if (name_is(name, length, "byte_length")) {
         return gltang_vm_make_int(exec, (int64_t)gltang_vm_string(container)->byte_length);
       }
-      if (name_is(name, "html")) {
+      if (name_is(name, length, "html")) {
         return gltang_vm_string_retag(exec, container, GLTANG_UNICODE_STRING_TYPE_HTML);
       }
-      if (name_is(name, "html_attribute")) {
+      if (name_is(name, length, "html_attribute")) {
         return gltang_vm_string_retag(exec, container, GLTANG_UNICODE_STRING_TYPE_HTML_ATTRIBUTE);
       }
-      if (name_is(name, "percent")) {
+      if (name_is(name, length, "percent")) {
         return gltang_vm_string_retag(exec, container, GLTANG_UNICODE_STRING_TYPE_PERCENT);
       }
-      if (name_is(name, "javascript")) {
+      if (name_is(name, length, "javascript")) {
         return gltang_vm_string_retag(exec, container, GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT);
       }
-      if (name_is(name, "raw")) {
+      if (name_is(name, length, "raw")) {
         return gltang_vm_string_retag(exec, container, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
       }
-      if (name_is(name, "render")) {
+      if (name_is(name, length, "render")) {
         return gltang_vm_string_render(exec, container);
       }
       return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
     case GLTANG_KIND_ARRAY:
-      if (name_is(name, "size")) {
+      if (name_is(name, length, "size")) {
         return gltang_vm_make_int(exec, (int64_t)gltang_vm_array(container)->length);
       }
       return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
@@ -542,8 +546,12 @@ GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, 
       // A map has no attributes of its own, so a name is a key; one it does
       // not hold is null (13.7, 13.38).
       bool found;
-      return gltang_vm_map_get(container, gltang_string_bytes(name), (size_t)name->byte_length, &found);
+      return gltang_vm_map_get(container, name, length, &found);
     }
+    case GLTANG_KIND_LIBRARY:
+      return gltang_vm_library_attr(exec, container, name, length);
+    case GLTANG_KIND_RNG:
+      return gltang_vm_rng_attr(exec, container, name, length);
     default:
       return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }

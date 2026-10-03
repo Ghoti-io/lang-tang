@@ -4,7 +4,7 @@
 // in documentation/design.md ("The ported execution tests"). The assertions
 // are the originals': what changed is how a program is made and read (a host
 // builds a context and a heap with runtime-core and runtime-heap, and reads the
-// result by kind), and how a `use` supplies a value (a resolver, not ctang's
+// result by kind), and how a `use` supplies a value (a library the host attaches, not ctang's
 // library registry). The suite runs unchanged under the heap's torture and
 // verify modes and with a guest stack that moves on every push; see the
 // Makefile's `test` and `test-torture`.

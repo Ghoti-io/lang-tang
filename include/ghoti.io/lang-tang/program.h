@@ -52,6 +52,9 @@ extern "C" {
 /** @brief A compiled program. Opaque. */
 typedef struct GLTANG_Program GLTANG_Program;
 
+/** @brief A library (library.h). Declared here so that a program can name one. */
+typedef struct GLTANG_Library GLTANG_Library;
+
 /**
  * @brief Takes another reference.
  *
@@ -70,6 +73,23 @@ GLTANG_API GLTANG_Program * gltang_program_retain(GLTANG_Program * program);
  * @param program The program, or NULL (ignored).
  */
 GLTANG_API void gltang_program_release(GLTANG_Program * program);
+
+/**
+ * @brief Attaches a library to the program: the second layer of every `use`
+ *   (after the execution's libraries, before the built-ins).
+ *
+ * The library is sealed and retained. Allowed only while the program has a
+ * single reference, so that a program shared by several contexts is never
+ * written (AD-22): set the libraries first, then share the program. A template
+ * registered in a library holds a reference, which counts.
+ *
+ * @param program The program.
+ * @param library The library, or NULL to remove the layer.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for NULL, or a program with more
+ *   than one reference (nothing changes).
+ */
+GLTANG_API GLTANG_Result gltang_program_set_libraries(
+    GLTANG_Program * program, GLTANG_Library * library);
 
 /**
  * @brief The source file name the program was compiled with.

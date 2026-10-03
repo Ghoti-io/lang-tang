@@ -645,11 +645,71 @@ TEST(VariableScope, Global) {
 }
 
 
+namespace {
+
+// ctang's make_int_3, make_add and make_str_len, as lang-tang's host functions.
+bool native_three(GLTANG_NativeCall * call, void *) {
+  gltang_call_return_integer(call, 3);
+  return true;
+}
+
+bool native_add(GLTANG_NativeCall * call, void *) {
+  gltang_call_return_integer(call, gltang_call_integer(call, 0) + gltang_call_integer(call, 1));
+  return true;
+}
+
+// The bound object is the string "abc"; the function answers with its length.
+bool native_string_length(GLTANG_NativeCall * call, void * bound) {
+  gltang_call_return_integer(call, (int64_t)static_cast<const std::string *>(bound)->size());
+  return true;
+}
+
+}  // namespace
+
 TEST(NativeFunction, Library) {
-  // ctang's three other cases here call native function values supplied by the
-  // host's library: a function with no arguments, one with two, and one bound
-  // to an object. A native function value is story 10's (it is the library
-  // registry's), so those three are deferred and named in design.md.
+  {
+    // Simple function, no arguments
+    TEST_PROGRAM_SETUP_NO_RUN(R"(
+      use a;
+      print("start ");
+      print(a());
+      print(" end");
+    )");
+    ASSERT_EQ(gltang_library_add_native(context->library(), "a", native_three, nullptr), GLTANG_OK);
+    ASSERT_TRUE(context->execute());
+    ASSERT_TRUE(context->ok());
+    ASSERT_STREQ(context->raw().c_str(), "start 3 end");
+    TEST_PROGRAM_TEARDOWN();
+  }
+  {
+    // Simple function, with arguments
+    TEST_PROGRAM_SETUP_NO_RUN(R"(
+      use a;
+      print("start ");
+      print(a(1, 2));
+      print(" end");
+    )");
+    ASSERT_EQ(gltang_library_add_native(context->library(), "a", native_add, nullptr), GLTANG_OK);
+    ASSERT_TRUE(context->execute());
+    ASSERT_TRUE(context->ok());
+    ASSERT_STREQ(context->raw().c_str(), "start 3 end");
+    TEST_PROGRAM_TEARDOWN();
+  }
+  {
+    // Function with bound object
+    TEST_PROGRAM_SETUP_NO_RUN(R"(
+      use a;
+      print("start ");
+      print(a());
+      print(" end");
+    )");
+    std::string bound = "abc";
+    ASSERT_EQ(gltang_library_add_native(context->library(), "a", native_string_length, &bound), GLTANG_OK);
+    ASSERT_TRUE(context->execute());
+    ASSERT_TRUE(context->ok());
+    ASSERT_STREQ(context->raw().c_str(), "start 3 end");
+    TEST_PROGRAM_TEARDOWN();
+  }
   {
     // Function not found. Does not crash.
     TEST_PROGRAM_SETUP_NO_RUN(R"(

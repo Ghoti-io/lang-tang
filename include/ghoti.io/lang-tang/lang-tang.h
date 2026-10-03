@@ -40,5 +40,6 @@
 #include <ghoti.io/lang-tang/core.h>
 #include <ghoti.io/lang-tang/libver.h>
 #include <ghoti.io/lang-tang/parse.h>
+#include <ghoti.io/lang-tang/seeds.h>
 
 #endif /* GHOTI_IO_GLTANG_LANG_TANG_H */

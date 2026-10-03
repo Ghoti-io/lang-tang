@@ -115,6 +115,9 @@ static const char * const error_messages[GLTANG_ERROR_KIND_COUNT] = {
   [GLTANG_ERROR_INTEGER_TOO_LARGE] = "[INTEGER TOO LARGE]",
   [GLTANG_ERROR_INTEGER_TOO_SMALL] = "[INTEGER TOO SMALL]",
   [GLTANG_ERROR_NOT_A_NUMBER] = "[NOT A NUMBER]",
+  [GLTANG_ERROR_LIMIT_EXCEEDED] = "Limit Exceeded",
+  [GLTANG_ERROR_GLOBAL_SEED] = "Cannot change the seed of the global random number generator",
+  [GLTANG_ERROR_HOST_FAILED] = "Host function failed",
 };
 
 const char * gltang_error_kind_message(GLTANG_ErrorKind kind) {
@@ -155,6 +158,10 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
     case GLTANG_OBJ_ARRAY: return GLTANG_KIND_ARRAY;
     case GLTANG_OBJ_MAP: return GLTANG_KIND_MAP;
     case GLTANG_OBJ_ERROR: return GLTANG_KIND_ERROR;
+    case GLTANG_OBJ_LIBRARY: return GLTANG_KIND_LIBRARY;
+    case GLTANG_OBJ_NATIVE:
+    case GLTANG_OBJ_TEMPLATE: return GLTANG_KIND_FUNCTION;
+    case GLTANG_OBJ_RNG: return GLTANG_KIND_RNG;
     default: return GLTANG_KIND_NULL;
   }
 }
@@ -199,6 +206,8 @@ bool gltang_vm_truthy(GLTANG_Value v) {
     case GLTANG_KIND_ARRAY: return gltang_vm_array(v)->length != 0;
     case GLTANG_KIND_MAP: return gltang_vm_map(v)->count != 0;
     case GLTANG_KIND_FUNCTION: return true;  // unspecified by the reference
+    case GLTANG_KIND_LIBRARY: return true;
+    case GLTANG_KIND_RNG: return true;
     case GLTANG_KIND_ERROR: return false;
   }
   return false;
@@ -248,6 +257,7 @@ GLTANG_Value gltang_vm_make_error(GLTANG_Execution * exec, GLTANG_ErrorKind kind
   error->kind = GLTANG_OBJ_ERROR;
   error->error_kind = (uint32_t)kind;
   // The origin: the place the failing instruction is, in the terms a poll uses.
+  error->program = exec->act->program_index;
   error->function = exec->current_function;
   error->offset = exec->current_offset;
   return gltang_value_of(error);
