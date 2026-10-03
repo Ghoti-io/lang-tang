@@ -119,12 +119,16 @@ int main(void) {
   size_t count = gltang_execution_error_count(execution);
   for (size_t i = 0; i < count; ++i) {
     GLTANG_ErrorEntry entry;
-    gltang_execution_error(execution, i, &entry);
-    printf("%s:%s:%d: %s\n", entry.template_name, entry.file, entry.line, entry.message);
+    if (!gltang_execution_error(execution, i, &entry)) {
+      continue;
+    }
+    printf("%s:%s:%d: %s\n", entry.template_name ? entry.template_name : "?", entry.file ? entry.file : "?", entry.line, entry.message);
     for (size_t k = 0; k < entry.chain_count; ++k) {
       GLTANG_ErrorLink link;
-      gltang_execution_error_chain(execution, i, k, &link);
-      printf("  in %s:%s:%d\n", link.template_name, link.file, link.line);
+      if (!gltang_execution_error_chain(execution, i, k, &link)) {
+        continue;
+      }
+      printf("  in %s:%s:%d\n", link.template_name ? link.template_name : "?", link.file ? link.file : "?", link.line);
     }
   }
 

@@ -346,7 +346,7 @@ void gltang_call_return_string(GLTANG_NativeCall * call, const char * text, size
   call->set = GLTANG_CALL_STRING;
   call->encoding = encoding;
   call->length = length;
-  call->failed_to_copy = (unsigned)encoding > (unsigned)GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT;
+  call->failed_to_copy = (unsigned)encoding > (unsigned)GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT || length == SIZE_MAX;
   if (call->failed_to_copy) {
     return;
   }

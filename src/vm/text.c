@@ -441,7 +441,7 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
       }
       else {
         // A template takes no arguments; a host function's count is its own.
-        snprintf(name, sizeof(name), gltang_object_kind(v) == GLTANG_OBJ_TEMPLATE ? "Function(0)" : "Function(native)");
+        snprintf(name, sizeof(name), "%s", gltang_object_kind(v) == GLTANG_OBJ_TEMPLATE ? "Function(0)" : "Function(native)");
       }
       return text(sink, name);
     }

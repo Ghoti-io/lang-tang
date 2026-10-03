@@ -113,6 +113,44 @@ TEST(ErrorList, ADiscardedStringStoreIsListed) {
   EXPECT_EQ(e.e.line, 2);
 }
 
+TEST(ErrorList, ADroppedErrorFollowedByALoopOrAnIfIsListed) {
+  // CLEAR_RESULT, not SET_RESULT, ends the next statement: it must list too.
+  Named run("1 / 0;\nwhile (false) {}\nprint(\"x\");");
+  ASSERT_TRUE(run.context.execute());
+  ASSERT_EQ(run.context.error_count(), 1u);
+  EXPECT_EQ(run.context.error(0).e.how, GLTANG_ERROR_HOW_DISCARDED);
+  EXPECT_EQ(run.context.error(0).e.line, 1);
+}
+
+TEST(ErrorList, ADroppedErrorFollowedByTemplateTextIsListed) {
+  Named run("<% 1 / 0; %>text\n", "page", false, false, tt::Mode::Template);
+  ASSERT_TRUE(run.context.execute());
+  EXPECT_EQ(run.context.raw(), "text\n");
+  ASSERT_EQ(run.context.error_count(), 1u);
+  EXPECT_EQ(run.context.error(0).e.how, GLTANG_ERROR_HOW_DISCARDED);
+}
+
+TEST(ErrorList, ALoopOverSomethingNotIterableIsListedWhenItIsFollowedByAStatement) {
+  Named run("for (x : \"abc\") {}\nprint(1);");
+  ASSERT_TRUE(run.context.execute());
+  ASSERT_EQ(run.context.error_count(), 1u);
+  EXPECT_EQ(run.context.error(0).e.kind, GLTANG_ERROR_NOT_IMPLEMENTED);
+  EXPECT_EQ(run.context.error(0).e.how, GLTANG_ERROR_HOW_DISCARDED);
+  Named number("for (x : 3) {}\nprint(1);");
+  ASSERT_TRUE(number.context.execute());
+  ASSERT_EQ(number.context.error_count(), 1u);
+  EXPECT_EQ(number.context.error(0).e.kind, GLTANG_ERROR_NOT_SUPPORTED);
+}
+
+TEST(ErrorList, ABadLoopInsideAFunctionDoesNotListAgainstTheCallersStatement) {
+  Named run("function f() { for (x : 3) {} return 1; }\nf();\nprint(2);");
+  ASSERT_TRUE(run.context.execute());
+  EXPECT_LE(run.context.error_count(), 1u);
+  for (size_t i = 0; i < run.context.error_count(); ++i) {
+    EXPECT_EQ(run.context.error(i).e.kind, GLTANG_ERROR_NOT_SUPPORTED);
+  }
+}
+
 TEST(ErrorList, TheLastStatementOfTheTopLevelIsTheResultAndIsNotListed) {
   Named run("s = \"abc\";\ns[0] = \"x\";");
   ASSERT_TRUE(run.context.execute());

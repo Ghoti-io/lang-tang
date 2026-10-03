@@ -31,7 +31,7 @@
 #include "library_internal.h"
 
 static char * copy_text(const char * text, size_t length) {
-  char * copy = gcu_malloc(length + 1u);
+  char * copy = length == SIZE_MAX ? NULL : gcu_malloc(length + 1u);
   if (!copy) {
     return NULL;
   }
