@@ -78,7 +78,7 @@ std::string canonical_result_text(tt::Context & context) {
 
 /// Runs a case under a configuration, observing every poll. `extra` may register
 /// more handlers on the context before the run starts.
-Observed observe(const Case & c, const RunConfig & rc, const std::function<void(GRCORE_Context *)> & extra = nullptr) {
+Observed observe(const Case & c, const RunConfig & rc, const std::function<void(GRCORE_Context *)> & extra = nullptr, size_t cap = SIZE_MAX) {
   Observed out;
   tt::Compiled page(c.source, c.mode, "page.tang");
   EXPECT_TRUE(page.ok()) << c.name << ": " << page.error.message;
@@ -103,7 +103,7 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
     EXPECT_EQ(gltang_library_add_template(context.library(), part.name.c_str(), compiled.back()->program, part.fuel, part.policy), GLTANG_OK);
   }
   observer::Observer obs;
-  obs.trace.limit = c.limit;
+  obs.trace.limit = std::min(c.limit, cap);
   EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
   if (extra) {
     extra(context.context);
@@ -308,9 +308,13 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
   std::vector<Case> cases = all_cases();
   ASSERT_GE(cases.size(), 40u);
   size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0;
+  // Under Valgrind a poll costs fifty milliseconds to record: each program
+  // records its first few polls and compares the count of the rest. The other
+  // modes record up to the case's limit.
+  const size_t cap = RUNNING_ON_VALGRIND ? 8 : SIZE_MAX;
   for (const Case & c : cases) {
     auto started = std::chrono::steady_clock::now();
-    Observed plain = observe(c, kPlain);
+    Observed plain = observe(c, kPlain, nullptr, cap);
     if (std::getenv("GLTANG_OBSERVER_VERBOSE")) {
       std::printf("  %s: %zu polls, %zu pauses, %.3fs\n", c.name.c_str(), plain.trace.total, plain.pauses,
           std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
@@ -318,7 +322,7 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     }
     ASSERT_TRUE(plain.finished || plain.pauses > 0 || !plain.raw.empty() || plain.ran != GRCORE_OK) << c.name;
     EXPECT_GT(plain.trace.polls.size(), 0u) << c.name << " recorded no polls: the observer is not seeing the run";
-    EXPECT_EQ(plain.trace.polls.size(), std::min(plain.trace.total, c.limit)) << c.name;
+    EXPECT_EQ(plain.trace.polls.size(), std::min(plain.trace.total, std::min(c.limit, cap))) << c.name;
     polls += plain.trace.polls.size();
     pauses += plain.pauses;
     for (const auto & p : plain.trace.polls) {
@@ -329,14 +333,14 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
         }
       }
     }
-    Observed torture = observe(c, kTorture);
+    Observed torture = observe(c, kTorture, nullptr, cap);
     EXPECT_TRUE(same(c, plain, kPlain.label, torture, kTorture.label));
-    Observed moving = observe(c, kMoving);
+    Observed moving = observe(c, kMoving, nullptr, cap);
     EXPECT_TRUE(same(c, plain, kPlain.label, moving, kMoving.label));
-    Observed shuffled = observe(c, kShuffled);
+    Observed shuffled = observe(c, kShuffled, nullptr, cap);
     EXPECT_TRUE(same(c, plain, kPlain.label, shuffled, kShuffled.label));
   }
-  EXPECT_GT(polls, 1800u);
+  EXPECT_GT(polls, RUNNING_ON_VALGRIND ? 200u : 1800u);
   EXPECT_GT(pauses, 50u) << "the set includes runs that pause and resume";
   EXPECT_GT(deep, 20u) << "the set includes polls inside nested calls";
   EXPECT_GT(scopes_with_variables, 100u) << "scopes and their variables are recorded";

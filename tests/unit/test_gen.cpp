@@ -23,7 +23,8 @@ bool contains(const std::string & s, const char * needle) {
   return s.find(needle) != std::string::npos;
 }
 
-constexpr uint64_t kSeeds = 160;
+/// The seeds run on lang-tang: fewer where each operation costs more.
+const uint64_t kSeeds = tt::heavy_instruments() ? 60 : 160;
 
 }  // namespace
 
@@ -145,7 +146,7 @@ TEST(Generator, EveryProgramRunsToTheEndOnLangTangAndRunsTheSameTwice) {
       oracle::Verdict first = oracle::lang_tang_run(p.source, script);
       oracle::Verdict second = oracle::lang_tang_run(p.source, script);
       ASSERT_EQ(first.kind, oracle::Kind::Output) << "seed " << seed << (script ? " script" : " template") << ": " << first.str() << "\n" << p.source;
-      ASSERT_TRUE(oracle::agree(first, second)) << "seed " << seed << " is not repeatable: " << first.str() << " then " << second.str();
+      ASSERT_TRUE(first.kind == second.kind && oracle::agree(first, second)) << "seed " << seed << " is not repeatable: " << first.str() << " then " << second.str();
       refused += first.kind == oracle::Kind::Reject;
     }
   }

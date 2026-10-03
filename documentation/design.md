@@ -828,14 +828,17 @@ comparison and the ledger rules.
 `make test-oracle` (part of `make test`) runs every corpus file through
 `gltang_parse` and through ctang's own parse in a child (`tests/oracle/oracle_ctang`,
 the one program here that includes ctang), compares the verdicts - `accept(n)`
-with the node count, `reject`, ctang's `killed` - and holds the result against
-`documentation/divergence-ledger.md`.
+with the node count, `reject`, ctang's `killed` - and then **runs every file on
+both engines** and compares what they did (see "Verification" below). Both
+comparisons are held against `documentation/divergence-ledger.md`.
 
 - It **fails when ctang is absent, and never skips.** `ORACLE_PC` names the
   package, and a bogus one is how the gate is seen to fail.
 - A divergence is accepted only if a `recorded` row names that corpus file.
-- A `recorded` row that names a file that agrees is **stale** and fails.
-- An unrecorded divergence fails, naming the file.
+- A `recorded` row that names a file that agrees in execution is **stale** and
+  fails (the parse comparison does not judge staleness: a row names the files
+  that diverge in execution, which parse the same).
+- An unrecorded divergence fails, naming the file and the first difference.
 - A runner that exits with a usage or read error, or prints something
   unreadable, is a failure of the harness and throws; only a signal or the
   wall clock is `killed`.
@@ -844,12 +847,11 @@ All of this is a pure function (`oracle::judge`) driven by planted cases in
 `tests/unit/test_judge.cpp`, and the differential itself mutates a real
 verdict and requires the judge to name the file.
 
-At this commit the corpus has no divergence, so no row is `recorded` against a
-file. The rows are the departures the spec lists: ctang's open section 13 items
-(9 and 13), the per-context generator, budgets and the pause and unwind
-outcomes, and error reporting. The ledger is closed when no row is `open`: with story 10 it is, because
-section 13.9 (D-001), the last open row, is a recorded departure - the error is
-listed. The execution differential of story 11 may open rows again.
+The rows are the departures the spec lists: ctang's open section 13 items (9
+and 13), the per-context generator, budgets and the pause and unwind outcomes,
+error reporting, and everything the execution differential found (D-009 to
+D-015, D-017, D-023 to D-029). The ledger is closed when no row is `open`, and
+it is: its final state is in "Verification".
 
 Two things the corpus found about ctang are worth recording here because they
 are properties of the language and not of the port: `\r` is not whitespace, so
@@ -857,6 +859,281 @@ a CRLF source is a syntax error in both engines
 (`script/reject-crlf-line-endings.tang`), and a digit sequence of four or more
 digits after a backslash is a syntax error, not an octal escape followed by a
 digit (`script/reject-octal-four-digits.tang`).
+
+## Verification
+
+Story 11 makes lang-tang's behaviour something that is *checked* and not merely
+tested, and every instrument it adds is shown to fail on a defect it was meant
+to catch. Five instruments, one proof that they work, and the ledger they feed.
+
+### The execution comparison
+
+`oracle_ctang run-script|run-template FILE` runs the file in ctang and prints
+`refused`, or the rendered output (`gta_unicode_string_render`: every segment
+encoded per its tag) and the final result as a **kind and a canonical text**:
+
+- null, function, library, rng: the empty text; bool `true`/`false`; integer
+  decimal; float `%.17g` of the double; string its bytes;
+- an error is its **message** (a marker is its marker text) and never the file
+  and line it came from, which ctang's errors do not carry (D-018);
+- an array is its count and its elements one level down, each as kind and text,
+  a container element being its kind and count; a map is its count only, because
+  its key order is D-015 and a key list would turn every map result into a row;
+- a result pointer that cannot be a heap object is the kind `garbage` (D-023).
+
+`tests/oracle/run_lang_tang.h` gives lang-tang the same program with 200 million
+fuel (a program it pauses on is `Paused`, which agrees with a ctang killed by the
+wall clock, and with nothing else), the default libraries and no host extras,
+and reduces its result by the same rule. `agree` compares the output bytes, the
+result kind and the result text.
+
+**Which ctang executor.** ctang has two: an x86-64 JIT and a bytecode virtual
+machine, and requires them to agree. The runner uses the **virtual machine**
+(`GTA_PROGRAM_FLAG_DISABLE_BINARY`, environment ignored) and never the JIT: the
+JIT exists on one architecture, and it asserts while compiling
+`script/tests-first-program.tang`, a program ctang's own parse tests contain,
+where the virtual machine runs it. (The story says "never its bytecode engine or
+JIT"; ctang has no third executor, so this is the reading that can be run, and
+it is reported as such.)
+
+**What is not compared**, and why: the error list (lang-tang's alone, D-006),
+error origins (D-018), the order of map keys (D-015), and the rendered text of
+`random.global` and `random.default` (D-003; `random.seeded` is compared and
+agrees word for word). The wall clock for the ctang child is 2.5 seconds and its
+address space is bounded at 2 GiB, because ctang allocates without end on a
+program that ends in a function declaration (D-011).
+
+**Rejected alternatives.** Running ctang in-process: it crashes, hangs and
+asserts, and AD-2 and AD-16 keep it out of every library and tool. Comparing
+`tang`'s stdout: it prints no result. Comparing the container renderings as
+text: it makes D-013 and D-015 into noise on every map. A skip list for the
+corpus: the test has one, with each entry's reason, and it is empty - the
+reject-* files are run too (both engines must refuse them), the files the
+compiler refuses are listed with the reason (`kCompileRefused`), and a file that
+diverges is a ledger row and never a skip.
+
+### The execution corpus
+
+555 files under `tests/corpus/` (147 before): 485 that both engines run to the
+end, 64 that both refuse, and six others: the three runaways (lang-tang pauses,
+ctang is killed), the one program ctang cannot finish (D-011), and the two that
+ctang refuses and lang-tang runs (D-026). It covers every operator and cast and their error kinds, strings (every
+encoding, slices with every step, graphemes), arrays and maps, the four loops
+with `break` and `continue`, functions, recursion to the depth budget, `use` of
+`math` and `random.seeded`, every template construct with its segment encodings,
+and a file or more for every recorded row. A file is refused by both engines
+exactly when its name says so (`reject-*`) or it is on `kCompileRefused`.
+
+### The differential fuzz run
+
+`tests/fuzz/gen.h` builds a valid program from a seed with a seeded
+`std::mt19937_64` (every choice by integer arithmetic, so a seed gives the same
+program on every machine), in script or in template form, over the whole
+language, bounded: a few kilobytes, loops of at most six passes nested three
+deep, single recursion only, and every assignment inside a loop cut to a bounded
+length. Its comment lists each avoided construct with its row id:
+D-003/D-021 (`random.global`, native values), D-009 (a loop or an untaken `if` as
+the last value: a program always ends in an expression statement), D-010 (every
+function ends in a `return`), D-011 (functions are declared first), D-012,
+D-013 (containers hold integers), D-014, D-015 (a map with more than one key is
+never printed), D-017, D-023, D-024, D-025 (no global array in a function),
+D-026 (`use` once, at the top), D-027 (arrays are compared with `==` only),
+D-028 (no array is repeated or sliced) and D-029 (the right operand of a string
+`+` is `san(x)`, which turns an error into 0).
+
+`make test-oracle` runs the fixed batch (`FuzzDiff.FixedBatch`: seeds 1 to 220,
+both modes, 440 programs) in 9 seconds; `make fuzz-diff FUZZ_DIFF_COUNT=N
+FUZZ_DIFF_SEED=S` runs a campaign. A divergence prints its seed, mode and whole
+program and the first byte at which the output or result differs; the test that
+plants one requires the failure to name the seed. `tests/unit/test_gen.cpp` runs
+the same programs on lang-tang alone (determinism, that every one compiles and
+finishes, that the avoided constructs never appear, that the whole language is
+reached), so the lang-tang side is also run under torture.
+
+First measurements: 12,000 programs (seeds 1 to 6,000, both modes) ran in 61
+seconds with no divergence once the findings below were fixed or recorded. The first run of 440 had 35 divergences and 5 distinct causes.
+
+**Rejected alternatives.** Random bytes through the parser (the libFuzzer
+harnesses already do that, and almost nothing they produce runs); a generator
+without types (nearly every program would be one error); one ctang process per
+batch (a crash or hang would lose the batch's verdicts).
+
+### Divergences found, and what became of each
+
+- **Fixed in lang-tang** (with a test): a slice part held in a variable that is
+  null was `Invalid index`, where ctang, whose parser pushes a null for every
+  omitted part, takes any null as omitted (fuzz seed 8; `Slice.AVariableHolding
+  NullIsAnOmittedPartAsInCtang`). Reading a host string whose bytes are plain
+  ASCII charged no fuel for the copy, so a loop that read a megabyte string paid
+  a few units per megabyte (found by the native gate;
+  `Natives.ReadingAHugeHostStringInALoopIsChargedForEachCopy`).
+- **Recorded, found by the corpus:** D-009 to D-011 (what a loop, an untaken `if`
+  or a function without `return` evaluates to, and a trailing function
+  declaration, on which ctang's virtual machine does not terminate), D-012
+  (rewritten), D-013 (widened to `print`), D-014 (corrected: array `*` copies in
+  ctang, only `+` aliases), D-015, D-017, and the new D-023 (a program ending in
+  `use` leaves a garbage result in ctang), D-024 (a parameter named like its
+  function), D-025 (stores into a global array from a recursive function) and
+  D-026 (where `use` may appear).
+- **Recorded, found by the fuzz run:** D-027 (`!=` on arrays is `==`), D-028
+  (arithmetic on an element of an array that `*` or a slice built is done in
+  place: `a = [5] * 2; x = a[0] - 1;` leaves `a` as `[4, 5]`) and D-029 (a string
+  plus the error `Not implemented` is `Not supported`).
+- **Not defects, noted:** a ctang that takes 2.5 seconds for `[1] * 100000000`
+  (the early seed 67) is slow and not wrong, and the generator no longer repeats
+  arrays; ctang's JIT asserts on `tests-first-program.tang` (see above).
+
+### The frame-differential observer
+
+`tests/observer.h` registers an OBSERVE handler (runtime-core's observe key) and
+a request kind that is posted once and stays pending, so that every poll takes
+the slow path and the handler runs at each of them. Per poll it records the
+verdict and, for each frame of the **abstract frame walk and nothing else**, the
+depth, engine, poll identity, file and line, slot count, each slot's kind and
+inspected text, and each scope's kind and name and its variables' names and
+inspected text. It compares two traces poll by poll and reports the first
+divergence with its poll index and frame. Heap addresses are never compared:
+only the inspected text of a value slot, and the header words (function, pc, sp,
+depth) as the numbers the inspector prints, which are the same in every
+configuration. It reads no engine structure, so story 15 can use it for
+interpreter against JIT and story 12 for a debugger attached against absent.
+
+`tests/unit/test_observer.cpp` runs 76 programs - forty corpus files, twelve
+generated programs, twelve sites (pauses inside calls, three-deep template
+calls, scopes of each policy exhausted by a loop and by a native, errors across
+a boundary, 40 children), all pausing and resuming - four ways: plain,
+torture+verify, a stack that moves at every push, and phase-shuffled (AD-5). The
+traces, the output, the result and the error list must be equal (2,290 recorded
+polls and 3,552 pauses per configuration), and all four instruments together are
+checked on the sites. A poll costs about a millisecond to record (the globals of
+every frame are read), so a generated program records its first 150 polls and
+compares the count of the rest.
+
+It is seen to fail: a planted slot mismatch, a missing poll, a different depth, a
+changed variable and a changed line are each reported with the poll and the
+frame; an order-dependent DECIDE pair (B pauses unless A already ran) is caught
+by the shuffled run at the verdict of the first poll where B ran first, and an
+order-independent pair is not.
+
+### The native budget gate
+
+`src/vm/natives.def` is the engine's list of natives, 17 entries: 14 whose work
+the guest controls (`ARRAY_GROW`, `DEEP_COPY`, `EQUALITY`, `ARRAY_CONCAT`,
+`ARRAY_REPEAT`, `ARRAY_SLICE`, `STRING_CONCAT`, `STRING_SUBSTRING`,
+`STRING_SLICE`, `STRING_RETAG`, `STRING_RENDER`, `STRING_FROM_UTF8`, `PRINT`,
+`RENDER_TO_STRING`) and 3 verdict polls (`ALLOCATION_REFUSED`, `CALL_REFUSED`,
+`HALT_REQUEST`: one poll, no work). Every poll in the sources is
+`GLTANG_NATIVE_POLL(exec, NAME, work)` or a pacer made with
+`GLTANG_PACER(exec, NAME)`, and a name that is not in the list does not compile.
+
+`tests/unit/test_native_gate.cpp` reads the list and the sources and fails the
+build if a poll names no entry, if an entry is named by nothing, or if an
+unbounded entry has no row in the table - so a new native without a gate row is
+a failing build. Each row has a **build** (makes the operand; its fuel and bytes
+are the baseline, measured first on its own) and an **op** (the adversarial
+operation, on a budget of its own beyond the build): 28 rows, at least one per
+unbounded native, from `s = "x"; while (true) { s = s + s; }` under 1,000 fuel to
+repeating an array into 8 GB under a 4 MiB memory budget. A row requires an
+outcome that is a verdict (paused, unwound with `GRCORE_ERR_LIMIT`, or the
+program's own error value) and bounds **the work done**, measured by counters
+the test owns: the fuel the context charged (budget plus a slack of 1,500, a few
+poll chunks) and the most bytes the group held at once, counted by the allocator
+and page provider the group was given (`tt::Tracker`), against the largest
+allocation the operation legitimately makes. A memory row also requires a
+collection to have run before the verdict (`grheap_stats.collections`). The wall
+clock is only a backstop (an `alarm` kills a hung case). The one native with a
+slack of its own is `STRING_FROM_UTF8`: the copy and scan of a host string are
+single library calls, so the whole charge (1 MiB / 64 = 16,384) is made at once
+before any of the work, and the verdict follows it.
+
+Under the collector's torture mode and a moving stack the operands are smaller
+(32 KiB of text, 20,000 elements, a 32 KiB host string) and the one row that
+builds a container 2,200 deep, which copies it at every level, is left out
+(`kSmall`): there every allocation is a collection, and it runs in the plain
+build.
+
+Each limit has its own row: **fuel** (an endless loop), **memory** (a string that
+doubles forever, and a list or a map built in an endless loop, each under a
+small budget: the budget refuses the growth after a collection has run, and the
+fuel ends the loop), **guest depth** (past the budget: the `Recursion Limit
+Exceeded` value; with no budget at all: the fuel ends it, with the frames on
+the guest stack and the C stack untouched) and **native depth** (containers
+nested past 2,048: the error value in copy, equality and print). The ones that
+need the host are separate tests: the **wall clock** (a timer thread posts the
+request while a long native runs: an unwind, or a pause for a loop), a **page of
+10,000 children** under the request budget (a pause, then `GRCORE_ERR_LIMIT`,
+and no child stopped by its own scope), and a native inside a scope.
+
+### Planted defects in the library
+
+`tools/check-planted.sh` builds a throwaway copy of the library under
+`build/planted/` (nothing in the working tree is touched), applies one patch from
+`tests/planted/` at a time with `patch --fuzz=0` (it checks that the patch
+matched and that a file changed, so a patch that applies to nothing fails the
+script), builds the test named for it and requires it to **fail**, then removes
+the patch and requires the same test to **pass** (the control). `--selftest`
+shows the script fails on a patch that matches nothing and reports one that
+breaks nothing as not caught. Observed:
+
+| Patch | Defect | Instrument | The failing line observed |
+| --- | --- | --- | --- |
+| 01 missing-root | the execution's temporaries are not reported to the collector | torture+verify over `testExecute_complex` | `barrier-verify: the holder is not a heap object: object type "(none)"`, abort |
+| 02 missing-gc-store | an array element stored with a plain assignment | barrier-verify, the same | `barrier-verify: a slot was written without grheap_store: object type "lang-tang array storage"`, abort |
+| 03 order-dependent-decide | two DECIDE handlers whose combined vote depends on their order | `testObserver` | `script/arithmetic.tang: plain against phase-shuffled: poll 0: verdict: continue against pause` |
+| 04 native-never-polls | string concatenation without its polls | `testNative_gate` | `bytes held 25310280 against a build that held 135360 and a bound of 2097152 more` |
+| 05 frame-slot-mismatch | a value slot's text gains a character under torture | `testObserver` | `script/arithmetic.tang: plain against torture+verify: poll 0, frame 0: slot 4 text: null against null!` |
+| 06 wrong-operator | integer `*` answers one too many | `testOracle` | `unrecorded divergence: script/array-built-in-a-loop.tang` |
+| 07 silent-runner | the oracle runner exits 0 and prints nothing | `testOracle` | `the oracle runner printed something unreadable for .../arithmetic.tang` |
+
+`make test` runs 03 to 07 (`check-planted-quick`, about 80 seconds with the
+first build of the copy); 01 and 02 are part of `make test-torture`
+(`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
+runs all seven.
+
+### What runs where
+
+- `make test`: every unit suite; the engine suites, the generated batch, the
+  frame observer, the native gate and the corpus run of lang-tang alone again
+  under `GRHEAP_TORTURE=1 GRHEAP_VERIFY=1` and again with
+  `GLTANG_TEST_MOVING_STACK=1` (`TORTURE_BOUNDED`); the oracle differential
+  (parse, execution, the fixed fuzz batch); and the quick planted defects.
+- `make test-torture`: **every** unit suite (`TORTURE_SUITES`, no exclusions)
+  under ASan+UBSan with torture, verify and a moving stack, then the two torture
+  planted defects. The oracle differential is not run under torture: the child
+  ctang is not the subject, and the lang-tang side of the corpus is
+  `testExec_corpus`, which is.
+- `make test-tsan`, `test-asan`, `test-valgrind-quiet`: every unit suite (the
+  new ones included), as before. Where each operation costs ten or fifty times
+  more (the collector's torture mode, a moving stack, Valgrind) the new suites
+  scale their work down and say how: `tt::heavy_instruments()` in
+  `tests/exec_harness.h` is true there, the corpus run gives each file 20,000
+  fuel instead of two million and leaves out three files that build containers
+  thousands deep, the native gate uses 32 KiB strings and 20,000-element arrays
+  and leaves out the 2,200-deep row, the generated batch runs 60 seeds, and
+  under Valgrind the observer records each program's first eight polls and
+  compares the count of the rest (its 76 programs still pause and resume 3,552
+  times) and the wall-clock test with a real timer thread is skipped, because
+  Valgrind does not wake a sleeping thread while another spins; the same test
+  with the request posted from inside the run, which needs no scheduler, runs
+  everywhere. Observed: `make test-valgrind-quiet` about four minutes,
+  `make test-torture` about a minute and a half, `make test -j8` from an empty tree
+  2 minutes 27 seconds (3 minutes 54 seconds serial).
+
+### The ledger, final
+
+29 rows: **26 recorded, 3 fixed, 0 open.** The ledger is closed. Categories of
+the recorded rows: 17 ctang defects, 5 limits, 3 error-reporting, 1 rng. ctang
+stays in `libraries.txt` and the oracle gate: whether it still needs to be the
+oracle is a later decision (AD-16 retirement).
+
+### What is not done
+
+No clang run: the libFuzzer harnesses were not built or run here (no clang
+campaign), and the 12,000-program differential is a measurement, not a long
+campaign. No outside test suite (Test262 and the like). No interpreter-against-JIT
+differential and no debugger-attached comparison: the observer is built for them
+and they are stories 15 and 12. The execution corpus does not compare the order
+of a map's keys or the error list, which have no ctang equivalent.
 
 ## Allocation failure
 
@@ -1053,8 +1330,8 @@ every corpus and seed file once through the same entry points in an ordinary gcc
 build and fails on a crash - it is part of `make test`, so a regression a fuzzer
 once found is a failing test and not a campaign to repeat. Fifteen seconds of
 `fuzz_run` (307,000 executions, 2,940 new units) found nothing on the first
-run. No campaign is run here, and no differential fuzzing: that is the story
-that compares execution against ctang over generated programs.
+run. The differential fuzz run, which generates valid programs and runs them on
+both engines, is a different thing and is described under "Verification".
 
 ## What is not here
 
@@ -1063,9 +1340,8 @@ No library other than `math` and `random`, and in those no `next_int_range`,
 `Not implemented`, as in ctang. No arrays or maps injected from the host (scalars,
 native functions, templates and libraries only), no template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
-differential against ctang and the closing of the ledger are story 11's: the
-oracle stays parse-only, and the ledger is closed (no open row) as of story 10,
-though the execution differential may open rows again. No debugger beyond the frame protocol the engine registers
+differential against ctang is described under "Verification"; the ledger is
+closed (no open row). No debugger beyond the frame protocol the engine registers
 (the frame walk, scopes and variables read from a paused context, which now name
 the right program for every frame). No `simplify`. No JIT, no snapshots. No
 parse-time charge to a context's memory (see "The memory-budget contract"). No

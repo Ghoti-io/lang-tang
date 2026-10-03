@@ -679,11 +679,24 @@ else
 	@printf 'check-symbols: skipped (Linux only)\n'
 endif
 
-# The suites that drive the engine. `make test` runs them again with the heap
-# collecting before every allocation and checking every store (torture and
-# verify), and again with a guest stack that moves on every push; test-torture
-# runs them under ASan as well.
-TORTURE_SUITES := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate
+# Every unit suite runs again with the heap collecting before every allocation
+# and checking every store (torture and verify), and again with a guest stack
+# that moves on every push, and `make test-torture` runs all of them under ASan
+# and UBSan with all three at once. `make test` runs the engine-driving suites
+# (TORTURE_BOUNDED) in both modes, which keeps it short; test-torture runs
+# EVERY suite (TORTURE_SUITES) except the ones listed with their reason in
+# TORTURE_EXCLUDED.
+#
+# Excluded from test-torture, with the reason each:
+#   (none) - every unit suite of this library runs there. The thread-migration
+#   tests (testEngine, testTemplate) run under it as under plain ASan: the
+#   collector's torture mode is per context and the migrations are of whole
+#   contexts. test-tsan runs them under the thread sanitizer separately. The
+#   allocation-failure sweep (testOom) fails the Nth allocation of each run, and
+#   under torture an allocation also collects, which only makes it slower.
+TORTURE_EXCLUDED :=
+TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus
 
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
 	@for test_exe in $(TEST_EXECUTABLES); do \
@@ -692,7 +705,7 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
 	done
 	@for mode in "GRHEAP_TORTURE=1 GRHEAP_VERIFY=1" "GLTANG_TEST_MOVING_STACK=1"; do \
-		for t in $(TORTURE_SUITES); do \
+		for t in $(TORTURE_BOUNDED); do \
 			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
 			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
 		done; \
@@ -867,7 +880,7 @@ test-asan: $(ASAN_TEST_EXECUTABLES) ## Build with ASan+UBSan and run the tests
 
 ASAN_TORTURE_EXECUTABLES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TORTURE_SUITES)))
 
-test-torture: $(ASAN_TORTURE_EXECUTABLES) ## ASan+UBSan with the heap in torture and verify and a moving guest stack
+test-torture: $(ASAN_TORTURE_EXECUTABLES) check-planted-slow ## ASan+UBSan with the heap in torture and verify and a moving guest stack
 	@for test_exe in $(ASAN_TORTURE_EXECUTABLES); do \
 		printf '\n### ASan+UBSan torture %s ###\n\n' "$$(basename $$test_exe)"; \
 		GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 GLTANG_TEST_MOVING_STACK=1 \
@@ -1051,7 +1064,7 @@ fuzz-diff: oracle-present $(ORACLE_RUNNER) $(FUZZDIFF_TEST) ## Differential fuzz
 # file once through the same entry points the fuzzers call, in an ordinary
 # build, and fails on a crash. It is part of `make test`, so a regression that
 # a fuzzer once found is a failing test and not a campaign to repeat. It is not
-# a campaign, and no differential fuzzing is done here.
+# a campaign; the differential fuzz run, which needs ctang, is `fuzz-diff` below.
 FUZZ_REPLAYS := $(APP_DIR)/fuzz/replay_parse$(EXE_EXTENSION) $(APP_DIR)/fuzz/replay_template$(EXE_EXTENSION) \
 	$(APP_DIR)/fuzz/replay_run$(EXE_EXTENSION)
 -include $(APP_DIR)/fuzz/replay_parse.d $(APP_DIR)/fuzz/replay_template.d $(APP_DIR)/fuzz/replay_run.d

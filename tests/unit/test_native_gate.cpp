@@ -32,9 +32,9 @@
 #include "exec_harness.h"
 #include "test_helpers.h"
 
+#include <cctype>
 #include <chrono>
 #include <fstream>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -132,6 +132,10 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
 /// A row: the build alone, for the baseline, then the build and the op on a budget.
 void run_row(const Row & row) {
   SCOPED_TRACE(std::string(row.native) + ": " + row.name);
+  if (std::getenv("GLTANG_GATE_VERBOSE")) {
+    std::printf("  row %s: %s\n", row.native, row.name);
+    std::fflush(stdout);
+  }
   alarm(60);  // a hang is a failure, not a stuck suite
   Result base = run_source(row.build + " 0;", row, kUnlimited, kUnlimited);
   uint64_t memory = row.memory == kUnlimited ? kUnlimited : base.m.memory_peak + row.memory;
@@ -151,9 +155,19 @@ void run_row(const Row & row) {
   EXPECT_LT(r.seconds, 20.0) << "the wall clock is only a backstop, and this case needed it";
 }
 
-const char * kStr1M = "s = \"x\"; for (i = 0; i < 20; i += 1) { s = s + s; }";                  // 1 MiB of text
-const char * kHtml1M = "s = !\"x\"; for (i = 0; i < 20; i += 1) { s = s + s; }";                 // the same, tagged HTML
-const char * kArr200k = "a = [0] * 200000;";                                                      // 1.6 MB of elements
+/// Under the collector's torture mode every allocation is a collection, under a
+/// moving stack every push is a copy, and under Valgrind everything is slow, so
+/// the operands there are an order of magnitude smaller. A budget of 300 fuel is 19 KB of copying, and
+/// the smaller operands (32 KiB of text, 20,000 elements) are still well past it.
+bool instruments_on() {
+  return tt::heavy_instruments();
+}
+const bool kSmall = instruments_on();
+const std::string kDoublings = kSmall ? "15" : "20";                       // 32 KiB or 1 MiB of text
+const std::string kElements = kSmall ? "20000" : "200000";                // 160 KB or 1.6 MB of elements
+const std::string kStr1M = "s = \"x\"; for (i = 0; i < " + kDoublings + "; i += 1) { s = s + s; }";
+const std::string kHtml1M = "s = !\"x\"; for (i = 0; i < " + kDoublings + "; i += 1) { s = s + s; }";
+const std::string kArr200k = "a = [0] * " + kElements + ";";
 
 const unsigned kStops = PAUSED | LIMIT;
 const unsigned kStopsOrRefuses = PAUSED | LIMIT | FINISHED_ERROR;
@@ -167,6 +181,13 @@ std::vector<Row> rows() {
   // Memory: a string that doubles forever, with fuel enough that the memory budget is what ends it.
   t.push_back({"", "memory: doubling forever under a small budget", "s = \"xxxxxxxx\";", "while (true) { s = s + s; }", 2000000, 4 * kMiB, kStopsOrRefuses,
       8 * kMiB, true});
+  // Building a list or a map in an endless loop. The memory budget refuses the growth that would pass it
+  // (after a collection) and the loop, which survives a refusal, goes on until its fuel is spent, so the
+  // budget is small and the fuel moderate: each refused iteration collects.
+  t.push_back({"", "memory: building a list in an endless loop", "a = []; i = 0;", "while (true) { a[i] = i; i += 1; }", 1000000, 256 * 1024, kStopsOrRefuses,
+      2 * kMiB, true});
+  t.push_back({"", "memory: building a map in an endless loop", "m = {:}; i = 0;", "while (true) { m[\"key\" + i] = i; i += 1; }", 1000000, 256 * 1024, kStopsOrRefuses,
+      2 * kMiB, true});
   // Guest stack depth: recursion past the budget is an error value, not a crash.
   t.push_back({"", "guest depth: recursion past the budget", "function f(n) { return f(n + 1); }", "x = f(0); x;", 100000, kUnlimited, FINISHED_ERROR,
       4 * kMiB, false, GLTANG_ERROR_RECURSION_LIMIT});
@@ -176,8 +197,13 @@ std::vector<Row> rows() {
   unlimited_depth.calls = kUnlimited;
   t.push_back(unlimited_depth);
   // Native stack depth: a container nested past the value-depth bound is an error value in copy, equality and print.
-  t.push_back({"", "native depth: containers nested past the bound", "a = []; for (i = 0; i < 2200; i += 1) { a = [a]; }", "b = [a]; c = a == a; d = a + a; print(a); print(b.size); c;", 20000000,
-      kUnlimited, FINISHED_ERROR | FINISHED_OK, 128 * kMiB});
+  // Building the nest copies it at every level (2,200 levels, millions of allocations), which under the collector's
+  // torture mode is a collection each: that row runs in the plain build only (it is in the oracle differential
+  // and in the plain suite; nothing about the collector is shown by it that the other rows do not show).
+  if (!kSmall) {
+    t.push_back({"", "native depth: containers nested past the bound", "a = []; for (i = 0; i < 2200; i += 1) { a = [a]; }", "b = [a]; c = a == a; d = a + a; print(a); print(b.size); c;", 20000000,
+        kUnlimited, FINISHED_ERROR | FINISHED_OK, 128 * kMiB});
+  }
 
   // Guest-driven natives, one or more rows each. The golden row first.
   t.push_back({"STRING_CONCAT", "string doubling in an endless loop", "s = \"x\";", "while (true) { s = s + s; }", 1000, 32 * kMiB, kStops, 2 * kMiB});
@@ -188,19 +214,19 @@ std::vector<Row> rows() {
   t.push_back({"STRING_RETAG", "giving a huge string another encoding", kStr1M, "t = s.html;", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"STRING_RENDER", "encoding a huge string", kHtml1M, "t = s.render;", 300, 16 * kMiB, kStops, 12 * kMiB});
   Row from_host = {"STRING_FROM_UTF8", "reading a huge string a host gave", "x = 1;", "use big; t = big;", 300, 16 * kMiB, kStops, 12 * kMiB};
-  from_host.host_string = 1 * kMiB;
+  from_host.host_string = kSmall ? kMiB / 32 : kMiB;
   // The scan and the copy of a host string are not paced from inside; the whole
   // charge (1 MiB / 64 = 16,384 fuel) is made at once, before any of the work,
   // and the verdict follows it. That charge is this native's slack.
-  from_host.fuel_slack = 16384 + 1500;
+  from_host.fuel_slack = from_host.host_string / 64 + 1500;
   t.push_back(from_host);
   t.push_back({"PRINT", "printing a huge string", kStr1M, "print(s);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"PRINT", "printing a large container", kArr200k, "print(a);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"RENDER_TO_STRING", "rendering a large container with as string", kArr200k, "t = a as string;", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"RENDER_TO_STRING", "concatenating a string with a large container", kArr200k, "t = \"x\" + a;", 300, 16 * kMiB, kStops, 12 * kMiB});
-  t.push_back({"ARRAY_GROW", "growing a large array by one past its end", kArr200k, "a[200000] = 1;", 300, 16 * kMiB, kStops, 12 * kMiB});
+  t.push_back({"ARRAY_GROW", "growing a large array by one past its end", kArr200k, "a[" + kElements + "] = 1;", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"DEEP_COPY", "copying a large container into another", kArr200k, "b = [a];", 300, 16 * kMiB, kStops, 12 * kMiB});
-  t.push_back({"EQUALITY", "comparing two huge equal arrays", "a = [0] * 200000; b = [0] * 200000;", "a == b;", 300, 16 * kMiB, kStops, 4 * kMiB});
+  t.push_back({"EQUALITY", "comparing two huge equal arrays", "a = [0] * " + kElements + "; b = [0] * " + kElements + ";", "a == b;", 300, 16 * kMiB, kStops, 4 * kMiB});
   t.push_back({"ARRAY_CONCAT", "joining two large arrays", kArr200k, "c = a + a;", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"ARRAY_REPEAT", "repeating an array into 40 MB", "a = [0] * 1000;", "c = a * 5000;", 300, 64 * kMiB, kStops, 48 * kMiB});
   t.push_back({"ARRAY_REPEAT", "repeating an array into 8 GB under a small memory budget", "a = [0] * 1000;", "c = a * 1000000; c;", 300, 4 * kMiB, FINISHED_ERROR,
@@ -227,14 +253,47 @@ std::vector<Native> engine_natives() {
   std::ifstream in(src_dir() + "/natives.def");
   std::string line;
   std::vector<Native> list;
-  std::regex entry("^GLTANG_NATIVE\\((\\w+), ([01]), \"[^\"]*\"\\)$");
+  const std::string head = "GLTANG_NATIVE(";
   while (std::getline(in, line)) {
-    std::smatch m;
-    if (std::regex_match(line, m, entry)) {
-      list.push_back({m[1], m[2] == "1"});
+    // GLTANG_NATIVE(NAME, 1, "text")
+    if (line.compare(0, head.size(), head) != 0) {
+      continue;
     }
+    size_t comma = line.find(',', head.size());
+    if (comma == std::string::npos || comma + 3 >= line.size()) {
+      continue;
+    }
+    char flag = line[comma + 2];
+    if ((flag != '0' && flag != '1') || line[comma + 3] != ',') {
+      continue;
+    }
+    list.push_back({line.substr(head.size(), comma - head.size()), flag == '1'});
   }
   return list;
+}
+
+/// The names that follow `macro(first-argument, ` in a source text.
+std::vector<std::string> named_after(const std::string & text, const std::string & macro) {
+  std::vector<std::string> names;
+  for (size_t at = text.find(macro); at != std::string::npos; at = text.find(macro, at + 1)) {
+    size_t comma = text.find(',', at);
+    size_t close = text.find(')', at);
+    if (comma == std::string::npos || (macro == "GLTANG_PACER(" && close < comma)) {
+      continue;
+    }
+    size_t i = comma + 1;
+    while (i < text.size() && text[i] == ' ') {
+      ++i;
+    }
+    size_t j = i;
+    while (j < text.size() && (std::isalnum((unsigned char)text[j]) || text[j] == '_')) {
+      ++j;
+    }
+    if (j > i) {
+      names.push_back(text.substr(i, j - i));
+    }
+  }
+  return names;
 }
 
 std::string slurp(const std::string & path) {
@@ -287,19 +346,17 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
     listed.insert(n.id);
   }
   std::set<std::string> named;
-  std::regex poll("GLTANG_NATIVE_POLL\\(\\s*[^,]+,\\s*(\\w+)\\s*,");
-  std::regex pacer("GLTANG_PACER\\(\\s*[^,]+,\\s*(\\w+)\\s*\\)");
   const char * files[] = {"container.c", "errorlist.c", "execution.c", "interp.c", "libvalue.c", "ops.c", "string.c", "template.c", "text.c", "value.c"};
   size_t polls = 0;
   for (const char * f : files) {
     std::string text = slurp(src_dir() + "/" + f);
     ASSERT_FALSE(text.empty()) << f;
-    for (std::sregex_iterator it(text.begin(), text.end(), poll), end; it != end; ++it) {
-      named.insert((*it)[1]);
+    for (const std::string & id : named_after(text, "GLTANG_NATIVE_POLL(")) {
+      named.insert(id);
       ++polls;
     }
-    for (std::sregex_iterator it(text.begin(), text.end(), pacer), end; it != end; ++it) {
-      named.insert((*it)[1]);
+    for (const std::string & id : named_after(text, "GLTANG_PACER(")) {
+      named.insert(id);
       ++polls;
     }
     // A poll that names nobody: the raw call is only the definition (execution.c)
@@ -307,16 +364,22 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
     std::istringstream lines(text);
     std::string line;
     int number = 0;
+    int raw_in_execution = 0;
     while (std::getline(lines, line)) {
       ++number;
       bool raw = line.find("gltang_vm_native_poll(") != std::string::npos;
       bool forwarded = line.find("gltang_vm_native_poll_as(") != std::string::npos;
+      raw_in_execution += raw && std::string(f) == "execution.c";
       if (raw && std::string(f) != "execution.c") {
         ADD_FAILURE() << f << ":" << number << ": a poll that names no native: " << line;
       }
       if (forwarded && line.find("pacer->native") == std::string::npos && std::string(f) != "execution.c") {
         ADD_FAILURE() << f << ":" << number << ": a poll that names no native: " << line;
       }
+    }
+    if (std::string(f) == "execution.c") {
+      // The definition of the poll and the one call inside gltang_vm_native_poll_as.
+      EXPECT_EQ(raw_in_execution, 2) << "execution.c may hold the raw poll only in its definition and in the naming wrapper";
     }
   }
   EXPECT_GE(polls, 17u);
@@ -334,7 +397,7 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
 
 TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
   std::vector<Row> t = rows();
-  EXPECT_GE(t.size(), 25u);
+  EXPECT_GE(t.size(), 26u);
   for (const Row & row : t) {
     run_row(row);
   }
@@ -344,19 +407,93 @@ TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
 // The limits that need the host: the wall clock, and a page of children
 // ---------------------------------------------------------------------------
 
-TEST(NativeGateLimits, WallClockTheHostTimerPostsTheRequestAndALongNativeStops) {
-  // The host's timer thread posts the time request while a long native is
-  // running. A native cannot pause (AD-21), so the verdict is an unwind; the
-  // endless loop, which polls at every back-edge, pauses.
-  struct Case {
-    const char * name;
-    std::string source;
-  };
-  const Case cases[] = {
+namespace {
+
+/// Posts the time request from inside the run, at the Nth poll: the host timer
+/// without the scheduler. The request kind it defines stays pending, so that
+/// every poll takes the slow path and this handler runs at each of them.
+struct Poster {
+  GRCORE_Port * port = nullptr;
+  uint64_t polls = 0;
+  uint64_t at = 0;
+  bool posted = false;
+};
+
+void poster_handler(GRCORE_Context *, void * value, GRCORE_PollCall *) {
+  Poster * p = static_cast<Poster *>(value);
+  if (!p->posted && ++p->polls >= p->at) {
+    p->posted = true;
+    grcore_port_post(p->port, GRCORE_REQUEST_TIME);
+  }
+}
+
+const GRCORE_Key kPosterKey = {"test timer", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_OBSERVE, nullptr, poster_handler};
+
+struct WallCase {
+  const char * name;
+  std::string source;
+};
+
+std::vector<WallCase> wall_cases() {
+  return {
       {"an endless loop of doublings", "s = \"x\"; while (true) { s = s + s; }"},
-      {"a long chain of array copies", "a = [0] * 400000; while (true) { b = a + a + a + a; }"},
+      {"a long chain of array copies", "a = [0] * 40000; while (true) { b = a + a + a + a; }"},
   };
-  for (const Case & c : cases) {
+}
+
+/// Runs a case until the request is posted by `post`, and checks the verdict.
+void check_wall_clock_verdict(const WallCase & c, tt::Context & context, GRCORE_Result r, double seconds) {
+  EXPECT_TRUE(r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) << c.name << ": r=" << r;
+  EXPECT_LT(seconds, 20.0) << c.name << ": the verdict came within the backstop";
+  EXPECT_LT(context.tracker.peak_bytes, 128 * kMiB) << c.name << ": bounded by the memory budget";
+  if (r == GRCORE_OK) {
+    ASSERT_GE(grcore_context_pause_key_count(context.context), 1u);
+    EXPECT_EQ(grcore_context_pause_key(context.context, 0), grcore_core_key(GRCORE_REQUEST_TIME)) << c.name;
+  }
+}
+
+}  // namespace
+
+TEST(NativeGateLimits, WallClockTheRequestPostedFromInsideTheRunStopsALongNative) {
+  // The time request is posted at the 200th poll, which in the chain of array
+  // copies is inside a native. A native cannot pause (AD-21), so the verdict
+  // there is an unwind; the endless loop, which polls at every back-edge,
+  // pauses. Deterministic: no thread and no sleep.
+  for (const WallCase & c : wall_cases()) {
+    SCOPED_TRACE(c.name);
+    tt::Compiled compiled(c.source);
+    ASSERT_TRUE(compiled.ok());
+    tt::Config config;
+    config.memory_bytes = 64 * kMiB;
+    tt::Context context(compiled.program, config);
+    ASSERT_TRUE(context.ok());
+    Poster poster;
+    poster.at = 200;
+    ASSERT_EQ(grcore_context_port(context.context, &poster.port), GRCORE_OK);
+    GRCORE_RequestKind kind;
+    ASSERT_EQ(grcore_context_request_kind(context.context, &kPosterKey, &kind), GRCORE_OK);
+    ASSERT_EQ(grcore_context_register(context.context, &kPosterKey, &poster), GRCORE_OK);
+    ASSERT_EQ(grcore_port_post(poster.port, kind), GRCORE_OK);
+    alarm(60);
+    auto started = std::chrono::steady_clock::now();
+    GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
+    double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    alarm(0);
+    context.has_run = true;
+    EXPECT_TRUE(poster.posted);
+    grcore_port_release(poster.port);
+    check_wall_clock_verdict(c, context, r, seconds);
+  }
+}
+
+TEST(NativeGateLimits, WallClockTheHostTimerThreadPostsTheRequestAndALongNativeStops) {
+  // The same with a real timer thread. It needs the scheduler to run a sleeping
+  // thread while another spins, which Valgrind does not do, so it is skipped
+  // there; the deterministic test above runs everywhere.
+  if (RUNNING_ON_VALGRIND) {
+    GTEST_SKIP() << "Valgrind serialises threads and does not wake a sleeping one while another spins";
+  }
+  for (const WallCase & c : wall_cases()) {
     SCOPED_TRACE(c.name);
     tt::Compiled compiled(c.source);
     ASSERT_TRUE(compiled.ok());
@@ -377,14 +514,8 @@ TEST(NativeGateLimits, WallClockTheHostTimerPostsTheRequestAndALongNativeStops) 
     alarm(0);
     timer.join();
     grcore_port_release(port);
-    EXPECT_TRUE(r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) << "r=" << r;
-    EXPECT_LT(seconds, 10.0) << "the verdict came within the backstop";
-    EXPECT_LT(context.tracker.peak_bytes, 128 * kMiB) << "bounded by the memory budget";
-    if (r == GRCORE_OK) {
-      ASSERT_GE(grcore_context_pause_key_count(context.context), 1u);
-      EXPECT_EQ(grcore_context_pause_key(context.context, 0), grcore_core_key(GRCORE_REQUEST_TIME));
-    }
     context.has_run = true;
+    check_wall_clock_verdict(c, context, r, seconds);
   }
 }
 

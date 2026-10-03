@@ -34,6 +34,7 @@
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 
 #include <malloc.h>
+#include <valgrind/valgrind.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -253,6 +254,19 @@ struct Config {
 inline bool moving_stack_requested() {
   const char * v = std::getenv("GLTANG_TEST_MOVING_STACK");
   return v && *v && std::strcmp(v, "0") != 0;
+}
+
+inline bool torture_requested() {
+  const char * v = std::getenv("GRHEAP_TORTURE");
+  return v && *v && std::strcmp(v, "0") != 0;
+}
+
+/// Whether each operation of this run costs an order of magnitude more than
+/// usual: the collector's torture mode (a collection per allocation), a stack
+/// that moves at every push, or Valgrind. The suites that scale their work to
+/// the run read this, and say what they scale.
+inline bool heavy_instruments() {
+  return torture_requested() || moving_stack_requested() || RUNNING_ON_VALGRIND;
 }
 
 /// An element or member of the result, read as plain data.

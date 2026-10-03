@@ -16,9 +16,14 @@ unwind), the host API over it - libraries (`math`, `random` and the host's own,
 native functions, lazy factories), an error list that records the errors a
 program swallowed, template calls that each run under a budget scope of their
 own, and a random generator per context seeded from a sequence the host owns -
-the `tang` command, the divergence ledger, and the oracle that compares every
-parse with ctang's. The execution differential against ctang and the debugger
-come in later work.
+the `tang` command, the divergence ledger, and the oracle that parses and runs
+every corpus file and 12,000 generated programs on both engines and compares the
+output and the result with ctang's. The verification suite is also shown to fail:
+a frame observer compares the abstract frames of one program run plain, under GC
+torture, on a moving stack and with shuffled poll phases; a native gate drives
+each guest-driven native and each limit under a tiny budget; and planted defects
+in the library itself are each caught by the instrument named for them. The
+debugger comes in later work.
 
 ## Example
 
@@ -79,8 +84,10 @@ this library:
 
 | Target | Does |
 | --- | --- |
-| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests (the engine suites again under the heap's torture mode and with a moving guest stack), the CLI test, the fuzz replay, the oracle differential, and one smoke run of the benchmark |
-| `test-oracle` | parse every file of `tests/corpus` with lang-tang and with ctang (in a child process, with a wall-clock kill) and fail on any difference the ledger does not record; `ORACLE_PC` names the ctang package |
+| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests (the engine suites, the frame observer and the native gate again under the heap's torture mode and with a moving guest stack), the CLI test, the fuzz replay, the oracle differential and its fixed batch of generated programs, the quick planted defects, and one smoke run of the benchmark |
+| `test-oracle` | parse and then run every file of `tests/corpus`, and 440 generated programs, with lang-tang and with ctang (in a child process, with a wall-clock kill and an address-space bound) and fail on any difference in the parse verdict, the rendered output or the final result that the ledger does not record; `ORACLE_PC` names the ctang package |
+| `fuzz-diff` | `make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S`: a campaign of N generated programs from seed S, both modes; a divergence prints its seed and the whole program |
+| `check-planted` | build a throwaway copy of the library, plant seven defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
 | `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one - ctang above all - and on any include of `binary.h` |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
@@ -89,7 +96,7 @@ this library:
 | `fuzz-parse`, `fuzz-template`, `fuzz-run` | build the libFuzzer harnesses (clang); `fuzz-run-parse`, `fuzz-run-template` and `fuzz-run-run` run them |
 | `bench` | run the benchmark harness in full; it prints a calibration result first |
 | `test-asan`, `test-tsan`, `test-valgrind-quiet` | the same tests under ASan+UBSan, ThreadSanitizer and Valgrind |
-| `test-torture` | the engine suites under ASan+UBSan with the heap collecting before every allocation (`GRHEAP_TORTURE`), verifying every store (`GRHEAP_VERIFY`), and a guest stack that moves on every push (`GLTANG_TEST_MOVING_STACK`) |
+| `test-torture` | every unit suite under ASan+UBSan with the heap collecting before every allocation (`GRHEAP_TORTURE`), verifying every store (`GRHEAP_VERIFY`), and a guest stack that moves on every push (`GLTANG_TEST_MOVING_STACK`), and the two torture planted defects |
 | `coverage` | instrumented run and line report |
 
 ## The API
