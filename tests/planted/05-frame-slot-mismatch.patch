@@ -1,0 +1,21 @@
+# 05 a mismatch in a frame slot
+# defect: the inspected text of a value slot differs under GC torture only
+# caught by: the frame observer (testObserver: plain against torture traces)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -184,6 +184,14 @@
+   // Printed as an element would be, a few levels deep: a debugger shows a
+   // summary, not a megabyte.
+   (void)gltang_vm_render(&sink, value, GLTANG_RENDER_ELEMENT, GLTANG_MAX_VALUE_DEPTH - 3, &too_deep);
++  /* planted: when the heap has been collected by torture, a value slot's text
++     gains a character, so the same slot reads differently in that configuration */
++  GRHEAP_Stats planted_stats;
++  if (grheap_stats(exec->heap, &planted_stats) == GRHEAP_OK && planted_stats.torture_collections > 0 && size > sink.needed + 1u) {
++    buffer[sink.needed] = '!';
++    buffer[sink.needed + 1u] = '\0';
++    return sink.needed + 1u;
++  }
+   return sink.needed;
+ }
+ 

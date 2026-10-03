@@ -1,0 +1,17 @@
+# 07 an oracle runner that exits 0 with no output
+# defect: the runner returns success without parsing or running anything
+# caught by: the oracle driver (testOracle: an unreadable reply is a harness failure)
+#
+--- a/tests/oracle/oracle_ctang.c
++++ b/tests/oracle/oracle_ctang.c
+@@ -230,6 +230,10 @@
+ }
+ 
+ int main(int argc, char * argv[]) {
++  /* planted: the runner exits 0 and prints nothing */
++  (void)argc;
++  (void)argv;
++  return 0;
+   bool run = false;
+   bool script = false;
+   if (argc == 3) {

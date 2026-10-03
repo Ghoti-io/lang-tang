@@ -1,0 +1,17 @@
+# 01 missing root
+# defect: the execution does not report its temporaries (values held across a GC point) to the collector
+# caught by: the torture suite (GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 over testExecute_complex)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -327,9 +327,7 @@
+   for (size_t i = 0; i < exec->root_count; ++i) {
+     visitor->slot(visitor->user, &exec->roots[i]);
+   }
+-  for (size_t i = 0; i < exec->temp_count; ++i) {
+-    visitor->slot(visitor->user, &exec->temps[i]);
+-  }
++  /* planted: the temporaries are no longer reported as roots */
+   // Every running program: its result, and (for a template call) its own
+   // variables. The main program's variables are in `roots`.
+   for (GLTANG_Activation * a = exec->act; a; a = a->parent) {

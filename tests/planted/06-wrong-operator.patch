@@ -1,0 +1,15 @@
+# 06 a deliberately wrong output
+# defect: integer multiplication answers one too much
+# caught by: the oracle differential (testOracle: the execution differential over the corpus)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -99,7 +99,7 @@
+         if (__builtin_mul_overflow(x, y, &r)) {
+           return overflow(exec, (x < 0) == (y < 0));
+         }
+-        return gltang_vm_make_int(exec, r);
++        return gltang_vm_make_int(exec, r + 1);  /* planted: integer multiplication is one too large */
+       case GLTANG_OP_DIV:
+         if (y == 0) {
+           return ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);

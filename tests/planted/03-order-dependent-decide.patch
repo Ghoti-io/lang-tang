@@ -1,0 +1,57 @@
+# 03 order-dependent DECIDE handler
+# defect: two DECIDE handlers registered by the execution vote in a way that depends on the order they run in
+# caught by: the phase-shuffle observer run (testObserver: plain against phase-shuffled traces)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -437,6 +437,34 @@
+   }
+ }
+ 
++static int planted_a_ran;
++
++static void planted_a(GRCORE_Context * context, void * value, GRCORE_PollCall * call) {
++  (void)context;
++  (void)value;
++  (void)call;
++  planted_a_ran = 1;
++}
++
++static void planted_b(GRCORE_Context * context, void * value, GRCORE_PollCall * call) {
++  (void)context;
++  (void)value;
++  if (!planted_a_ran) {
++    (void)grcore_pollcall_vote(call, GRCORE_VERDICT_PAUSE);
++  }
++}
++
++static void planted_reset(GRCORE_Context * context, void * value, GRCORE_PollCall * call) {
++  (void)context;
++  (void)value;
++  (void)call;
++  planted_a_ran = 0;
++}
++
++static const GRCORE_Key planted_key_a = {"planted A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_a};
++static const GRCORE_Key planted_key_b = {"planted B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_b};
++static const GRCORE_Key planted_key_reset = {"planted reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, NULL, planted_reset};
++
+ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program * program, GLTANG_Execution ** out_execution) {
+   if (!context || !program || !out_execution || !grcore_context_is_owner(context)) {
+     return GLTANG_ERR_INVALID;
+@@ -522,6 +550,15 @@
+     gltang_program_release(exec->program);
+     gcu_allocator_free(allocator, exec);
+     return result;
++  }
++  /* planted: two DECIDE handlers whose combined vote depends on the order
++     they run in. B pauses unless A has already run in this poll, so in
++     registration order nothing happens and under the phase shuffle B
++     sometimes runs first. */
++  if (grcore_context_register(context, &planted_key_a, exec) != GRCORE_OK ||
++      grcore_context_register(context, &planted_key_b, exec) != GRCORE_OK ||
++      grcore_context_register(context, &planted_key_reset, exec) != GRCORE_OK) {
++    /* the context is destroyed by the caller; nothing to undo here */
+   }
+   *out_execution = exec;
+   return GLTANG_OK;

@@ -1,0 +1,12 @@
+# A patch that changes only a comment: it applies, nothing fails, and the script must say it was not caught.
+--- a/src/vm/natives.def
++++ b/src/vm/natives.def
+@@ -19,7 +19,7 @@
+  */
+ 
+ /*
+- * The engine's natives: every operation whose work the guest controls and that
++ * The engine's natives (a comment edited by the self-test): every operation whose work the guest controls and that
+  * therefore polls the runtime (AD-21: a native cannot pause; it returns the
+  * limit to the interpreter, which unwinds). One entry per way of reaching the
+  * runtime poll, and the only list there is:

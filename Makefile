@@ -278,7 +278,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage clears this: --coverage links the gcov runtime, whose mangle_path
 # check-symbols is right to reject in a shipping library.
 TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
-	check-edges check-gates examples cli-test fuzz-replay test-oracle
+	check-edges check-gates examples cli-test fuzz-replay test-oracle check-planted-quick
 
 VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=definite,indirect,possible --track-origins=yes --error-exitcode=1 --suppressions=tests/valgrind.supp
 
@@ -481,6 +481,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS)
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing
+.PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
 .PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
@@ -572,6 +573,30 @@ check-edges: $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) ## Fail on a f
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
 	@CC="$(CC)" tools/check-gates.sh
+
+####################################################################
+# Planted defects in the library itself (CAP-7)
+#
+# tools/check-planted.sh builds a throwaway copy under build/planted/, applies
+# one patch from tests/planted/ at a time, and requires the test named for it
+# to fail and, with the patch out, to pass. Nothing in this tree is changed.
+# `make test` runs the quick cases (about a minute); the two torture cases are
+# part of `make test-torture`; `make check-planted` runs all seven.
+####################################################################
+
+PLANTED_ENV = PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
+
+check-planted-quick: ## Planted defects 03 to 07 (phase shuffle, native gate, frame observer, oracle)
+	@$(PLANTED_ENV) tools/check-planted.sh --quick
+
+check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture
+	@$(PLANTED_ENV) tools/check-planted.sh --slow
+
+check-planted: ## All seven planted defects: each caught by its instrument, each control passing
+	@$(PLANTED_ENV) tools/check-planted.sh --all
+
+check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
+	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
 ####################################################################
 # Benchmarks (AD-26)

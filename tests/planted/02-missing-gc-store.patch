@@ -1,0 +1,17 @@
+# 02 missing gc_store
+# defect: an array element is stored with a plain assignment instead of grheap_store_word
+# caught by: barrier-verify (GRHEAP_VERIFY=1 with torture over testExecute_complex)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -41,7 +41,9 @@
+ #define MAX_ELEMENTS ((size_t)1 << 31)
+ 
+ static void put(GLTANG_Execution * exec, void * holder, GLTANG_Value * slot, GLTANG_Value v) {
+-  (void)grheap_store_word(exec->heap, holder, slot, v);
++  (void)exec;
++  (void)holder;
++  *slot = v;  /* planted: a pointer store into a heap object as a plain assignment */
+ }
+ 
+ static void put_pointer(GLTANG_Execution * exec, void * holder, void ** slot, void * target) {
