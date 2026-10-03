@@ -65,6 +65,7 @@
 #include <ghoti.io/runtime-core/b/budget.h>
 #include <ghoti.io/runtime-core/b/context.h>
 #include <ghoti.io/runtime-core/b/poll.h>
+#include <ghoti.io/runtime-core/b/request.h>
 #include <ghoti.io/runtime-core/b/roots.h>
 #include <ghoti.io/runtime-core/b/run.h>
 #include <ghoti.io/runtime-heap/heap.h>
@@ -303,6 +304,12 @@ struct GLTANG_NativeCall {
 #define GLTANG_ROOT_RANDOM 1u
 #define GLTANG_ROOT_FIXED 2u
 
+/** @brief An entry of the error list, and the chain of template calls above it. */
+typedef struct GLTANG_ErrorRecord {
+  GLTANG_ErrorEntry entry;
+  GLTANG_ErrorLink * chain;     ///< Owned; entry.chain_count links, outermost first.
+} GLTANG_ErrorRecord;
+
 /** @brief An output: bytes, and the typed segments that cover them. */
 typedef struct GLTANG_OutBuf {
   char * bytes;
@@ -374,6 +381,19 @@ struct GLTANG_Execution {
   GLTANG_Value * temps;
   size_t temp_count;
   size_t temp_capacity;
+
+  // The error list (CAP-1), and the switches that shape it.
+  GLTANG_ErrorRecord * errors;
+  size_t error_count;
+  size_t error_capacity;
+  size_t error_limit;           ///< The most entries kept.
+  uint64_t errors_dropped;
+  bool log_all_errors;
+  bool halt_on_error;
+  bool halted;                  ///< The first error has ended the run.
+  bool halt_registered;
+  GRCORE_RequestKind halt_kind;
+  GRCORE_Port * port;
 
   // What the host attached.
   GLTANG_Library * libraries;
@@ -652,6 +672,42 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
 static inline const GLTANG_LibraryMember * gltang_vm_template_member(GLTANG_Value v) {
   return ((const GLTANG_TemplateObject *)gltang_object(v))->member;
 }
+
+// ---------------------------------------------------------------------------
+// The error list (errorlist.c)
+// ---------------------------------------------------------------------------
+
+/** @brief The default cap on the error list. */
+#define GLTANG_ERROR_LIMIT_DEFAULT 1024u
+
+/** @brief The name of the main program for the error list. */
+const char * gltang_vm_main_name(const GLTANG_Execution * exec);
+/** @brief The name of the template an activation runs. */
+const char * gltang_vm_activation_name(const GLTANG_Execution * exec, const GLTANG_Activation * act);
+/**
+ * @brief Enters a swallowed error value in the list, at most once per value.
+ *
+ * `source` is the activation the error belongs to: its template, and the chain
+ * of calls above it. Nothing happens for a value that is not an error, a
+ * marker, or one already entered. Never fails: an entry that cannot be made is
+ * counted as dropped.
+ */
+void gltang_vm_error_swallowed(GLTANG_Execution * exec, GLTANG_ErrorHow how, GLTANG_Value error, const GLTANG_Activation * source);
+/** @brief Enters the stop of a template call by its budget scope. */
+void gltang_vm_error_scope_limit(GLTANG_Execution * exec, const GLTANG_Activation * callee);
+/**
+ * @brief Called by every error creation: logs it when the host asked, and
+ *   halts the run when the host asked for that.
+ *
+ * @return ::GLTANG_V_UNWIND when the run is to end, else `error`.
+ */
+GLTANG_Value gltang_vm_error_created(GLTANG_Execution * exec, GLTANG_Value error);
+/** @brief Frees the list. */
+void gltang_vm_errors_free(GLTANG_Execution * exec);
+/** @brief The error value a scope-limited template call stands for: logged already, never halts. */
+GLTANG_Value gltang_vm_make_limit_error(GLTANG_Execution * exec);
+/** @brief Replaces an activation's result; a lost error it held is entered first. */
+void gltang_vm_set_result(GLTANG_Execution * exec, GLTANG_Value v, bool listed);
 
 /** @brief Makes `act` the innermost activation: points the execution's variables, constants and output at it. */
 void gltang_vm_set_activation(GLTANG_Execution * exec, GLTANG_Activation * act);

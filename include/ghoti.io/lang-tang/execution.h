@@ -174,6 +174,143 @@ GLTANG_API GLTANG_Result gltang_execution_set_name(
     GLTANG_Execution * execution, const char * name);
 
 /**
+ * @brief How an error came to be in the error list.
+ */
+typedef enum {
+  GLTANG_ERROR_HOW_PRINTED = 0,     ///< `print` of an error, which renders as nothing.
+  GLTANG_ERROR_HOW_DISCARDED,       ///< An expression statement whose value was an error that nothing holds.
+  GLTANG_ERROR_HOW_TEMPLATE_RESULT, ///< The final value of a called template was an error.
+  GLTANG_ERROR_HOW_SCOPE_LIMIT,     ///< A template call was stopped by its budget scope.
+  GLTANG_ERROR_HOW_CREATED          ///< Logged when created: the host's switch, or the halt option.
+} GLTANG_ErrorHow;
+
+/**
+ * @brief One entry of the error list.
+ *
+ * `template_name` is the template the error came from: the main program's name
+ * (::gltang_execution_set_name), or the name a template is registered under. The
+ * chain of template calls above it is read with ::gltang_execution_error_chain.
+ * `file`, `line`, `function` and `offset` are the origin the error carried from
+ * where it was created (for a scope limit, where the stopped template was
+ * when it was stopped). The strings are owned by the execution and valid until it
+ * is destroyed.
+ */
+typedef struct GLTANG_ErrorEntry {
+  GLTANG_ErrorKind kind;        ///< Which error.
+  const char * message;         ///< Its text (`Divide by zero`).
+  GLTANG_ErrorHow how;          ///< How it got into the list.
+  const char * template_name;   ///< The template it came from.
+  const char * file;            ///< The origin's file.
+  int line;                     ///< The origin's 1-based line; 0 if unknown.
+  uint64_t function;            ///< The origin's function index in that program.
+  uint64_t offset;              ///< The origin's bytecode offset.
+  size_t chain_count;           ///< How many template calls are above it.
+} GLTANG_ErrorEntry;
+
+/** @brief One template call above an error: the template, and where in it the call was made. */
+typedef struct GLTANG_ErrorLink {
+  const char * template_name;   ///< The calling template.
+  const char * file;            ///< Its file.
+  int line;                     ///< The line of the call.
+} GLTANG_ErrorLink;
+
+/**
+ * @brief Logs every error value at creation, instead of only the swallowed ones.
+ *
+ * Errors stay values; the error list (CAP-1) records an error when it is
+ * swallowed: printed (and so rendered as nothing), discarded by an expression
+ * statement, lost as the final value of a called template, or, for a template
+ * call, stopped by its budget scope. With this switch on, every error is entered
+ * the moment it is created, as ::GLTANG_ERROR_HOW_CREATED, and the swallow rules
+ * add nothing for it. An error is entered at most once.
+ *
+ * @param execution The execution.
+ * @param enabled Whether to log at creation.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_log_all_errors(
+    GLTANG_Execution * execution, bool enabled);
+
+/**
+ * @brief Ends the run at the first error value that is created.
+ *
+ * The error is entered in the list (as ::GLTANG_ERROR_HOW_CREATED), the run
+ * unwinds, and ::grcore_run or ::grcore_resume returns ::GRCORE_ERR_GUEST with
+ * the execution ::GLTANG_EXECUTION_UNWOUND. Nothing is printed after the error.
+ * It is a request through runtime-core's poll, so a template call's budget scope
+ * does not catch it: guest code cannot catch it (AD-5).
+ *
+ * @param execution The execution.
+ * @param enabled Whether to halt.
+ * @return As ::gltang_execution_set_libraries; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_halt_on_error(
+    GLTANG_Execution * execution, bool enabled);
+
+/**
+ * @brief Caps the error list (default 1,024 entries).
+ *
+ * Entries past the cap are counted in ::gltang_execution_errors_dropped and not
+ * stored.
+ *
+ * @param execution The execution.
+ * @param limit The most entries to keep.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_error_limit(
+    GLTANG_Execution * execution, size_t limit);
+
+/**
+ * @brief How many entries the error list holds.
+ *
+ * @param execution The execution.
+ * @return The count; 0 for NULL.
+ */
+GLTANG_API size_t gltang_execution_error_count(const GLTANG_Execution * execution);
+
+/**
+ * @brief Reads an entry of the error list, oldest first.
+ *
+ * @param execution The execution.
+ * @param index From zero.
+ * @param out_entry Receives the entry. Written only when this returns true.
+ * @return True when there is such an entry.
+ */
+GLTANG_API bool gltang_execution_error(const GLTANG_Execution * execution,
+    size_t index, GLTANG_ErrorEntry * out_entry);
+
+/**
+ * @brief How many template calls are above entry `index`.
+ *
+ * @param execution The execution.
+ * @param index The entry.
+ * @return The count; 0 for none or out of range.
+ */
+GLTANG_API size_t gltang_execution_error_chain_count(
+    const GLTANG_Execution * execution, size_t index);
+
+/**
+ * @brief One template call above an entry, outermost first.
+ *
+ * @param execution The execution.
+ * @param index The entry.
+ * @param link From zero.
+ * @param out_link Receives the call. Written only when this returns true.
+ * @return True when there is such a link.
+ */
+GLTANG_API bool gltang_execution_error_chain(const GLTANG_Execution * execution,
+    size_t index, size_t link, GLTANG_ErrorLink * out_link);
+
+/**
+ * @brief How many entries the cap turned away.
+ *
+ * @param execution The execution.
+ * @return The count; 0 for NULL.
+ */
+GLTANG_API uint64_t gltang_execution_errors_dropped(
+    const GLTANG_Execution * execution);
+
+/**
  * @brief Where the execution is.
  *
  * @param execution The execution.

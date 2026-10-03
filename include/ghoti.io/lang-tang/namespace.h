@@ -377,6 +377,17 @@
 #define gltang_seeds_master GHOTIIO_LANG_TANG(gltang_seeds_master)
 #define gltang_seeds_next GHOTIIO_LANG_TANG(gltang_seeds_next)
 #define gltang_seeds_retain GHOTIIO_LANG_TANG(gltang_seeds_retain)
+#define GLTANG_ErrorEntry GHOTIIO_LANG_TANG(GLTANG_ErrorEntry)
+#define GLTANG_ErrorHow GHOTIIO_LANG_TANG(GLTANG_ErrorHow)
+#define GLTANG_ErrorLink GHOTIIO_LANG_TANG(GLTANG_ErrorLink)
+#define gltang_execution_error GHOTIIO_LANG_TANG(gltang_execution_error)
+#define gltang_execution_error_chain GHOTIIO_LANG_TANG(gltang_execution_error_chain)
+#define gltang_execution_error_chain_count GHOTIIO_LANG_TANG(gltang_execution_error_chain_count)
+#define gltang_execution_error_count GHOTIIO_LANG_TANG(gltang_execution_error_count)
+#define gltang_execution_errors_dropped GHOTIIO_LANG_TANG(gltang_execution_errors_dropped)
+#define gltang_execution_set_error_limit GHOTIIO_LANG_TANG(gltang_execution_set_error_limit)
+#define gltang_execution_set_halt_on_error GHOTIIO_LANG_TANG(gltang_execution_set_halt_on_error)
+#define gltang_execution_set_log_all_errors GHOTIIO_LANG_TANG(gltang_execution_set_log_all_errors)
 
 /// @endcond
 

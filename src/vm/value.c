@@ -260,7 +260,8 @@ GLTANG_Value gltang_vm_make_error(GLTANG_Execution * exec, GLTANG_ErrorKind kind
   error->program = exec->act->program_index;
   error->function = exec->current_function;
   error->offset = exec->current_offset;
-  return gltang_value_of(error);
+  // The host may want it logged now, or the run to end here.
+  return gltang_vm_error_created(exec, gltang_value_of(error));
 }
 
 GLTANG_ErrorKind gltang_vm_error_kind(GLTANG_Value v) {

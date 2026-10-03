@@ -29,7 +29,8 @@
  * language reference, as a stack machine whose frames live on the context's
  * guest stack. It is `free` until the library's first tag (AD-14), and then
  * opcodes are only ever added: a number is never reused and never changes its
- * meaning. documentation/design.md has the table with each opcode's stack
+ * meaning. (`SET_RESULT` takes an operand since the host API: 1 marks the
+ * statement's value as one that is listed if it is an error that is replaced.) documentation/design.md has the table with each opcode's stack
  * effect.
  *
  * An instruction is one 32-bit word: the opcode in the low 8 bits and an
@@ -99,6 +100,7 @@ typedef enum {
   GLTANG_OP_PRINT_CONST, ///< Append string constant `a` to the output.
   GLTANG_OP_ITER_INIT,  ///< `v -- bool`: start iterating array `v` over locals `a`, `a+1`.
   GLTANG_OP_ITER_NEXT,  ///< `-- e` or jump: two words, the second is the exhausted target.
+  GLTANG_OP_DISCARD,    ///< `v --`: drop the value of an expression statement; an error that nothing holds is entered in the error list.
   GLTANG_OP_COUNT       ///< Not an opcode: closes the enum.
 } GLTANG_Opcode;
 

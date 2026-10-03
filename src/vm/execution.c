@@ -379,6 +379,9 @@ static void release_parts(GLTANG_Execution * exec) {
     gcu_allocator_free(exec->allocator, act);
   }
   gltang_vm_outbuf_free(exec, &exec->main_act.out);
+  gltang_vm_errors_free(exec);
+  grcore_port_release(exec->port);
+  exec->port = NULL;
   for (size_t p = 1; p < exec->program_count; ++p) {
     gcu_allocator_free(exec->allocator, exec->programs[p].constants);
     gltang_program_release(exec->programs[p].program);
@@ -465,6 +468,7 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
   exec->main_act.name = NULL;
   gltang_vm_set_activation(exec, &exec->main_act);
   exec->name = NULL;
+  exec->error_limit = GLTANG_ERROR_LIMIT_DEFAULT;
 
   // The engine is registered once per context. A create that failed after
   // this point leaves it registered, so a second attempt finds it again.

@@ -443,6 +443,35 @@ class Context {
     return i;
   }
 
+  /// An entry of the error list, with its chain.
+  struct Entry {
+    GLTANG_ErrorEntry e;
+    std::vector<GLTANG_ErrorLink> chain;
+    std::string template_name() const { return e.template_name ? e.template_name : ""; }
+    std::string file() const { return e.file ? e.file : ""; }
+    std::string message() const { return e.message ? e.message : ""; }
+    std::string chain_text() const {
+      std::string s;
+      for (const auto & link : chain) {
+        s += std::string(s.empty() ? "" : " ") + link.template_name + ":" + std::to_string(link.line);
+      }
+      return s;
+    }
+  };
+  size_t error_count() const { return gltang_execution_error_count(execution); }
+  Entry error(size_t index) const {
+    Entry entry;
+    std::memset(&entry.e, 0, sizeof(entry.e));
+    EXPECT_TRUE(gltang_execution_error(execution, index, &entry.e)) << "entry " << index;
+    for (size_t i = 0; i < gltang_execution_error_chain_count(execution, index); ++i) {
+      GLTANG_ErrorLink link;
+      EXPECT_TRUE(gltang_execution_error_chain(execution, index, i, &link));
+      entry.chain.push_back(link);
+    }
+    EXPECT_EQ(entry.chain.size(), entry.e.chain_count);
+    return entry;
+  }
+
   /// The raw output: every segment unencoded.
   std::string raw() const {
     size_t length = 0;

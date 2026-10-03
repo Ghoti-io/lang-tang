@@ -471,6 +471,8 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
 }
 
 GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
+  // An error prints as nothing (a marker prints itself): it is swallowed here.
+  gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_PRINTED, v, exec->act);
   GLTANG_Sink sink;
   gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
   bool too_deep = false;

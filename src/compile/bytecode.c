@@ -78,6 +78,7 @@ static const char * const opcode_names[GLTANG_OP_COUNT] = {
   [GLTANG_OP_PRINT_CONST] = "PRINT_CONST",
   [GLTANG_OP_ITER_INIT] = "ITER_INIT",
   [GLTANG_OP_ITER_NEXT] = "ITER_NEXT",
+  [GLTANG_OP_DISCARD] = "DISCARD",
 };
 
 const char * gltang_opcode_name(GLTANG_Opcode op) {
@@ -143,6 +144,7 @@ const uint32_t gltang_opcode_cost_table[GLTANG_OP_COUNT] = {
   [GLTANG_OP_PRINT_CONST] = 1,
   [GLTANG_OP_ITER_INIT] = 1,
   [GLTANG_OP_ITER_NEXT] = 1,
+  [GLTANG_OP_DISCARD] = 1,
 };
 
 uint32_t gltang_opcode_cost(GLTANG_Opcode op) {

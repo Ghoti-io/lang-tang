@@ -30,6 +30,54 @@ std::string chain(int pluses) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// Expression statements and the error list
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string dump_of(GLTANG_Program * program) {
+  FILE * file = tmpfile();
+  gltang_program_dump(program, file);
+  rewind(file);
+  std::string text;
+  char buffer[512];
+  size_t n;
+  while ((n = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    text.append(buffer, n);
+  }
+  fclose(file);
+  return text;
+}
+
+size_t count_of(const std::string & text, const std::string & word) {
+  size_t count = 0;
+  for (size_t at = text.find(word); at != std::string::npos; at = text.find(word, at + 1)) {
+    ++count;
+  }
+  return count;
+}
+
+}  // namespace
+
+TEST(CompileStatements, OnlyAStatementThatCanLoseAnErrorIsMarkedForTheErrorList) {
+  // Inside a function: reading or storing into a variable keeps the value (POP);
+  // a call or a store into a container may lose an error (DISCARD).
+  tt::Compiled compiled("function f() { a = 1; a; a = f(); f(); a[0] = 3; a.b = 4; 1 / 0; }");
+  ASSERT_TRUE(compiled.ok());
+  std::string text = dump_of(compiled.program);
+  std::string body = text.substr(text.find("function 1 f"));
+  EXPECT_EQ(count_of(body, "DISCARD"), 4u) << body;
+}
+
+TEST(CompileStatements, AtTheTopLevelTheSameStatementsCarryTheMarkOnTheirSetResult) {
+  tt::Compiled compiled("a = 1; a; f = 1; a[0] = 2; 1 / 0;");
+  ASSERT_TRUE(compiled.ok());
+  std::string text = dump_of(compiled.program);
+  EXPECT_EQ(count_of(text, "SET_RESULT   1"), 2u) << text;
+  EXPECT_EQ(count_of(text, "SET_RESULT   0"), 3u) << text;
+}
+
+// ---------------------------------------------------------------------------
 // What the compiler refuses
 // ---------------------------------------------------------------------------
 

@@ -1274,9 +1274,19 @@ static void compile_statement(Compiler * c, Fn * fn, GLTANG_Ast_Node * node) {
   }
   else {
     // An expression statement. At the top level its value is the program's
-    // result for as long as no later statement replaces it.
+    // result for as long as no later statement replaces it. A value that is
+    // an error is swallowed when the statement ends, unless the statement
+    // only reads a variable or stores into one (the error is then still held,
+    // and a program tests it): the error list gets an entry for the rest.
+    bool listed = !GLTANG_AST_IS_IDENTIFIER(node)
+      && !(GLTANG_AST_IS_ASSIGN(node) && GLTANG_AST_IS_IDENTIFIER(((GLTANG_Ast_Node_Assign *)node)->lhs));
     compile_expression(c, fn, node);
-    emit(c, fn, fn->top ? GLTANG_OP_SET_RESULT : GLTANG_OP_POP, 0);
+    if (fn->top) {
+      emit(c, fn, GLTANG_OP_SET_RESULT, listed ? 1u : 0u);
+    }
+    else {
+      emit(c, fn, listed ? GLTANG_OP_DISCARD : GLTANG_OP_POP, 0);
+    }
   }
 }
 
@@ -1290,7 +1300,7 @@ static void stack_effect(GLTANG_Opcode op, uint32_t a, int32_t * pops, int32_t *
   *pushes = 0;
   switch (op) {
     case GLTANG_OP_POP: case GLTANG_OP_SET_RESULT: case GLTANG_OP_JMP_FALSE:
-    case GLTANG_OP_JMP_TRUE: case GLTANG_OP_RET:
+    case GLTANG_OP_JMP_TRUE: case GLTANG_OP_RET: case GLTANG_OP_DISCARD:
       *pops = 1; break;
     case GLTANG_OP_DUP: *pops = 1; *pushes = 2; break;
     case GLTANG_OP_NULL: case GLTANG_OP_TRUE: case GLTANG_OP_FALSE: case GLTANG_OP_CONST:

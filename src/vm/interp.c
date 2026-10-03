@@ -189,12 +189,24 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
         break;
 
       case GLTANG_OP_SET_RESULT:
-        exec->act->result = S[sp - 1u];
+        gltang_vm_set_result(exec, S[sp - 1u], (a & 1u) != 0);
         S[--sp] = 0;
         break;
       case GLTANG_OP_CLEAR_RESULT:
-        exec->act->result = GLTANG_V_NULL;
+        gltang_vm_set_result(exec, GLTANG_V_NULL, false);
         break;
+
+      case GLTANG_OP_DISCARD: {
+        // The value of an expression statement that nothing holds: an error
+        // here is swallowed, and the host is told.
+        GLTANG_Value v = S[sp - 1u];
+        S[--sp] = 0;
+        if (gltang_vm_is_error(v)) {
+          SYNC();
+          gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_DISCARDED, v, exec->act);
+        }
+        break;
+      }
 
       case GLTANG_OP_USE: {
         SYNC();
@@ -568,7 +580,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
             goto unwound;
           }
           RELOAD();
-          exec->act->result = e;
+          gltang_vm_set_result(exec, e, true);
           S[sp - 1u] = GLTANG_V_FALSE;
         }
         break;
@@ -599,6 +611,11 @@ unwound:
   // The program did not finish, so what an earlier statement left as its
   // result is not an answer.
   exec->act->result = GLTANG_V_NULL;
+  exec->act->result_lost = false;
+  if (exec->halt_registered) {
+    // The halt request has been carried out; leave nothing pending.
+    (void)grcore_context_clear_request(context, exec->halt_kind);
+  }
   exec->state = GLTANG_EXECUTION_UNWOUND;
   return GRCORE_STEP_UNWOUND;
 
