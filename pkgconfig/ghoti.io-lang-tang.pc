@@ -1,0 +1,7 @@
+Name: Ghoti.io Lang-tang(BRANCH)
+Description: The Tang engine of the language runtime stack: the parser and syntax tree ported from ctang (the interpreter arrives in later work).
+Version: (VERSION)
+URL: https://github.com/Ghoti-io/lang-tang
+Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
+CFlags: -I(PC_INCLUDE_DIR)
+Requires: (REQUIRES)

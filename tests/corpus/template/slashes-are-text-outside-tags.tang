@@ -1,0 +1,2 @@
+// not a comment /* neither */ <% // a comment
+ x = 1; /* another */ %> tail // text

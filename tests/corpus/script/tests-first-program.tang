@@ -1,0 +1,20 @@
+
+      use math.floor as floor;
+      use y;
+      use ignore_me;
+      z = 3;
+      function f(x) {
+        function fInner(floor) {
+          global z;
+          return floor < z ? floor : z;
+        }
+        return fInner(x);
+      }
+      function g(y) {
+        function fInner(foo) {
+            return floor(f(foo));
+        }
+        return fInner(y);
+      }
+      y = 42;
+      print(g(y));

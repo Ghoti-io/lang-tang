@@ -1,0 +1,3 @@
+<% if (x) { %>yes<% } else { %>no<% } %>
+<% for (i : items) { %><li><%= i %></li>
+<% } %>

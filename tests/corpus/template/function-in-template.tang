@@ -1,0 +1,2 @@
+<% function row(a, b) { %><td><%= a %></td><td><%= b %></td><% } %>
+<%= row(1, 2) %>

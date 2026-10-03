@@ -1,0 +1,4 @@
+for (;;) { break; }
+for (i = 0;;) { break; }
+for (; i < 3;) { i = i + 1; }
+for (;; i = i + 1) { break; }

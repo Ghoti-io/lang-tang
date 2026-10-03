@@ -1,0 +1,1 @@
+print(3.9 as int); print("7" as float);
