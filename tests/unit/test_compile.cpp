@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <vector>
 #include <string>
 
 namespace {
@@ -265,11 +266,31 @@ TEST(TreeDepth, PrintingATallTreeIsLinearNotQuadratic) {
 // ---------------------------------------------------------------------------
 
 TEST(AllocationFailure, EachAllocationCompileMakesFailedInTurnGivesAnAnswerAndLeaksNothing) {
-  const char * sources[] = {
+  // A function body long enough that its code buffer must grow.
+  std::string long_body = "x = 0;";
+  for (int i = 0; i < 60; ++i) {
+    long_body += " x = x + " + std::to_string(i) + ";";
+  }
+  const std::string long_source = long_body + " x;";
+  // A ranged for emits a two-word instruction; one of these paddings puts its
+  // second word exactly where the code buffer is full and must grow.
+  std::vector<std::string> padded;
+  for (int pad = 0; pad < 12; ++pad) {
+    std::string source = "x = 0;";
+    for (int i = 0; i < pad; ++i) {
+      source += " x = 0;";
+    }
+    padded.push_back(source + " for (e : [1, 2]) { x = e; } x;");
+  }
+  std::vector<const char *> sources = {
     "1 + 2;",
+    long_source.c_str(),
     "function f(a, b) { return a * b + 1; } x = [f(1, 2), \"s\" + \"t\", {k: 1.5}]; for (i = 0; i < 3; i += 1) { x[0] = x[0] + i; } x;",
     "use a.b as c; function g(n) { if (n < 1) { return 0; } return g(n - 1); } g(3);",
   };
+  for (const std::string & p : padded) {
+    sources.push_back(p.c_str());
+  }
   for (const char * source : sources) {
     GLTANG_ParseError error = {0, 0, {0}};
     GLTANG_Tree * tree = nullptr;
@@ -312,6 +333,8 @@ TEST(AllocationFailure, EachAllocationARunMakesFailedInTurnGivesAnAnswerAndLeaks
     "a = []; for (i = 0; i < 8; i += 1) { a[i] = [i, \"v\" + i, {k: i * 1.5}]; } print(a); a;",
     "function f(n) { if (n < 1) { return \"x\"; } return f(n - 1) + \"y\"; } m = {a: f(4), b: [1, 2, 3] * 3}; m;",
     "s = \"abc\"; t = s[1:] + s[::-1]; use missing; [t, missing, 7 / 0];",
+    // Alternating encodings in a container: the text of it has a segment per element.
+    "a = []; for (i = 0; i < 20; i += 1) { a[i] = i % 2 == 0 ? \"x\" : \"y\".html; } s = a as string; print(s); s.length;",
   };
   for (const char * source : sources) {
     tt::Compiled compiled(source);
