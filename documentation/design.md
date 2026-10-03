@@ -1272,16 +1272,40 @@ clang the flag is empty.
 
 The library links `cutil`, `unicode`, `runtime-core` and `runtime-heap` and
 nothing else; the `.pc` requires all four, and the manifest lists them, so a
-bootstrap builds them first. `readelf -d` on the shared object and on `tang` shows
-exactly those, never ctang.
+bootstrap builds them first. `readelf -d` on the shared object shows exactly
+those, never ctang and never the debugger.
+
+Two programs are **hosts of the debugger** (story 13): `src/tang.c`, the `tang`
+command, and `examples/web_server.c`. A host is where a debugger is attached and
+a DAP session is served, so these two, and nothing else, include
+`runtime-debug`, and the `tang` and `web_server` binaries link it and `text`
+(which it requires, and with it `chron` and `regex`). The Makefile finds
+`ghoti.io-runtime-debug` and `ghoti.io-text` by pkg-config for those two only
+(`WITH_DEBUG ?= yes`; a hard error naming the fix if missing). They are in
+neither `INCLUDE` nor `DEP_LIBS`, so the shared and static library are linked
+without them. `WITH_DEBUG=no` builds the library and its unit tests on a machine
+without them, and the two programs then refuse to build, by name, so that nobody
+runs a `tang` that silently lacks `--dap`; `tests/unit/test_tang_dap.cpp`, which
+drives the real command, is the one suite left out in that case, and the build
+says so. The manifest (`suite/libraries.txt`) lists `runtime-debug` and `text` as
+dependencies of `lang-tang` for the same reason: a bootstrap must build them
+first, although only two programs use them.
 
 `tools/check-edges.sh` enforces AD-2 over `src/`, `include/`, the generator
-inputs, `bench/` and `examples/`, and over the NEEDED list of the shared library
-and the `tang` command. The rule is an allowlist: `cutil`, `unicode`,
-`runtime-core`, `runtime-heap`, `lang-tang`. Anything else - ctang, the
-debugger, the JIT, another engine - is an edge, and so is any include of
-`binary.h`. `tests/` is the one place ctang may be included, and a fixture shows
-that an include there passes while the same line anywhere else does not.
+inputs, `bench/` and `examples/`, and over the NEEDED list of the shared library,
+the `tang` command and every example. The rule is an allowlist: `cutil`,
+`unicode`, `runtime-core`, `runtime-heap`, `lang-tang`, and, for the two host
+files by path (includes) and the two host programs by name (NEEDED),
+`runtime-debug`, `text`, `chron` and `regex`. Anything else - ctang, the JIT,
+another engine, or the debugger anywhere but those two hosts - is an edge, and so
+is any include of `binary.h`. The allowance is by file, not by directory: a host
+name in the wrong directory (`examples/tang.c`), a second example, a library
+source or a public header including the debugger fails the gate, and
+`tools/check-gates.sh` shows each of them failing and the two hosts passing
+(planted fixtures under `tests/gates/edges/`, and stub programs for the NEEDED
+check). `tests/` is not scanned: it is the one place ctang may be included, and
+a test runner is a host too - `test_tang_dap.cpp` links nothing of the debugger
+but could - so no test binary is named to this gate.
 
 `tools/check-labels.sh` classifies each header by name: the C embedding API
 (`core.h`, `parse.h`, `libver.h`, `macros.h`, `namespace.h`, `allocator.h`,
@@ -1312,6 +1336,72 @@ error list to stderr after the run, one `template:file:line: message` an entry
 (the main program is named `main`) with the chain of template calls above it
 indented under it as `in template:file:line`. A value that is not a number is a
 usage error, exit 2. `tests/cli-test.sh` has a case for each.
+
+`--dap` (story 13) makes the command a host of runtime-debug. It enables
+statement polls, attaches a debugger and serves a DAP session over
+`grdbg_transport_create_fd(0, 1)`: the host loop of `runtime-debug`'s
+`examples/dap_session.c` (serve until `configurationDone`, run, and at every
+pause notify, serve and resume). The DAP stream owns stdout, so the run's
+rendered output goes to **stderr**, and the source must come from a file or
+`--evaluate` (stdin carries the session); `--dap` with `--tree` or with stdin as
+the source is a usage error (2), and so is `--dap` in a command built without the
+debugger. The breakpoint `source` is the file name exactly as given on the
+command line. A client's `terminate` ends the run with status 6; `disconnect`, or
+a client that closes the stream, disarms the debugger and the run finishes free
+(the exit status is the plain run's). A pause that is not the debugger's, a
+`--fuel` budget, is shown to the client once (`stopped`, reason `pause`,
+description `paused by fuel`), and the next `continue` unwinds the run with status
+6: the command has no policy for raising a budget. A scripted session against the
+real binary is `tests/unit/test_tang_dap.cpp`; it also shows that a debugged run
+with every stop continued, or with breakpoints never reached, prints on stderr
+exactly what the plain command prints on stdout, with the same status.
+
+## The web-server example
+
+`examples/web_server.c` is the milestone's success signal in one program, and a
+demonstration, not a product. A plain accept loop on one thread, bound to
+`127.0.0.1` only, `Connection: close`, no request bodies, no TLS; the request
+line is capped at 4 KiB and the headers at 16 KiB. `GET /<name>` runs
+`<templates-dir>/<name>.tang` (the name is `[a-z0-9_-]+`, anything else is a 404,
+so there is no path traversal) in **a fresh context, heap and execution made for
+that request** from one shared group, and destroyed after it. The templates
+`sidebar` and `layout` are registered in one shared, sealed library with budget
+scopes of their own, and `page` calls both. Each template is compiled with the
+path the host read it from as its `file`, so a pause or a breakpoint names the
+real file.
+
+The policy for a pause is the example's, not the library's: a request has a fuel
+budget (`--fuel`, default 200,000); the first pause raises it once (`--raise`,
+default ten times the budget) and resumes; a second pause is final. The context
+is terminated, and the response is `503` with `paused at <file>:<line>` read from
+the second pause, so `/slow` (which needs the raise) finishes with `200` and
+`/runaway` is stopped at its loop's line; the host process survives every case.
+`200` carries `X-Template-Errors` (the length of the error list: `/broken` is a
+`200` with one), `X-Context-Id` and, if the budget was raised,
+`X-Fuel-Raised: 1`.
+
+`/<name>?debug=1` makes the host accept one connection on a second loopback
+listener (`--debug-port`, bounded wait `--debug-wait-ms`, then `504 no debugger
+connected`), turn on statement polls, attach a debugger and run the host loop
+over that connection. A budget pause during a debugged request is shown to the
+client first and then handled by the same policy. A client that closes the
+connection at a stop detaches (the request finishes free, `200`), one that sends
+`terminate` gets `503 terminated by the debugger`, and the HTTP response is
+written when the run finishes, with the body an undebugged request would have
+had. The library never listens or accepts: this example does, on loopback, and
+that is a way to show a debug session, **not a policy for debugging a server over
+a network** - remote debugging over a socket as a product feature is a non-goal
+of the milestone.
+
+`web_server --self-test` (run by `make examples`) binds both listeners to
+ephemeral ports, plays an HTTP client and a hand-framed DAP client from other
+threads, and exits 0 only if every behaviour above holds (31 checks), including
+a scripted session against `/page?debug=1` that stops at the breakpoint on
+`side = sidebar();`, reads the scopes and variables, steps in (two frames, in
+`sidebar.tang`), over, and out, and continues to `terminated`. Every wait in it is
+bounded, with an `alarm` as the backstop. It runs from `make examples` and is not
+part of the sanitizer trees, which build the unit tests only; under Valgrind it
+is clean.
 
 ## Known defects, inherited and open
 
@@ -1432,9 +1522,12 @@ No library other than `math` and `random`, and in those no `next_int_range`,
 native functions, templates and libraries only), no template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
 differential against ctang is described under "Verification"; the ledger is
-closed (no open row). No debugger beyond the frame protocol the engine registers
-(the frame walk, scopes and variables read from a paused context, which now name
-the right program for every frame). No `simplify`. No JIT, no snapshots. No
+closed (no open row). No debugger in the library: the engine registers the frame
+protocol (the frame walk, scopes and variables read from a paused context, which
+name the right program for every frame) and polls at statements when a host asks
+("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the
+web-server example are its hosts. No conditional breakpoints, no expression
+evaluation. No `simplify`. No JIT, no snapshots. No
 parse-time charge to a context's memory (see "The memory-budget contract"). No
 CI.
 

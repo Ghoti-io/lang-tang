@@ -1,0 +1,5 @@
+<p>before</p>
+<%
+while (true) {}
+%>
+<p>never</p>

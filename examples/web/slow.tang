@@ -1,0 +1,9 @@
+<%
+n = 0;
+total = 0;
+while (n < 30000) {
+  total += n % 7;
+  n += 1;
+}
+%>
+<p>done: <%= total %></p>

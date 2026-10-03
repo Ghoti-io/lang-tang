@@ -1,0 +1,10 @@
+<ul>
+<%
+links = ["home", "docs", "about"];
+for (link : links) {
+%>
+<li><%= link %></li>
+<%
+}
+%>
+</ul>

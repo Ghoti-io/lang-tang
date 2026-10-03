@@ -1,0 +1,2 @@
+<p>this template is refused: it does not compile</p>
+<% x = ; %>

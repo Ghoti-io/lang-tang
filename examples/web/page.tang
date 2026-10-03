@@ -1,0 +1,14 @@
+<h1>Page</h1>
+<%
+use sidebar;
+use layout;
+items = ["alpha", "beta", "gamma"];
+count = 0;
+for (item : items) {
+  count += 1;
+}
+side = sidebar();
+%>
+<p><%= count %> items</p>
+<div><%= layout() %></div>
+<aside><%= side %></aside>

@@ -23,7 +23,12 @@ a frame observer compares the abstract frames of one program run plain, under GC
 torture, on a moving stack and with shuffled poll phases; a native gate drives
 each guest-driven native and each limit under a tiny budget; and planted defects
 in the library itself are each caught by the instrument named for them. The
-debugger comes in later work.
+debugger is [runtime-debug](../runtime-debug)'s, and two programs here are its
+hosts: `tang --dap` speaks the Debug Adapter Protocol on stdin and stdout, and
+[examples/web_server.c](examples/web_server.c) serves templates one context per
+request, answers a runaway template with `503` and the file and line it was
+stopped on, and lets the same template be stepped over DAP. The library itself
+does not depend on the debugger; it only polls where a host may stop it.
 
 ## Example
 
@@ -61,12 +66,21 @@ stops a runaway loop at its file and line,
 template a different `user` library and a native function in each of two
 contexts, and [examples/nested_templates.c](examples/nested_templates.c) calls a
 sidebar from a page and a nav pane that never ends from the sidebar, stops the
-nav pane at its own budget scope, and reads the error list.
+nav pane at its own budget scope, and reads the error list, and
+[examples/web_server.c](examples/web_server.c) is a web server over templates
+(`examples/web/`) with one context per request, a fuel budget that pauses a
+runaway at its file and line, and a debugger socket: `make examples` runs it
+with `--self-test`, which plays a client, including a scripted DAP session.
 
 ## Building
 
 `lang-tang` depends on `cutil`, `unicode`, `runtime-core` and `runtime-heap`,
-found through pkg-config only, and
+found through pkg-config only. The `tang` command and the web-server example
+also need `runtime-debug` (and `text`, which it requires): they are the library's
+two hosts of the debugger, and the shared and static library link neither
+(`check-edges` enforces it). `make WITH_DEBUG=no` builds the library and its unit
+tests without them; the two programs then refuse to build, by name, rather than
+build without `--dap`. It also
 needs `bison` (3.8.2 or later) and `flex` to generate the parser and scanner.
 Build the suite first from the workspace root (`./bootstrap.sh`), then:
 
@@ -89,9 +103,10 @@ this library:
 | `fuzz-diff` | `make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S`: a campaign of N generated programs from seed S, both modes; a divergence prints its seed and the whole program |
 | `check-planted` | build a throwaway copy of the library, plant seven defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
-| `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one - ctang above all - and on any include of `binary.h` |
+| `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
-| `cli-test` | run the `tang` command over its documented cases and exit statuses |
+| `cli-test` | run the `tang` command over its documented cases and exit statuses, `--dap` included |
+| `examples` | build and run every example; the web server with `--self-test` |
 | `fuzz-replay` | feed every corpus and seed file once through the fuzz entry points, in an ordinary build |
 | `fuzz-parse`, `fuzz-template`, `fuzz-run` | build the libFuzzer harnesses (clang); `fuzz-run-parse`, `fuzz-run-template` and `fuzz-run-run` run them |
 | `bench` | run the benchmark harness in full; it prints a calibration result first |
@@ -111,7 +126,7 @@ stable ones.
 | `allocator.h` | stable | `GLTANG_Allocator`, `gltang_allocator_default`, `gltang_allocator` (the one the library allocates through) |
 | `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler reads them, so their shape may change |
 | `compile.h`, `program.h`, `bytecode.h` | free | `gltang_compile`, the immutable reference-counted `GLTANG_Program`, the opcode table |
-| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_error_limit`) and the error list (`gltang_execution_error*`) |
+| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`) and the error list (`gltang_execution_error*`) |
 | `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
 | `seeds.h` | stable | `GLTANG_SeedSequence`: the master seed and atomic counter that every execution's `random.global` and `random.default` are seeded from |
 
