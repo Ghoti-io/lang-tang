@@ -1,12 +1,14 @@
 # Design
 
 **Status:** In progress. Describes what exists: the front end of the Tang
-engine - the parser, the scanner and the syntax tree, ported from ctang as this
-library's own source - the interface that parses a template or a script into
-an owned tree, the `tang` command over it, the divergence ledger, and the
-oracle that compares this library with frozen ctang. What is still not here is
-listed at the end. The architecture it follows is the runtime stack's spine
-(AD-2, AD-3, AD-9, AD-13, AD-14, AD-16, AD-26).
+engine (the parser, the scanner and the syntax tree, ported from ctang as this
+library's own source), the compiler from that tree to this library's own
+bytecode, the switch-dispatched interpreter that runs it on a runtime-core
+context and a runtime-heap heap, the interface that parses, compiles and runs a
+template or a script, the `tang` command over it, the divergence ledger, and
+the oracle that compares this library with frozen ctang. What is still not
+here is listed at the end. The architecture it follows is the runtime stack's
+spine (AD-2, AD-3, AD-9, AD-13, AD-14, AD-16, AD-21, AD-26).
 
 ## What this library is
 
@@ -14,10 +16,12 @@ listed at the end. The architecture it follows is the runtime stack's spine
 The language is ctang's, unchanged: a template language whose code tags and
 scripts share one grammar, with errors as values. What changes is everything
 under the language - a new bytecode, a new interpreter, budgets, a collector,
-a debugger - and none of that is here yet. This commit is the first piece,
-and the one every later piece reads: **the tree.** The parser, the scanner and
-the AST are ported from ctang; the interface is new; the oracle and the ledger
-that keep the engine honest exist before any behaviour that could drift.
+a debugger. The first piece was **the tree**: the parser, the scanner and the
+AST are ported from ctang, and the oracle and the ledger that keep the engine
+honest exist before any behaviour that could drift. The second is **the
+engine**, described under "The engine" below: a compiler, an interpreter, the
+value model and the execution API. Libraries (`math`, `random`, the host's
+own), native functions and the error list are the next story's.
 
 Nothing in this library is built on ctang's bytecode, interpreter, JIT or
 `binary.h` (AD-9), and no name in it is ctang's: the prefix is `GLTANG`, never
@@ -141,6 +145,260 @@ comes from `gcu_malloc` and goes back with `gcu_free`, through
 the story that adds execution**: a context's counting allocator exists
 (`runtime-core`), and the parse of a template is part of running it, but the
 budget scope that would own the charge is that story's.
+
+## The engine
+
+The path from source to answer is four calls, each a library of its own
+concern: `gltang_parse` (source to tree), `gltang_compile` (tree to program),
+`gltang_execution_create` (a program on a runtime-core context that already has
+a runtime-heap heap) and `grcore_run(context, gltang_execution_entry,
+execution, &outcome)`. The host owns the context, so the host owns the budgets
+(fuel, memory, guest depth), the thread it runs on, and what to do when a run
+pauses. A program is immutable and reference counted, so many contexts on many
+threads may run the same one; an execution belongs to one context and is the
+context's keyed state (cardinality one), destroyed with it.
+
+### Values
+
+A value is one 64-bit word with a tag in the low four bits.
+
+| Tag | Meaning |
+| --- | --- |
+| `0` | A heap pointer, 16-byte aligned. The word `0` is the null pointer and also the language's null. |
+| `1` | A small integer, 60 bits signed. An integer outside that range is boxed. |
+| `2` | A boolean: `0x02` false, `0x12` true. |
+| `3` | A function value; the function index is in the upper bits. |
+| `0xF` | `V_UNWIND`, the interpreter's own sentinel for "a run is unwinding"; never stored. |
+
+Floats and large integers are boxed heap objects. The heap is told this through
+`gltang_heap_options_configure`, which sets the codec (tag mask `0xF`, tag
+value `0`, mask `UINT64_MAX`), so the collector treats a word with a non-zero
+tag as a number and nothing else. The first `u32` of every heap payload is its
+kind: integer, float, string, array, array store, map, map store, error.
+
+An array and a map are a small header plus a **replaceable storage object**:
+growing allocates a new store and swaps it in, so the header's address, which
+other values hold, never changes. The `store` field is a union of `void *` and
+the typed pointer so the collector's write barrier (`grheap_store`) is the only
+way it is written. Maps keep insertion order, with an open-addressing `u32`
+index.
+
+A string is one flat heap block: kind, segment count, byte length, grapheme
+length, a segment array of `(type << 32) | first_grapheme`, a `u32` offsets
+table only when the grapheme length differs from the byte length (so ASCII
+costs nothing), and the bytes. Concatenation and substring do not re-break
+graphemes (ctang's behaviour); rendering re-breaks through the unicode
+library's `from_utf8`. The segment tag is what lets the output carry typed
+pieces: `print` appends a value's segments, and `gltang_execution_output_render`
+encodes each by its tag (text, HTML, HTML attribute, JavaScript, URL, trusted),
+`gltang_execution_output_raw` does not.
+
+An **error is a value**, as in ctang, and a heap object: a kind (13 of them,
+including the three `[...]` markers that print as themselves), and the origin
+it was created at - file, line, function index, bytecode offset - which the
+host reads with `gltang_execution_result_error`. An error prints as nothing
+(a marker prints as itself) and inside a container prints as `Error: message`.
+The origin is the same pair a poll uses, so the error list of the next story
+and a debugger name the place in the same terms.
+
+**Rejected: NaN boxing.** It would make floats free and put every pointer in 48
+bits, but the collector's codec describes a tag in the low bits and a mask, not
+a NaN pattern, and the 16-byte alignment the heap hands out leaves the four bits
+for free. **Rejected: tagged strings inline.** Short strings in the word would
+save an allocation for small keys, but a string's segments and graphemes make a
+short one no simpler, and the second representation would double the code in
+every operation that takes a string.
+
+### Bytecode
+
+A stack machine, not a register machine. The compiler is a single pass over the
+tree and a stack machine's code is what that pass produces without allocating
+registers; the interpreter's frame size is then `4 + locals + max_stack`, and
+`max_stack` is computed by an abstract-interpretation pass over each function
+(so a program that would overflow its frame is a compile defect, not a runtime
+one). Registers would make the code shorter and the compiler longer, and the
+measured cost of a stack op here (the benchmarks below) is a few nanoseconds.
+
+An instruction is a 32-bit word: the opcode in the low 8 bits, an operand in
+the high 24, so a function holds up to 16,777,215 instructions, constants and
+locals, and a program over that is refused with `GLTANG_ERR_LIMIT`. The
+dispatch is a `switch`; computed goto would be faster and is not portable to
+the compilers the suite builds with, and AD-21's budget is counted in
+instructions either way.
+
+| Opcode | Effect |
+| --- | --- |
+| `POLL` | Poll: function entry and every loop back-edge. |
+| `POP` | `v --`. |
+| `DUP` | `v -- v v`. |
+| `NULL` | `-- null`. |
+| `TRUE` | `-- true`. |
+| `FALSE` | `-- false`. |
+| `CONST` | `-- k`: constant `a` of the program's pool. |
+| `LOAD_LOCAL` | `-- v`: frame local `a`. |
+| `STORE_LOCAL` | `v -- v`: frame local `a`. |
+| `LOAD_GLOBAL` | `-- v`: program-scope variable `a`. |
+| `STORE_GLOBAL` | `v -- v`: program-scope variable `a`. |
+| `FUNC` | `-- f`: the function value of function `a`. |
+| `SET_RESULT` | `v --`: the program's result becomes `v`. |
+| `CLEAR_RESULT` | The program's result becomes null. |
+| `USE` | `-- v`: resolve the library path of constant `a`. |
+| `NEG` | `v -- -v`. |
+| `NOT` | `v -- !v`. |
+| `ADD` | `a b -- a+b`. |
+| `SUB` | `a b -- a-b`. |
+| `MUL` | `a b -- a*b`. |
+| `DIV` | `a b -- a/b`. |
+| `MOD` | `a b -- a%b`. |
+| `LT` | `a b -- a<b`. |
+| `LE` | `a b -- a<=b`. |
+| `GT` | `a b -- a>b`. |
+| `GE` | `a b -- a>=b`. |
+| `EQ` | `a b -- a==b`. |
+| `NE` | `a b -- a!=b`. |
+| `JMP` | Jump to instruction `a`. |
+| `JMP_FALSE` | `v --`: jump to `a` if `v` is falsy. |
+| `JMP_TRUE` | `v --`: jump to `a` if `v` is truthy. |
+| `AND` | `v -- v` and jump to `a` if falsy; `v --` otherwise. |
+| `OR` | `v -- v` and jump to `a` if truthy; `v --` otherwise. |
+| `CAST` | `v -- c`: to int, float, bool, string (`a` is GLTANG_Cast_Type). |
+| `INDEX` | `c i -- v`. |
+| `ATTR` | `c -- v`: attribute named by constant `a`. |
+| `SLICE` | `c [s] [e] [t] -- v`: `a` bit 0 start, 1 end, 2 step. |
+| `SET_INDEX` | `c i v -- v`; `a` is 1 when `v` is copied first if it is a container. |
+| `SET_ATTR` | `c v -- v`: member named by constant `a >> 1`; bit 0 as for SET_INDEX. |
+| `ADOPT` | `v -- v'`: a deep copy of a container, else `v`. |
+| `ARRAY` | `e1..en -- array`, `a` = n. |
+| `MAP` | `k1 v1..kn vn -- map`, `a` = n. |
+| `CALL` | `f a1..an -- v`, `a` = n. |
+| `RET` | `v --`: return `v` to the caller. |
+| `PRINT` | `v -- null`: append `v` to the output. |
+| `PRINT_CONST` | Append string constant `a` to the output. |
+| `ITER_INIT` | `v -- bool`: start iterating array `v` over locals `a`, `a+1`. |
+| `ITER_NEXT` | `-- e` or jump: two words, the second is the exhausted target. |
+
+`ITER_NEXT` takes two words: the second is the exhausted target. Every
+instruction costs one unit of fuel; the operations that do work proportional to
+a size (copy, concatenate, compare, print, render) add one unit per
+`GLTANG_WORK_BYTES_PER_FUEL` (64) bytes, and an element of a container counts
+as 8 bytes.
+
+### Frames, polls, fuel
+
+A Tang-to-Tang call pushes a frame on the context's **guest stack**
+(runtime-core's), not on the C stack, so a recursion of 50,000 frames runs on an
+ordinary 8 MiB C stack and the guest-depth budget (not the C stack) bounds it.
+A frame is slots: four raw header words (function index, pc, sp, flags), then
+the locals, then the operand stack, all of which the collector scans as values
+except the header, which the frame protocol marks `GRCORE_SLOT_RAW`. Operand
+slots are zeroed when popped so a dead value is not kept alive. The interpreter
+reloads its slots pointer after every operation that can allocate or grow the
+stack, because both can move it; the harness's always-move stack exists to prove
+that.
+
+**The call-depth rule.** The guest-depth budget is ctang's `max_call_depth`
+plus one: the top-level frame counts, ctang's does not. With a limit of 10, a
+function can nest 10 calls; the eleventh is the error value `Recursion Limit
+Exceeded`, and the program goes on.
+
+A **poll** is the first instruction of every function and the head of every
+loop, so `continue` polls too. The poll identity is `(function index,
+instruction index)`; it is stable across runs and a pause reports it, with the
+file and line, through `grcore_context_pause_location`. Fuel is charged in a
+batch held in the execution and flushed before every poll and on every exit, so
+the figure a host reads is exact at the places it can read it.
+
+A run that cannot continue unwinds: the engine descriptor's unwind hook counts
+the frames it pops, `gltang_execution_unwound_frames` reports them, and the run
+ends with `GRCORE_ERR_LIMIT` (and the state `UNWOUND`). Pause and unwind are the
+host's decision, not the program's.
+
+**Natives and the runtime poll.** An operation whose work is proportional to a
+size cannot reach a poll instruction while it works, and AD-21 forbids a native
+from pausing, so it calls `grcore_runtime_poll` every 4,096 bytes of work
+(`GLTANG_POLL_BYTES`). That poll can only vote to unwind. A half-built object is
+temp-rooted (the execution's `temps`) while the poll runs, so a collection the
+poll triggers does not free what the operation is building. A runaway
+`[0] * 1000000000` under a small fuel budget therefore ends in a bounded time
+with the limit error, not at the memory ceiling (tested in
+`tests/unit/test_engine.cpp`).
+
+**Memory.** An allocation that returns `GRHEAP_ERR_LIMIT` triggers
+`grcore_runtime_poll`, which runs a collection and counts the memory verdict;
+if that votes to unwind, the run unwinds, and otherwise the operation yields the
+error value `Out of memory`, which is preallocated per execution (so producing
+it cannot itself fail). The execution is a root source reporting `roots[]`
+(result, that error, the program-scope variables, a cache of materialised
+constants) and `temps[]`.
+
+### Names
+
+Resolution is static. A program-scope variable is a global slot, a function's
+variable is a frame slot, and a ranged `for` uses two hidden locals. A name
+used before a function of that name is declared is a "declared twice" compile
+error, as in ctang. Inside a function, a program-scope function declared
+earlier is visible by name, and assigning to it is refused. A top-level
+`global`, a repeated parameter name and an assignment target that is not
+assignable (`Cannot assign to this expression.`) are compile errors, reported
+as `file:line:column: message`.
+
+`use` is the **resolver seam**: `USE` calls the execution's resolver with the
+whole dotted path and binds whatever it returns (an integer, float, string,
+bool or null, as plain data) to the name; no resolver, or a path it does not
+know, binds null. Story 10 replaces the resolver's body with the library
+registry and native functions; nothing else in the engine changes.
+
+### The tree-depth budget
+
+Story 8 left destroy, walk, count and print recursing once per level of the
+tree, and print quadratic. The parser now refuses a tree deeper than
+`GLTANG_MAX_TREE_DEPTH` (10,000, the same figure as bison's nesting limit)
+with `GLTANG_ERR_LIMIT` and no tree: each node records its height as it is
+created and the create function refuses past the limit, so the bound holds for
+every tree that exists and destroy, walk, count, print and the compiler are
+bounded by it. Measured: `1+1+...` of 9,999 pluses (10,000 deep) parses,
+compiles and runs, and 10,000 pluses is refused, under the plain build and
+under ASan, whose frames are larger. `gltang_tree_print` caps its indent at 256
+levels, which makes it linear. Ledger rows D-016 and D-017.
+
+### The memory-budget contract
+
+The execution's allocations are the context's: the heap charges them to the
+context's counting allocator, so a memory budget set on the context is a budget
+on the program. The parse is not charged (the parser's allocations are still
+cutil's, uncounted). That is the one thing story 8 deferred to this story that
+this story leaves open, and the reason: the parse happens before the context
+exists in the `tang` command and in every example, and charging it needs the
+parser to take an allocator (a change to the stable `gltang_parse` signature).
+It is carried forward, not dropped.
+
+### The ported tests
+
+`tests/unit/test_execute_simple.cpp` and `test_execute_complex.cpp` are ctang's
+two execution suites ported to this API, through `tests/exec_harness.h`, which
+supplies the counting allocator and page provider that prove nothing leaks, the
+`Context` that runs a program and reads its result, and the environment switches
+`GRHEAP_TORTURE`, `GRHEAP_VERIFY` and `GLTANG_TEST_MOVING_STACK`. They run
+plain, with the heap collecting before every allocation and verifying every
+store, and with a stack that moves on every push; `make test-torture` runs them
+under ASan and UBSan as well.
+
+Every ctang test has a row here. 88 of the 89 in the simple suite and all 28 in
+the complex suite are ported, with the same inputs and expected values
+wherever the departure ledger does not say otherwise.
+
+| ctang test | Disposition |
+| --- | --- |
+| `Binary.CodeBlockIsUnmappedOnDestroy` (simple) | **Dropped.** It tests ctang's JIT code block, which this library does not have (story 8's rule: nothing is built on ctang's bytecode or `binary.h`). |
+| `NativeFunction.Library` (complex) | **Partly ported.** The "function not found" case is ported. The three cases that call a native function value supplied by the host's library (no arguments, two arguments, bound to an object) need the library registry and native functions, which are **story 10's**. |
+| `Function.TheCallDepthLimitIsTheHostsToSet` and `Function.ALocalHasASlotOfItsOwn` (complex) | Ported with the call-depth rule above (budget = `max_call_depth` + 1); the second uses `return` because falling off the end gives null (D-010). |
+| `Function.RecursionIsBounded` (complex) | Ported; the 100,000-deep case runs at 3,000 in the moving-stack variant, where each push copies the stack. |
+| every other test in both files | Ported. |
+
+Added beside them: `Function.FallingOffTheEndReturnsNull` (D-010).
+The probes that decided the behaviour of every row (ctang against lang-tang over
+about 500 snippets, and over the 35 template and 108 script corpus files) found
+only the departures in the ledger: D-009 to D-015, D-017 and D-019.
 
 ## Rejected alternatives
 
@@ -304,36 +562,44 @@ that an include there passes while the same line anywhere else does not.
 
 `tools/check-labels.sh` classifies each header by name: the C embedding API
 (`core.h`, `parse.h`, `libver.h`, `macros.h`, `namespace.h`, `allocator.h`, the
-umbrella) is `stable`; everything under `ast/` and the headers the AST is built
-on are `free`. A header in neither list fails, so a new header is a decision
+umbrella) is `stable`; everything under `ast/`, the headers the AST is built on,
+and the engine's (`bytecode.h`, `program.h`, `compile.h`, `value.h`,
+`execution.h`) are `free`: they are new, and a header joins the stable set by a
+decision to freeze it. A header in neither list fails, so a new header is a decision
 about its stability taken on purpose.
 
 ## The `tang` command
 
 A host (AD-2: apps in an engine's repository are hosts). It reads a file,
-`-e SOURCE` or stdin, parses in template mode (`-s` for a script), and prints
-the tree; a syntax error is `name:line:column: message` on stderr and exit 1;
-usage errors exit 2, read failures 3, out of memory 4. `--help` says execution
-arrives with the interpreter. `-c`/`--cleanup` is accepted for ctang
-compatibility and does nothing: this command always releases what it
-allocates. It is not installed, so it cannot shadow ctang's `tang`.
+`-e SOURCE` or stdin, parses, compiles and **runs** it, and writes the rendered
+output to stdout: a template by default for a file or stdin, `-s` for a script,
+and `-e` is a script (`-t` makes it a template; D-019). `--tree` prints the
+tree instead of running. `--fuel N` and `--depth N` set the budgets. A syntax or
+compile error is `name:line:column: message` on stderr and exit 1; usage
+errors exit 2, read failures 3, out of memory 4, a run paused for fuel 5
+(`name:line: paused on <keys>`), and a run unwound 6. `-c`/`--cleanup` is
+accepted for ctang compatibility and does nothing: this command always releases
+what it allocates. It is not installed, so it cannot shadow ctang's `tang`.
 
 ## Known defects, inherited and open
 
-**Destroy, walk and print recurse with the depth of the tree.** A source such as
-`1+1+1+...` is left-associative, so a chain of 10^5 terms is a tree 10^5 deep,
-and `gltang_tree_destroy`, `gltang_ast_node_count` and `gltang_tree_print` each
-recurse once per level. Measured here on the release build with an 8 MiB stack,
-100,000 terms parse, count and destroy, and 400,000 overflow the C stack; the
-limit moves with the compiler, the optimisation level and the sanitizer, since
-it is a limit on frames. ctang has the same defect. `print` is also quadratic:
-it builds an indent string one level longer at each depth. It is **recorded as
-open for story 9**, which writes the compiler and the interpreter that walk the
-tree and decides the depth budget; it is not fixed here, and the ledger does not
-carry it because it is not a divergence from ctang.
+**The parse is not charged to the context.** See "The memory-budget contract".
 
-The parser's own depth is bounded (`GLTANG_ERR_LIMIT` at 10,000 levels of
-nesting); the tree's depth is not, which is the asymmetry.
+ctang's bytecode engine hangs on a program that ends in a function
+declaration, and crashes on `function f(f)`. Neither is inherited: lang-tang
+does not share the engine (D-011).
+
+**A float literal is read with `strtold`**, as in ctang's scanner, and narrowed
+to a double. On x86-64 that is the 80-bit type and the narrowing rounds once;
+under Valgrind, which emulates `long double` as a double, `9223372036854775807.0`
+reads as 2^63 - 1024. The one test whose answer depends on that boundary
+(`Cast.OutOfRangeFloatToIntegerSaysSo`) skips that block when the host's
+`strtold` does not give 2^63, and `make test-valgrind` passes. Reading the
+literal with `strtod` would remove the dependency and is a change to the
+scanner's rule, left for the story that touches it.
+
+Destroy, walk, count and print used to recurse with the depth of the tree
+(story 8's known defect). That is closed by the tree-depth budget above.
 
 ## Gates
 
@@ -343,8 +609,12 @@ every header includes `macros.h` and has a unique guard), `check-aliasing`,
 `check-stamps` (every compile rule names a flag stamp that records what its
 recipe expands), `check-labels`, `check-edges`, `check-gates` (every gate is
 run against a planted defect, a control and an empty tree), the examples, the
-unit tests, the CLI test, the fuzz replay, the oracle differential, and one
-smoke run of the benchmark. `check-install` proves what `make install` leaves
+unit tests, the same engine suites again with the heap in torture and verify
+mode and again with a stack that moves on every push, the CLI test, the fuzz
+replay (three harnesses), the oracle differential, and one smoke run of the
+benchmark. `make test-torture` repeats the engine suites under ASan and UBSan
+and `make test-tsan` runs every suite under ThreadSanitizer, including the ones
+that hop a paused context from thread to thread. `check-install` proves what `make install` leaves
 behind is usable by a consumer that includes only the umbrella.
 
 CI is not added: the spine defers it until each engine has a body, and `compress`
@@ -352,34 +622,54 @@ and `text` are the libraries that have it. A local `make test` is the whole gate
 
 ## Benchmarks
 
-`bench/bench.c` is the harness (AD-26), here from the first commit: a
-calibration case beside parse of a small script, parse of a 1 MiB generated
-template, and destruction of that template's tree. `make test` runs it once
-with a tiny workload; `make bench` runs it in full. No numeric budget is
-asserted. The first measurement, on the development machine (gcc -O2, one run),
-for reading future figures against the calibration beside them:
+`bench/bench.c` is the harness (AD-26): a calibration case beside the front
+end (parse of a small script, parse of a 1 MiB generated template, destruction
+of its tree, compile of both) and the engine (a tight integer loop, a recursive
+`fib(15)`, building a string, building an array, and the loop again paused and
+resumed every 500 units of fuel). An engine case's unit is one run of a fixed
+program, timed from `grcore_run` to its return. `make test` runs it once with a
+tiny workload; `make bench` runs it in full. No numeric budget is asserted. The
+first measurement, on the development machine (gcc -O2, best of seven), for
+reading future figures against the calibration beside them:
 
 | Case | Figure |
 | --- | --- |
-| calibration | 1.1 ns per xorshift step |
-| parse of the small script | about 4.2 us |
-| parse of a 1 MiB template (about 11,000 rows) | about 44 ms |
-| destroy of that tree | about 18 ms |
+| calibration | 1.4 ns per xorshift step |
+| parse of the small script | about 4.5 us |
+| parse of a 1 MiB template (about 11,000 rows) | about 46 ms |
+| destroy of that tree | about 19 ms |
+| compile of the small script | about 1.4 us |
+| compile of the 1 MiB template | about 7 ms |
+| run: 1,000-iteration integer loop | about 65 us (65 ns per iteration, about a dozen instructions) |
+| run: `fib(15)` (1,973 calls) | about 181 us (about 92 ns per call) |
+| run: 200 string appends | about 40 us |
+| run: 1,000 array element stores | about 82 us |
+| run: the loop paused and resumed every 500 fuel | about 69 us (the pauses add about 6%) |
 
 ## Fuzzing
 
 `tests/fuzz/fuzz_parse.c` and `fuzz_template.c` are libFuzzer harnesses on
-`gltang_parse` (`make fuzz-parse`, `make fuzz-template`, run with
-`make fuzz-run-parse`; clang). `make fuzz-replay` feeds every corpus and seed
-file once through the same entry points in an ordinary gcc build and fails on a
-crash - it is part of `make test`, so a regression a fuzzer once found is a
-failing test and not a campaign to repeat. No campaign is run here, and no
-differential fuzzing: that is the story that compares execution.
+`gltang_parse` and, for an accepted tree, `gltang_compile`; `fuzz_run.c` parses,
+compiles and runs, under a small fuel, memory and depth budget, so a loop or a
+runaway recursion ends as a pause or an unwind (neither is a failure) and the
+result and output are read after (`make fuzz-parse`, `make fuzz-template`,
+`make fuzz-run`; run with `make fuzz-run-parse` and so on; clang). The first
+byte of a `fuzz_run` input picks script or template. `make fuzz-replay` feeds
+every corpus and seed file once through the same entry points in an ordinary gcc
+build and fails on a crash - it is part of `make test`, so a regression a fuzzer
+once found is a failing test and not a campaign to repeat. Fifteen seconds of
+`fuzz_run` (307,000 executions, 2,940 new units) found nothing on the first
+run. No campaign is run here, and no differential fuzzing: that is the story
+that compares execution against ctang over generated programs.
 
 ## What is not here
 
-No bytecode, compiler, interpreter, `Program` or execution context, no
-`ComputedValue`, no library registry or `random`, no host API, no budgets and
-no debugger (later stories). No `simplify`. No CI. The ledger's open rows
-(sections 13.9 and 13.13 of the language reference) are decisions the compiler
-and interpreter take.
+No libraries (`math`, `random`, `string`, the host's own), no native function
+values, no library registry (the resolver seam is where it goes), no error list
+or halt-on-first-error option, no logging of errors at creation (all story 10);
+the execution differential against ctang and the closing of the ledger (story
+11). No debugger beyond the frame protocol the engine registers (the frame
+walk, scopes and variables read from a paused context). No `simplify`. No
+parse-time charge to a context's memory (see "The memory-budget contract"). No
+CI. The ledger's open row (section 13.9 of the language reference, D-001) is a
+decision the error list takes.

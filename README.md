@@ -6,13 +6,15 @@ same grammar as a script. `lang-tang` runs ctang's documented language on the
 new stack and replaces [ctang](../ctang), which stays frozen as its oracle until
 every difference between the two is fixed or recorded in the divergence ledger.
 
-Nothing is released. So far there is the front end: the parser, the scanner and
-the syntax tree, ported from ctang as this library's own source; the interface
-that parses a template or a script into a tree the caller owns; the `tang`
-command over it, which parses and dumps; the divergence ledger; and the oracle
-that compares every parse with ctang's. The bytecode, the interpreter, the
-budgets and the debugger come in later work, and so does anything that runs a
-template.
+Nothing is released. So far there is the front end (the parser, the scanner and
+the syntax tree, ported from ctang as this library's own source), a compiler to
+the library's own bytecode, a switch-dispatched interpreter whose calls live on
+the runtime-core context's guest stack, a heap of values described to
+runtime-heap, the interface that parses, compiles and runs a template or a
+script under fuel, memory and call-depth budgets (a run can pause, resume or
+unwind), the `tang` command over it, the divergence ledger, and the oracle that
+compares every parse with ctang's. The libraries (`math`, `random`, native
+functions), the error list and the debugger come in later work.
 
 ## Example
 
@@ -42,11 +44,15 @@ int main(void) {
 
 Compile it against an installed copy with
 `cc example.c $(pkg-config --cflags --libs ghoti.io-lang-tang-0)`.
-[examples/parse_template.c](examples/parse_template.c) is a complete version.
+[examples/parse_template.c](examples/parse_template.c) is a complete version;
+[examples/run_template.c](examples/run_template.c) goes on to compile and run a
+template and read its output, and [examples/pause_resume.c](examples/pause_resume.c)
+stops a runaway loop at its file and line.
 
 ## Building
 
-`lang-tang` depends on `cutil` and `unicode`, found through pkg-config only, and
+`lang-tang` depends on `cutil`, `unicode`, `runtime-core` and `runtime-heap`,
+found through pkg-config only, and
 needs `bison` (3.8.2 or later) and `flex` to generate the parser and scanner.
 Build the suite first from the workspace root (`./bootstrap.sh`), then:
 
@@ -64,16 +70,17 @@ this library:
 
 | Target | Does |
 | --- | --- |
-| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests, the CLI test, the fuzz replay, the oracle differential, and one smoke run of the benchmark |
+| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests (the engine suites again under the heap's torture mode and with a moving guest stack), the CLI test, the fuzz replay, the oracle differential, and one smoke run of the benchmark |
 | `test-oracle` | parse every file of `tests/corpus` with lang-tang and with ctang (in a child process, with a wall-clock kill) and fail on any difference the ledger does not record; `ORACLE_PC` names the ctang package |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
 | `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one - ctang above all - and on any include of `binary.h` |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
 | `cli-test` | run the `tang` command over its documented cases and exit statuses |
 | `fuzz-replay` | feed every corpus and seed file once through the fuzz entry points, in an ordinary build |
-| `fuzz-parse`, `fuzz-template` | build the libFuzzer harnesses (clang); `fuzz-run-parse` and `fuzz-run-template` run them |
+| `fuzz-parse`, `fuzz-template`, `fuzz-run` | build the libFuzzer harnesses (clang); `fuzz-run-parse`, `fuzz-run-template` and `fuzz-run-run` run them |
 | `bench` | run the benchmark harness in full; it prints a calibration result first |
 | `test-asan`, `test-tsan`, `test-valgrind-quiet` | the same tests under ASan+UBSan, ThreadSanitizer and Valgrind |
+| `test-torture` | the engine suites under ASan+UBSan with the heap collecting before every allocation (`GRHEAP_TORTURE`), verifying every store (`GRHEAP_VERIFY`), and a guest stack that moves on every push (`GLTANG_TEST_MOVING_STACK`) |
 | `coverage` | instrumented run and line report |
 
 ## The API
@@ -86,30 +93,35 @@ stable ones.
 | `parse.h` | stable | `gltang_parse`, `GLTANG_Tree`, `GLTANG_ParseError`, `gltang_tree_destroy`, `gltang_tree_node_count`, `gltang_tree_root`, `gltang_tree_print` |
 | `core.h` | stable | `GLTANG_Result` (the suite's vocabulary), `gltang_result_string`, the version |
 | `allocator.h` | stable | `GLTANG_Allocator`, `gltang_allocator_default`, `gltang_allocator` (the one the library allocates through) |
-| `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler of a later story reads them, so their shape may change |
+| `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler reads them, so their shape may change |
+| `compile.h`, `program.h`, `bytecode.h` | free | `gltang_compile`, the immutable reference-counted `GLTANG_Program`, the opcode table |
+| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec |
 
 **Who owns what.** A parse result owns its tree and `gltang_tree_destroy` frees
 it. The root and every node are borrowed from the tree. Memory is cutil's
-(`gcu_malloc`), exactly as ctang's was; charging it to a runtime context is for
-the story that adds execution. An output parameter is written only on success,
+(`gcu_malloc`), exactly as ctang's was; a run's own allocations are the
+context's, and the parse is not charged to it (design.md says why). A program is
+immutable and may be run by many contexts on many threads at once. An output parameter is written only on success,
 except the optional `GLTANG_ParseError`, which is written when and only when the
 result is `GLTANG_ERR_FORMAT`.
 
 **Threads.** A parse is independent of every other: nothing is shared between
-calls.
+calls. A paused context may be resumed on a different thread.
 
 ## The `tang` command
 
 ```bash
-tang FILE                # parse a template and print its tree
-tang -s FILE             # ... a script
-tang -e 'Hello <%= 1 %>' # ... the source from the argument
-echo '1 + 2' | tang -s   # ... or from stdin
+tang FILE                    # run a template and print its output
+tang -s FILE                 # ... a script
+tang -e 'print(1 + 2);'      # ... a script given on the command line (-t: a template)
+echo 'print(1 + 2);' | tang -s   # ... or from stdin
+tang --tree FILE             # print the tree instead of running
+tang --fuel 10000 -e 'while (true) {}'   # a budget; the pause names file and line
 ```
 
-A syntax error is `name:line:column: message` on stderr and exit status 1;
-usage errors exit 2, a file that cannot be read 3. Execution arrives with the
-interpreter.
+A syntax or compile error is `name:line:column: message` on stderr and exit
+status 1; usage errors exit 2, a file that cannot be read 3, out of memory 4, a
+run paused for fuel 5, a run unwound 6.
 
 ## Documentation
 
