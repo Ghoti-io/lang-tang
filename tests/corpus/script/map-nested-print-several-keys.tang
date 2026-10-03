@@ -1,0 +1,1 @@
+print({outer: {p: 1, q: 2}, other: [1, {r: 3, s: 4}]}); 1;

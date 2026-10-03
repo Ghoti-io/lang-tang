@@ -1,0 +1,1 @@
+print(null as bool); print(" "); print(null as int); print(" "); print(null as float); print(" "); print(null as string); null as string;

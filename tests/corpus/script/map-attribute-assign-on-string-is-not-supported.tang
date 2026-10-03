@@ -1,0 +1,1 @@
+s = "abc"; x = (s.name = 5); print("after"); x;

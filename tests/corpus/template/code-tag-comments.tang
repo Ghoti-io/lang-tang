@@ -1,0 +1,2 @@
+<% // a comment
+ x = 1; /* block */ %>x=<%= x %> // not a comment here /* nor this */

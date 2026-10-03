@@ -1,0 +1,1 @@
+use random; a = random.seeded(1); b = random.seeded(2); a.next_int == b.next_int;

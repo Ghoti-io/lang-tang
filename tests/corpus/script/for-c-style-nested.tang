@@ -1,0 +1,1 @@
+s = ""; for (i = 0; i < 3; i += 1) { for (j = 0; j < 3; j += 1) { s += i * j; s += " "; } } print(s); s.length;

@@ -1,0 +1,1 @@
+n = null; x = n[0]; print("after"); x;

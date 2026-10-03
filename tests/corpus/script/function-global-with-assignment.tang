@@ -1,0 +1,2 @@
+function f() { global g = 5; return g; }
+print(f()); g;

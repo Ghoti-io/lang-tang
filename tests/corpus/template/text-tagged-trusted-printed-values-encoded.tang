@@ -1,0 +1,1 @@
+<b>bold</b> <%= !"<script>alert(1)</script>" %> <i>x</i>

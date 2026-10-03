@@ -1,0 +1,1 @@
+words = ["a", "b", "a", "c", "a", "b"]; counts = {:}; for (w : words) { if (counts[w] == null) counts[w] = 0; counts[w] = counts[w] + 1; } print(counts.a); print(counts.b); print(counts.c); counts.a;

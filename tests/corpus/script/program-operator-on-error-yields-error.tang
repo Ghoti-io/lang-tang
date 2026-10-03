@@ -1,0 +1,1 @@
+e = 1 / 0; print(-e); print(!e); print(e as bool); print(e == e); e < 1;

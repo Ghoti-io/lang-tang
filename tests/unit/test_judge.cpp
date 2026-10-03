@@ -67,6 +67,32 @@ TEST(Comparison, PausedAgreesWithNothingElse) {
   EXPECT_FALSE(oracle::agree(Verdict::paused(), Verdict::accept(2)));
 }
 
+TEST(Comparison, FinishedRunsAgreeOnOutputResultKindAndResultText) {
+  Verdict a = Verdict::ran("out", "integer", "5");
+  EXPECT_TRUE(oracle::agree(a, Verdict::ran("out", "integer", "5")));
+  EXPECT_FALSE(oracle::agree(a, Verdict::ran("ouT", "integer", "5"))) << "the output differs";
+  EXPECT_FALSE(oracle::agree(a, Verdict::ran("out", "float", "5"))) << "the result kind differs";
+  EXPECT_FALSE(oracle::agree(a, Verdict::ran("out", "integer", "6"))) << "the result text differs";
+  EXPECT_FALSE(oracle::agree(a, Verdict::ran("", "integer", "5")));
+}
+
+TEST(Comparison, AFinishedRunDisagreesWithEveryOtherKindOfVerdict) {
+  Verdict a = Verdict::ran("", "null", "");
+  EXPECT_FALSE(oracle::agree(a, Verdict::reject()));
+  EXPECT_FALSE(oracle::agree(Verdict::reject(), a));
+  EXPECT_FALSE(oracle::agree(a, Verdict::killed())) << "killed agrees only with paused";
+  EXPECT_FALSE(oracle::agree(Verdict::paused(), a)) << "paused never agrees with a finished ctang";
+  EXPECT_FALSE(oracle::agree(a, Verdict::accept(0)));
+  EXPECT_TRUE(oracle::agree(Verdict::reject(), Verdict::reject())) << "both refused to compile";
+}
+
+TEST(Comparison, TheTextOfAVerdictShowsTheOutputAndTheResult) {
+  std::string shown = Verdict::ran("a\nb\x01", "error", "Divide by zero").str();
+  EXPECT_NE(shown.find("a\\nb\\x01"), std::string::npos) << shown;
+  EXPECT_NE(shown.find("error"), std::string::npos);
+  EXPECT_NE(shown.find("Divide by zero"), std::string::npos);
+}
+
 TEST(Judge, AllAgreeingPasses) {
   oracle::Ledger ledger = ledger_of("| D-001 | limit | open | - | - | 9 | x |\n");
   auto j = oracle::judge({{"script/if.tang", Verdict::accept(4), Verdict::accept(4)}}, ledger);
@@ -159,6 +185,52 @@ TEST(Driver, ABrokenRunnerThrowsRatherThanPassingAsAVerdict) {
   EXPECT_THROW(oracle::ctang_verdict("/bin/sh", "-c", "exit 3", 5000), std::runtime_error);
   EXPECT_THROW(oracle::ctang_verdict("/bin/sh", "-c", "echo gibberish", 5000), std::runtime_error);
   EXPECT_THROW(oracle::ctang_verdict("/no/such/runner", "script", "x", 5000), std::runtime_error);
+}
+
+TEST(Judge, TheParseDifferentialDoesNotJudgeStaleness) {
+  // A row names the files that diverge in execution; those parse the same, and
+  // staleness is the execution differential's to judge.
+  oracle::Ledger ledger = ledger_of("| D-007 | ctang-defect | recorded | 9 | script/if.tang | 11 | an execution divergence |\n");
+  auto parse = oracle::judge({{"script/if.tang", Verdict::accept(4), Verdict::accept(4)}}, ledger, /*check_stale=*/false);
+  EXPECT_TRUE(parse.ok());
+  auto run = oracle::judge({{"script/if.tang", Verdict::ran("", "null", ""), Verdict::ran("", "null", "")}}, ledger);
+  ASSERT_FALSE(run.ok());
+  EXPECT_TRUE(any_mentions(run.failures, "stale ledger row D-007"));
+}
+
+TEST(Judge, AnExecutionDivergenceNamesTheFileAndBothResults) {
+  oracle::Ledger ledger = ledger_of("| D-001 | limit | open | - | - | 9 | x |\n");
+  auto j = oracle::judge({{"script/while.tang", Verdict::ran("", "null", ""), Verdict::ran("", "bool", "false")}}, ledger);
+  ASSERT_FALSE(j.ok());
+  EXPECT_TRUE(any_mentions(j.failures, "script/while.tang"));
+  EXPECT_TRUE(any_mentions(j.failures, "bool"));
+}
+
+TEST(Driver, ParsesTheRunReplies) {
+  Verdict v = oracle::ctang_run_verdict("/bin/sh", "-c", "printf 'output 6869\\nresult integer 3432\\n'", 5000);
+  EXPECT_EQ(v.kind, oracle::Kind::Output);
+  EXPECT_EQ(v.output, "hi");
+  EXPECT_EQ(v.result_kind, "integer");
+  EXPECT_EQ(v.result_text, "42");
+  Verdict empty = oracle::ctang_run_verdict("/bin/sh", "-c", "printf 'output \\nresult null \\n'", 5000);
+  EXPECT_EQ(empty.kind, oracle::Kind::Output);
+  EXPECT_EQ(empty.output, "");
+  EXPECT_EQ(empty.result_text, "");
+  EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "echo refused", 5000).kind, oracle::Kind::Reject);
+}
+
+TEST(Driver, ARunReplyThatIsNotExactlyTheFormatIsAHarnessFailure) {
+  for (const char * reply : {"", "output 6869", "output 6869\\n", "output 686\\nresult null \\n", "output zz\\nresult null \\n",
+           "output 68\\nresult null\\n", "result null \\noutput 68\\n", "output 68\\nresult null \\nextra\\n", "refused\\nextra\\n"}) {
+    std::string cmd = std::string("printf '") + reply + "'";
+    EXPECT_THROW(oracle::ctang_run_verdict("/bin/sh", "-c", cmd, 5000), std::runtime_error) << "reply: " << reply;
+  }
+}
+
+TEST(Driver, ARunnerThatIsKilledOrCrashesIsAVerdictInRunModeToo) {
+  EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "kill -SEGV $$", 5000).kind, oracle::Kind::Killed);
+  EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "sleep 30", 300).kind, oracle::Kind::Killed);
+  EXPECT_THROW(oracle::ctang_run_verdict("/bin/sh", "-c", "exit 4", 5000), std::runtime_error);
 }
 
 TEST(Driver, ParsesBothVerdictLines) {

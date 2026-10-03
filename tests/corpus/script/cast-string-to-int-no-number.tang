@@ -1,0 +1,1 @@
+x = "abc" as int; print("after"); x;

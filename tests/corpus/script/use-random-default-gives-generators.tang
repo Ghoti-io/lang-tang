@@ -1,0 +1,1 @@
+use random; a = random.default; b = random.default; print(a.next_float <= 1.0); b.next_float >= 0.0;

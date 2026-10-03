@@ -1,0 +1,1 @@
+print({a: 1}); print(" "); print({k: "v"}); print(" "); print({n: [1, 2]}); print({e: null}); {a: {b: 1}};

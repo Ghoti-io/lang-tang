@@ -1,0 +1,2 @@
+function push_nine(a) { a[a.size] = 9; return a.size; }
+x = [1]; print(push_nine(x)); print(x); push_nine(x);

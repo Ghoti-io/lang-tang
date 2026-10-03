@@ -1,0 +1,1 @@
+a = {k: 1}; b = a; b.k = 2; print(a.k); a == b;

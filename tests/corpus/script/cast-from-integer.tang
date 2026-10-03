@@ -1,0 +1,1 @@
+print(0 as bool); print(5 as bool); print(" "); print(5 as float); print(" "); print(-5 as string); 42 as int;

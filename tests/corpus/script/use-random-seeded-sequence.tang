@@ -1,0 +1,1 @@
+use random; r = random.seeded(42); print(r.next_int); print(" "); print(r.next_int); print(" "); print(r.next_int); r.next_int;

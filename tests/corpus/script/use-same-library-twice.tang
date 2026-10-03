@@ -1,0 +1,1 @@
+use math; use math as other; print(math.pi == other.pi); other.pi;

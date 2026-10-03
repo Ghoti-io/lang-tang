@@ -1,0 +1,1 @@
+m = {name: "x", n: 4}; print(m.name); print(m["name"]); print(m.n); m.n == m["n"];

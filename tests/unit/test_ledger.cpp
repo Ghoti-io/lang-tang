@@ -81,7 +81,8 @@ TEST(Ledger, TheRecordedDeparturesAreSeeded) {
 TEST(Ledger, IsClosedExactlyWhenNoRowIsOpen) {
   // After the host API (story 10) section 13.9, the last open row, is a
   // recorded departure: the error is listed. The execution differential
-  // (story 11) may open rows again, and then this reads false.
+  // (story 11) found divergences and recorded each one (D-023 to D-026), so
+  // the ledger is still closed.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   ASSERT_TRUE(ledger.valid());
   size_t open = 0;
@@ -90,6 +91,51 @@ TEST(Ledger, IsClosedExactlyWhenNoRowIsOpen) {
   }
   EXPECT_EQ(ledger.closed(), open == 0);
   EXPECT_EQ(open, 0u) << "D-001 was the last open row, and story 10 recorded it";
+}
+
+TEST(Ledger, TheDivergencesTheExecutionDifferentialFindsNameTheirFiles) {
+  // Story 11: every recorded row whose divergence shows in the output or the
+  // result names the corpus files that show it, so it goes stale (and fails the
+  // differential) the day the divergence disappears. The rows with no file by
+  // nature say why in their summary.
+  oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
+  ASSERT_TRUE(ledger.valid());
+  for (const char * id : {"D-009", "D-010", "D-011", "D-012", "D-013", "D-014", "D-015", "D-017", "D-023", "D-024", "D-025", "D-026"}) {
+    const oracle::Row * row = nullptr;
+    for (const auto & r : ledger.rows) {
+      if (r.id == id) {
+        row = &r;
+      }
+    }
+    ASSERT_NE(row, nullptr) << id;
+    EXPECT_EQ(row->status, "recorded") << id;
+    EXPECT_FALSE(row->corpus.empty()) << id << " names no corpus file";
+  }
+  for (const auto & r : ledger.rows) {
+    if (r.status == "recorded" && r.corpus.empty()) {
+      EXPECT_GT(r.summary.size(), 80u) << r.id << " has no corpus file and must say why in its summary";
+    }
+  }
+}
+
+TEST(Ledger, NoCorpusFileIsNamedByTwoRows) {
+  // A file in two rows would be accepted by the first and make the second
+  // impossible to see stale.
+  oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
+  std::map<std::string, std::string> owner;
+  for (const auto & r : ledger.rows) {
+    for (const auto & f : r.corpus) {
+      auto inserted = owner.emplace(f, r.id);
+      EXPECT_TRUE(inserted.second) << f << " is named by " << inserted.first->second << " and " << r.id;
+    }
+  }
+}
+
+TEST(Ledger, TheHeaderNoLongerSaysTheOracleIsParseOnly) {
+  std::string text = oracle::read_text_file(kLedger);
+  EXPECT_EQ(text.find("parse-only"), std::string::npos);
+  EXPECT_EQ(text.find("parse only"), std::string::npos);
+  EXPECT_NE(text.find("rendered output bytes and the\nfinal result"), std::string::npos) << "the header says what execution compares";
 }
 
 TEST(Ledger, ClosedMeansNoRowIsOpen) {

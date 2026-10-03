@@ -1,0 +1,2 @@
+function f(n) { return f(n + 1); }
+x = f(0); print("after"); x;

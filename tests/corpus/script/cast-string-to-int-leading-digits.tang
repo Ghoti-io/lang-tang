@@ -1,0 +1,1 @@
+print("12abc" as int); print(" "); print("  7" as int); print(" "); print("-5" as int); print(" "); print("0" as int); "42" as int;

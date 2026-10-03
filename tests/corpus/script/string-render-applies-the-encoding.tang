@@ -1,0 +1,1 @@
+s = "a&b<c>"; print(s.html.render); print(" "); print(s.html.render.html); print(" "); print(s.percent.render); s.javascript.render;

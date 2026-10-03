@@ -1,0 +1,1 @@
+use random; r = random.seeded(1); print(r); print("|"); r ? 1 : 0;

@@ -1,0 +1,1 @@
+s = "abc"; a = [1]; print(s(1) == null); print(a() == null); s(1);

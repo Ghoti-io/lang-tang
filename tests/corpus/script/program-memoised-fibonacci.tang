@@ -1,0 +1,2 @@
+memo = [0, 1]; function fib(n) { global memo; if (n < memo.size) return memo[n]; v = fib(n - 1) + fib(n - 2); memo[n] = v; return v; }
+print(fib(50)); fib(60);

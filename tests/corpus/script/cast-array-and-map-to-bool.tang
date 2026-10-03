@@ -1,0 +1,1 @@
+print([] as bool); print([0] as bool); print({:} as bool); {a: 1} as bool;

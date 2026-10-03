@@ -1,0 +1,1 @@
+s = "abc"; x = s[::0]; print("after"); x;

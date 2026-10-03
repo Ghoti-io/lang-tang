@@ -1,0 +1,1 @@
+x = "<b>" + !"<i>" + %"a b"; print(x); print("|"); print(x[2:8]); x.length;

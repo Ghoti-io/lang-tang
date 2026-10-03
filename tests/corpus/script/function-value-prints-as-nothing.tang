@@ -1,0 +1,2 @@
+function f() { return 1; }
+print(f); print("|"); print([1]); f;

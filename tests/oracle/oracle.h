@@ -33,6 +33,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -43,19 +44,56 @@ namespace oracle {
 // Verdicts
 // -------------------------------------------------------------------------
 
-// accept(n) and reject are what both sides can say. killed is ctang's alone
-// (the harness killed it, or it crashed), paused is lang-tang's alone and is
-// produced from the story that adds execution on; nothing makes one yet.
-enum class Kind { Accept, Reject, Killed, Paused };
+// accept(n) and reject are what both sides can say about a parse. In an
+// execution comparison `reject` is "the program does not compile" and
+// `output` is a program that ran to its end, with the rendered output bytes and
+// the final result as a kind and canonical text (see oracle_ctang.c for the
+// canonical rule, which both sides apply). killed is ctang's alone (the
+// harness killed it, or it crashed); paused is lang-tang's alone (its fuel or
+// wall clock ran out, or it was unwound with the limit).
+enum class Kind { Accept, Reject, Killed, Paused, Output };
 
 struct Verdict {
   Kind kind = Kind::Reject;
-  size_t nodes = 0; // Accept only
+  size_t nodes = 0;        // Accept only
+  std::string output;      // Output only: the rendered bytes
+  std::string result_kind; // Output only: null, bool, integer, ...
+  std::string result_text; // Output only: the canonical text
 
-  static Verdict accept(size_t n) { return {Kind::Accept, n}; }
-  static Verdict reject() { return {Kind::Reject, 0}; }
-  static Verdict killed() { return {Kind::Killed, 0}; }
-  static Verdict paused() { return {Kind::Paused, 0}; }
+  static Verdict accept(size_t n) { Verdict v; v.kind = Kind::Accept; v.nodes = n; return v; }
+  static Verdict reject() { Verdict v; v.kind = Kind::Reject; return v; }
+  static Verdict killed() { Verdict v; v.kind = Kind::Killed; return v; }
+  static Verdict paused() { Verdict v; v.kind = Kind::Paused; return v; }
+  static Verdict ran(const std::string & output, const std::string & result_kind, const std::string & result_text) {
+    Verdict v;
+    v.kind = Kind::Output;
+    v.output = output;
+    v.result_kind = result_kind;
+    v.result_text = result_text;
+    return v;
+  }
+
+  static std::string shown(const std::string & bytes) {
+    std::string out;
+    for (unsigned char c : bytes) {
+      if (c == '\n') {
+        out += "\\n";
+      }
+      else if (c < 0x20 || c >= 0x7f) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "\\x%02x", c);
+        out += buf;
+      }
+      else {
+        out += (char)c;
+      }
+      if (out.size() > 200) {
+        out += "...";
+        break;
+      }
+    }
+    return out;
+  }
 
   std::string str() const {
     switch (kind) {
@@ -63,6 +101,7 @@ struct Verdict {
       case Kind::Reject: return "reject";
       case Kind::Killed: return "killed";
       case Kind::Paused: return "paused";
+      case Kind::Output: return "output \"" + shown(output) + "\" result " + result_kind + " \"" + shown(result_text) + "\"";
     }
     return "?";
   }
@@ -70,8 +109,10 @@ struct Verdict {
 
 // Equal verdicts agree. killed agrees only with paused: "lang-tang paused on
 // its budget" and "ctang killed by the harness" are the same observation
-// from two engines (AD-16). This is the whole rule, and a pure function so a
-// planted case can drive it.
+// from two engines (AD-16). Paused never agrees with a finished ctang. Two
+// finished runs agree when the output bytes, the result kind and the
+// canonical result text are all equal. This is the whole rule, and a pure
+// function so a planted case can drive it.
 inline bool agree(const Verdict & lang_tang, const Verdict & ctang) {
   if (ctang.kind == Kind::Killed) {
     return lang_tang.kind == Kind::Paused;
@@ -81,6 +122,9 @@ inline bool agree(const Verdict & lang_tang, const Verdict & ctang) {
   }
   if (lang_tang.kind != ctang.kind) {
     return false;
+  }
+  if (lang_tang.kind == Kind::Output) {
+    return lang_tang.output == ctang.output && lang_tang.result_kind == ctang.result_kind && lang_tang.result_text == ctang.result_text;
   }
   return lang_tang.kind != Kind::Accept || lang_tang.nodes == ctang.nodes;
 }
@@ -127,6 +171,14 @@ inline ChildResult run_child(const std::vector<std::string> & argv, int timeout_
     // its crash into a sanitizer report and an ordinary exit. The child is the
     // reference or a stand-in for it, and must die the way it dies.
     unsetenv("LD_PRELOAD");
+    // A reference that runs away must not take the machine with it: a ctang
+    // that loops while allocating (it does, on a program ending in a function
+    // declaration) is stopped by the allocator's refusal long before the
+    // wall clock. The address-space bound is generous for anything it
+    // legitimately runs.
+    struct rlimit limit;
+    limit.rlim_cur = limit.rlim_max = (rlim_t)2 << 30;
+    setrlimit(RLIMIT_AS, &limit);
     std::vector<char *> args;
     for (const auto & a : argv) {
       args.push_back(const_cast<char *>(a.c_str()));
@@ -197,6 +249,54 @@ inline Verdict ctang_verdict(const std::string & runner, const std::string & mod
   unsigned long long n = 0;
   if (std::sscanf(r.output.c_str(), "ok %llu", &n) == 1) {
     return Verdict::accept((size_t)n);
+  }
+  throw std::runtime_error("the oracle runner printed something unreadable for " + file + ": " + r.output);
+}
+
+inline bool from_hex(const std::string & hex, std::string * out) {
+  if (hex.size() % 2 != 0) {
+    return false;
+  }
+  out->clear();
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    unsigned v;
+    if (std::sscanf(hex.substr(i, 2).c_str(), "%2x", &v) != 1) {
+      return false;
+    }
+    out->push_back((char)v);
+  }
+  return true;
+}
+
+// The same, for the run modes (run-script, run-template): ctang's execution of
+// the file. `refused` is a program that does not compile; otherwise the output
+// line and the result line. The same harness-failure rules apply: an unreadable
+// reply throws, so a runner that exits 0 with nothing printed can never read as
+// agreement.
+inline Verdict ctang_run_verdict(const std::string & runner, const std::string & mode, const std::string & file, int timeout_ms) {
+  ChildResult r = run_child({runner, mode, file}, timeout_ms);
+  if (r.timed_out || r.signaled) {
+    return Verdict::killed();
+  }
+  if (r.exit_code != 0) {
+    throw std::runtime_error("the oracle runner failed on " + file + " (exit " + std::to_string(r.exit_code) + ")");
+  }
+  if (r.output == "refused\n") {
+    return Verdict::reject();
+  }
+  std::istringstream in(r.output);
+  std::string line1, line2;
+  std::getline(in, line1);
+  std::getline(in, line2);
+  std::string rest;
+  bool extra = (bool)std::getline(in, rest);
+  std::string output_bytes, text_bytes;
+  if (!extra && line1.compare(0, 7, "output ") == 0 && line2.compare(0, 7, "result ") == 0 && from_hex(line1.substr(7), &output_bytes)) {
+    std::string tail = line2.substr(7);
+    size_t space = tail.find(' ');
+    if (space != std::string::npos && from_hex(tail.substr(space + 1), &text_bytes)) {
+      return Verdict::ran(output_bytes, tail.substr(0, space), text_bytes);
+    }
   }
   throw std::runtime_error("the oracle runner printed something unreadable for " + file + ": " + r.output);
 }
@@ -386,14 +486,16 @@ struct Judgement {
 // A divergence is accepted only if a `recorded` row names the file. A
 // `recorded` row naming a file that agrees is stale, and fails: otherwise a
 // ledger would keep excusing a divergence long after it was fixed, and the
-// ledger could never close.
-inline Judgement judge(const std::vector<Entry> & entries, const Ledger & ledger) {
+// ledger could never close. The parse differential passes check_stale = false:
+// a row names the files that diverge in execution, which parse the same, and
+// staleness is the execution differential's to judge.
+inline Judgement judge(const std::vector<Entry> & entries, const Ledger & ledger, bool check_stale = true) {
   Judgement j;
   for (const auto & e : entries) {
     const Row * row = ledger.recorded_row_for(e.file);
     if (agree(e.lang_tang, e.ctang)) {
       j.agreed++;
-      if (row) {
+      if (row && check_stale) {
         j.failures.push_back("stale ledger row " + row->id + ": " + e.file + " no longer diverges (both say " + e.ctang.str() + ")");
       }
     }

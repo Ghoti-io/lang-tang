@@ -1,0 +1,1 @@
+m = {a: 1, b: "two", c: 3.5}; print(m["a"]); print(m["b"]); print(m["c"]); m["a"];

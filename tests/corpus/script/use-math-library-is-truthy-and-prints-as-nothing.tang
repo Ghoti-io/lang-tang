@@ -1,0 +1,1 @@
+use math; print(math); print("|"); print(math ? "t" : "f"); math ? 1 : 2;

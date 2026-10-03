@@ -1,0 +1,1 @@
+a = 1; { a = 2; } if (a) a = 3; while (false) a = 4; a;

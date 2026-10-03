@@ -1,0 +1,1 @@
+m = {:}; print(m.size == null); print(m.a == null); m["k"] = 1; print(m.k); m;

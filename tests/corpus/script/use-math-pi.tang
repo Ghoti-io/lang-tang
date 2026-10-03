@@ -1,0 +1,1 @@
+use math; print(math.pi); print(" "); print(math.pi * 2); math.pi;

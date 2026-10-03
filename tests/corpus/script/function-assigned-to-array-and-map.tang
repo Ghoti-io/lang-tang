@@ -1,0 +1,2 @@
+function f(n) { return n * 2; }
+m = {fn: f}; a = [f]; print(m.fn(4)); print(" "); print(a[0](5)); m.fn(1);

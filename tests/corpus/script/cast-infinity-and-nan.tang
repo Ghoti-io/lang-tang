@@ -1,0 +1,1 @@
+x = 99999999999999999999999.0; y = x * x; y = y * y; y = y * y; y = y * y; n = y - y; print(y as int); print(" "); print((0 - y) as int); print(" "); print(n as int); n as int;

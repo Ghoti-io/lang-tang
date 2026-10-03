@@ -1,0 +1,1 @@
+print("3.5" as float); print(" "); print("2" as float); print(" "); print(".5x" as float); "7.25abc" as float;

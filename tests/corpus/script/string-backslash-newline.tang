@@ -1,0 +1,2 @@
+s = "ab\
+cd"; print(s); s.length;

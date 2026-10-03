@@ -1,0 +1,1 @@
+print([1, "a", 2.5, true, null] as string); [] as string;

@@ -1,0 +1,1 @@
+print("5" as int + 1); print(" "); print(-"3" as int); print(" "); print(1 + 2 as string); 1 + "2" as int;

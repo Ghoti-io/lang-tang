@@ -1,0 +1,1 @@
+use random; r = random.seeded(1); print(r.shuffle); print("|"); print(r.choose); x = r.next_gaussian; print("after"); x;

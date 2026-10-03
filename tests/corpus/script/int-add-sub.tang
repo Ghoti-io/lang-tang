@@ -1,0 +1,1 @@
+print(7 + 5); print(" "); print(7 - 12); print(" "); print(0 - 0); print(" "); 100 - 1 + 2 - 3;

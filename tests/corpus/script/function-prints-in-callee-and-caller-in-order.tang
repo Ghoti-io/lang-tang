@@ -1,0 +1,2 @@
+function f(s) { print("<" + s + ">"); return s; }
+print(f("a") + f("b"));

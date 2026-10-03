@@ -1,0 +1,1 @@
+use random; print(random.seeded(-1).next_int); print(" "); print(random.seeded(9223372036854775807).next_int); random.seeded(0).next_int;

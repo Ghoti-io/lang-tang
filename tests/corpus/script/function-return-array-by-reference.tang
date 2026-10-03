@@ -1,0 +1,3 @@
+store = [0];
+function get() { global store; return store; }
+r = get(); r[0] = 9; store;

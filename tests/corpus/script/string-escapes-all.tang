@@ -1,0 +1,1 @@
+print("a\tb\nc\rd"); print("\x41\x42"); print("\101\102"); print("\"q\""); print("\\"); print("\z"); "\u";

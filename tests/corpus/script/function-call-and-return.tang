@@ -1,0 +1,2 @@
+function add(a, b) { return a + b; }
+print(add(2, 3)); print(" "); print(add("a", "b")); add(1.5, 2);

@@ -1,0 +1,1 @@
+print({:} as bool); print({a: 1} as bool); {k: "v"} as string;

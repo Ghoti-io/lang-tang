@@ -1,0 +1,1 @@
+if (true) { inside = 5; } print(inside); { b = 6; } print(b); inside + b;

@@ -1,0 +1,1 @@
+s = "xyz"; print(s.length); print(s.byte_length); x = s.nonsense; print("after"); x;

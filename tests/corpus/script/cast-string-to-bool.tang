@@ -1,0 +1,1 @@
+print("" as bool); print("0" as bool); print("false" as bool); "a" as bool;

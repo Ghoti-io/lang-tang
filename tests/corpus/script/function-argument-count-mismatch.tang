@@ -1,0 +1,2 @@
+function f(a, b) { return a + b; }
+x = f(1); print("after"); y = f(1, 2, 3); print(" still"); x;

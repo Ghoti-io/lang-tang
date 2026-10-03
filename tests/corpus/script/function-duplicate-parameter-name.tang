@@ -1,0 +1,2 @@
+function f(a, a) { return a; }
+f(1, 2);

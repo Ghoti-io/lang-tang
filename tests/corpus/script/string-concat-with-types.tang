@@ -1,0 +1,1 @@
+print("n=" + 5); print(" "); print("f=" + 1.5); print(" "); print("b=" + true); print(" "); print(5 + " apples"); "a=" + [1, 2];

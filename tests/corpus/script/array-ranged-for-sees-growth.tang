@@ -1,0 +1,1 @@
+a = [1]; n = 0; for (x : a) { n += 1; if (n < 5) { a[a.size] = x + 1; } } print(a); n;

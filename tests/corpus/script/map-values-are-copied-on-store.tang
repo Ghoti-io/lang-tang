@@ -1,0 +1,1 @@
+inner = {v: 1}; m = {a: inner}; inner.v = 2; print(m.a.v); m["b"] = inner; inner.v = 3; print(m.b.v); m.a.v;

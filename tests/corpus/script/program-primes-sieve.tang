@@ -1,0 +1,3 @@
+n = 50; sieve = []; for (i = 0; i <= n; i += 1) { sieve[i] = true; } sieve[0] = false; sieve[1] = false;
+for (i = 2; i * i <= n; i += 1) { if (sieve[i]) { for (j = i * i; j <= n; j += i) { sieve[j] = false; } } }
+out = []; for (i = 0; i <= n; i += 1) { if (sieve[i]) { out[out.size] = i; } } print(out); out.size;

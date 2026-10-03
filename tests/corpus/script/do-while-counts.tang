@@ -1,0 +1,1 @@
+n = 0; do n += 2; while (n < 7); print(n); n;

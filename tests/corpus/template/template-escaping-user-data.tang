@@ -1,0 +1,1 @@
+<% name = !"<Ann & Bob>"; %><p><%= name %></p><p><%= "<Ann & Bob>" %></p>

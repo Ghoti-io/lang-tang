@@ -1,0 +1,2 @@
+function f(x) { return x; }
+r = f(1 / 0); print("after"); r;

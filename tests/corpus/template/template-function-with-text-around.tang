@@ -1,0 +1,1 @@
+before<% function f() { return "F"; } %>mid<%= f() %>after

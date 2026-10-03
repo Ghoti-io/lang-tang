@@ -1,0 +1,4 @@
+// leading
+x = 1; /* inline */ y = /* mid */ 2; // trailing
+/* multi
+line */ x + y;

@@ -1,0 +1,1 @@
+s = "abc"; r = (s[0] = "x"); print(s); r;

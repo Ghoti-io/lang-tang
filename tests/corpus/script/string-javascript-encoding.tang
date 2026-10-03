@@ -1,0 +1,1 @@
+print("x".javascript); print("it's".javascript); print("a\nb\tc".javascript); print("<script>&".javascript); "\\".javascript;

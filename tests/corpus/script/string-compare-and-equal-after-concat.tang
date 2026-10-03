@@ -1,0 +1,1 @@
+a = "ab" + "c"; print(a == "abc"); print(a < "abd"); print("abc" == a); a != "abc";

@@ -1,0 +1,1 @@
+a = []; for (i = 0; i < 300; i += 1) { a[i] = "item" + i; } s = ""; for (x : a) { s += x[0]; } print(s.length); a.size;

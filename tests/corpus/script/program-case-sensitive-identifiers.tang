@@ -1,0 +1,1 @@
+a = 1; A = 2; aA = 3; print(a + A + aA); True;

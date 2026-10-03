@@ -1,0 +1,1 @@
+n = 5; x = (n.name = 5); print("after"); x;

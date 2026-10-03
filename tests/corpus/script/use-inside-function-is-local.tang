@@ -1,0 +1,2 @@
+function f() { use math; return math.pi; }
+print(f()); math == null;

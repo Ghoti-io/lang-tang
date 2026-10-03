@@ -1,0 +1,1 @@
+use random; r = random.seeded(5); a = r.next_int; r.set_seed(5); b = r.next_int; print(a == b); a == b;

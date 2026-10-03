@@ -1,0 +1,1 @@
+a = [!"<b>", "<i>"]; print(a as string); print("|"); print("x" + a);

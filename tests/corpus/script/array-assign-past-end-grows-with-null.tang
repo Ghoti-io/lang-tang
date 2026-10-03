@@ -1,0 +1,1 @@
+a = [1, 2]; a[5] = 9; print(a.size); print(a[3] == null); print(a); a;

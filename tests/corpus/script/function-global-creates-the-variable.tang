@@ -1,0 +1,2 @@
+function f() { global fresh; fresh = 7; }
+f(); fresh;

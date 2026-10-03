@@ -1,0 +1,1 @@
+use random; g = random.global; print(g ? "t" : "f"); print(g.next_float >= 0.0); g.next_float <= 1.0;

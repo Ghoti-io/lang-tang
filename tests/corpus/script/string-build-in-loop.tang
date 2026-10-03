@@ -1,0 +1,1 @@
+s = ""; for (i = 0; i < 5; i += 1) { s += i; s += ","; } print(s); s.length;

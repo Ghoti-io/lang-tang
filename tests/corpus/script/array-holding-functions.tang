@@ -1,0 +1,3 @@
+function f() { return 1; }
+function g() { return 2; }
+a = [f, g]; print(a[0]() + a[1]()); a.size;

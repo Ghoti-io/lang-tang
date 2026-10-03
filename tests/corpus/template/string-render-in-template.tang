@@ -1,0 +1,1 @@
+<%= "a&b".html.render %>|<%= "a&b".html.render.html %>

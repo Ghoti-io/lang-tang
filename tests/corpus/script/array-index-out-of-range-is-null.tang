@@ -1,0 +1,1 @@
+a = [1, 2]; print(a[2] == null); print(a[-3] == null); print(a[100] == null); a[5];

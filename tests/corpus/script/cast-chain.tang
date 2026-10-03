@@ -1,0 +1,1 @@
+print(3.7 as int as float as string); 65 as string as int;

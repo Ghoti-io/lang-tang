@@ -1,0 +1,1 @@
+x = 99999999999999999999999.0; y = x * x; y = y * y; y = y * y; y = y * y; print(y > x); print(" "); print(y - y == y - y); y;

@@ -1,0 +1,1 @@
+a = [!"<&>"]; s = a as string; print(s); print(s + !"<&>"); s.length;

@@ -1,0 +1,1 @@
+for (x : []) { print("never"); } print("done"); x;

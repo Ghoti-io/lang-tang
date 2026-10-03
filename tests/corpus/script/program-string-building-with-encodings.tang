@@ -1,0 +1,1 @@
+out = ""; for (i = 0; i < 3; i += 1) { out += !"<li>" + i + "</li>"; } print(out); out.length;

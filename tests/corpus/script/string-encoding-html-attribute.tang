@@ -1,0 +1,1 @@
+s = "a<b>&\"'"; print(s.html); print(" "); print(s.html_attribute); print(" "); print(s.percent); print(" "); print(s.javascript); print(" "); print(s.raw); s;

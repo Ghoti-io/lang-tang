@@ -1,0 +1,2 @@
+<% names = ["ann", "bob", "cy"]; for (n : names) { %><p><%= n %></p>
+<% } %>count=<%= names.size %>

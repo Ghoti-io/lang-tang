@@ -1,0 +1,1 @@
+x = print("hi"); print(x == null); x;

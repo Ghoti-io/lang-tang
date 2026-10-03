@@ -1,0 +1,2 @@
+function f() { break; print("never"); return 1; }
+x = f(); print(x == null); print("after"); x;

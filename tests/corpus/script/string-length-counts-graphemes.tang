@@ -1,0 +1,1 @@
+print("hello".length); print(" "); print("".length); print(" "); print("éx".length); print(" "); "café".length;

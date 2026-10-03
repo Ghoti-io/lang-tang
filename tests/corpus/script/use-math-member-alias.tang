@@ -1,0 +1,1 @@
+use math.pi as p; print(p); p + 1;

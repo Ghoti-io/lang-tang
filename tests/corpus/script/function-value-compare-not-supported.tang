@@ -1,0 +1,2 @@
+function f() { return 1; }
+x = f == f; print("after"); x;

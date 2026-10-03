@@ -1,0 +1,1 @@
+<%= "t<" %><%= !"h<" %><%= "x".html_attribute %><%= %"p q" %><%= "j'".javascript %>

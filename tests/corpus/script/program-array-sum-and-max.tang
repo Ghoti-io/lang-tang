@@ -1,0 +1,1 @@
+a = [3, 9, -2, 14, 7]; s = 0; m = a[0]; for (x : a) { s += x; if (x > m) m = x; } print(s); print(" "); print(m); s * m;

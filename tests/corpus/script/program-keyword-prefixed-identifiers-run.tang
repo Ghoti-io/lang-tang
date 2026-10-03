@@ -1,0 +1,1 @@
+format = 1; iffy = 2; whileX = 3; asx = 4; trueish = 5; nullable = 6; print(format + iffy + whileX + asx + trueish + nullable); returned = 7; returned;

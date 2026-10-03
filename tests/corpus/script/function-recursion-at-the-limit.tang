@@ -1,0 +1,2 @@
+function d(n) { if (n <= 0) return 0; return d(n - 1); }
+print(d(510)); x = d(511); print(x == null); d(600);

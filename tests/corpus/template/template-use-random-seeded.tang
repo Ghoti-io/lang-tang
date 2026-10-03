@@ -1,0 +1,1 @@
+<% use random; r = random.seeded(3); %><%= r.next_int %> <%= r.next_bool %>

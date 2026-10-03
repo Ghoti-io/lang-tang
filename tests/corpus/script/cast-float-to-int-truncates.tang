@@ -1,0 +1,1 @@
+print(3.9 as int); print(" "); print(-3.9 as int); print(" "); print(0.5 as int); print(" "); print(-0.5 as int); 1;

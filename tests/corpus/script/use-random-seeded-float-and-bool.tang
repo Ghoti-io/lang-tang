@@ -1,0 +1,1 @@
+use random; r = random.seeded(7); print(r.next_float); print(" "); print(r.next_float); print(" "); print(r.next_bool); print(r.next_bool); print(r.next_bool); r.next_float;
