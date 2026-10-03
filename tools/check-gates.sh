@@ -111,6 +111,19 @@ expect_fail 'edges/planted-ctang-flex' 's.l' "$E" --includes "$FIX/edges/planted
 expect_fail 'edges/planted-ctang-bench' 'b.c' "$E" --includes "$FIX/edges/planted-ctang-bench"
 expect_fail 'edges/planted-ctang-example' 'e.c' "$E" --includes "$FIX/edges/planted-ctang-example"
 expect_fail 'edges/planted-debug' 'lang-tang -> runtime-debug' "$E" --includes "$FIX/edges/planted-debug"
+expect_fail 'edges/planted-debug names the file' 'planted-debug/src/x.c' "$E" --includes "$FIX/edges/planted-debug"
+# The hosts (story 13): src/tang.c and examples/web_server.c may include the
+# debugger and text; nothing else may, whatever it is called or where it is.
+expect_pass 'edges/control-hosts (the two hosts include runtime-debug and text)' "$E" --includes "$FIX/edges/control-hosts"
+expect_fail 'edges/planted-debug-example (a non-host example includes runtime-debug)' 'planted-debug-example/examples/e.c' \
+  "$E" --includes "$FIX/edges/planted-debug-example"
+expect_fail 'edges/planted-debug-example names the edge' 'lang-tang -> runtime-debug' \
+  "$E" --includes "$FIX/edges/planted-debug-example"
+expect_fail 'edges/planted-text (a library source includes text)' 'lang-tang -> text' "$E" --includes "$FIX/edges/planted-text"
+expect_fail 'edges/planted-host-name (a host name in the wrong directory)' 'planted-host-name/examples/tang.c' \
+  "$E" --includes "$FIX/edges/planted-host-name"
+expect_fail 'edges/planted-debug-header (a public header includes the debugger)' 'z.h' \
+  "$E" --includes "$FIX/edges/planted-debug-header"
 expect_fail 'edges/planted-jit' 'lang-tang -> runtime-jit' "$E" --includes "$FIX/edges/planted-jit"
 expect_fail 'edges/planted-engine' 'lang-tang -> lang-wasm' "$E" --includes "$FIX/edges/planted-engine"
 expect_fail 'edges/planted-binary-h' 'binary.h' "$E" --includes "$FIX/edges/planted-binary-h"
@@ -128,7 +141,7 @@ case "$(uname -s)" in
   *) SHEXT=so; SHFLAGS="-shared -fPIC" ;;
 esac
 stubs="$work/stubs"
-mkdir -p "$stubs" "$work/planted-tang" "$work/planted-debug" "$work/planted-jit" "$work/control" "$work/dev" "$work/exe-planted" "$work/exe-control"
+mkdir -p "$stubs" "$work/planted-tang" "$work/planted-debug" "$work/planted-jit" "$work/control" "$work/dev" "$work/exe-planted" "$work/exe-control" "$work/host-ok" "$work/host-bad" "$work/other-bad" "$work/so-text"
 printf 'int stub_tang(void) { return 1; }\n' > "$work/tang.c"
 printf 'int stub_debug(void) { return 2; }\n' > "$work/debug.c"
 printf 'int stub_jit(void) { return 3; }\n' > "$work/jit.c"
@@ -144,6 +157,14 @@ printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_core(void);\nin
 printf 'int stub_cutil(void);\nint dev(void) { return stub_cutil(); }\n' > "$work/dev.c"
 printf 'int stub_tang(void);\nint stub_self(void);\nint main(void) { return stub_tang() + stub_self(); }\n' > "$work/exe_planted.c"
 printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_core(void);\nint stub_heap(void);\nint stub_self(void);\nint main(void) { return stub_cutil() + stub_unicode() + stub_core() + stub_heap() + stub_self(); }\n' > "$work/exe_control.c"
+
+printf 'int stub_text(void) { return 9; }\n' > "$work/text.c"
+printf 'int stub_chron(void) { return 10; }\n' > "$work/chron.c"
+printf 'int stub_regex(void) { return 11; }\n' > "$work/regex.c"
+printf 'int stub_debug(void);\nint stub_text(void);\nint stub_chron(void);\nint stub_regex(void);\nint stub_cutil(void);\nint stub_self(void);\nint main(void) { return stub_debug() + stub_text() + stub_chron() + stub_regex() + stub_cutil() + stub_self(); }\n' > "$work/host_ok.c"
+printf 'int stub_jit(void);\nint stub_self(void);\nint main(void) { return stub_jit() + stub_self(); }\n' > "$work/host_bad.c"
+printf 'int stub_debug(void);\nint stub_self(void);\nint main(void) { return stub_debug() + stub_self(); }\n' > "$work/other_bad.c"
+printf 'int stub_text(void);\nint planted_text(void) { return stub_text(); }\n' > "$work/planted_text.c"
 
 built=1
 # shellcheck disable=SC2086
@@ -175,7 +196,21 @@ built=1
   $CC -o "$work/exe-control/tang" "$work/exe_control.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-0.$SHEXT \
     -l:libghoti.io-unicode-0.$SHEXT -l:libghoti.io-runtime-core-0.$SHEXT \
-    -l:libghoti.io-runtime-heap-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT
+    -l:libghoti.io-runtime-heap-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-text-0.$SHEXT" "$work/text.c" &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-chron-0.$SHEXT" "$work/chron.c" &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-regex-0.$SHEXT" "$work/regex.c" &&
+  $CC -o "$work/host-ok/tang" "$work/host_ok.c" \
+    -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-debug-0.$SHEXT -l:libghoti.io-text-0.$SHEXT \
+    -l:libghoti.io-chron-0.$SHEXT -l:libghoti.io-regex-0.$SHEXT -l:libghoti.io-cutil-0.$SHEXT \
+    -l:libghoti.io-lang-tang-0.$SHEXT &&
+  cp "$work/host-ok/tang" "$work/host-ok/web_server" &&
+  $CC -o "$work/host-bad/tang" "$work/host_bad.c" \
+    -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-jit-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
+  $CC -o "$work/other-bad/pause_resume" "$work/other_bad.c" \
+    -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-debug-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
+  $CC $SHFLAGS -o "$work/so-text/libplanted.$SHEXT" "$work/planted_text.c" \
+    -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-text-0.$SHEXT
 } >"$work/build.log" 2>&1 || built=0
 if [ "$built" -eq 0 ]; then
   fail "could not build the link-line fixtures:
@@ -191,6 +226,17 @@ else
     "$E" --links "$work/planted-tang"
   expect_fail 'links/planted-debug' 'lang-tang -> runtime-debug' "$E" --links "$work/planted-debug"
   expect_fail 'links/planted-jit' 'lang-tang -> runtime-jit' "$E" --links "$work/planted-jit"
+  expect_pass 'links/host tang (runtime-debug, text and what text needs are allowed in the tang command)' \
+    "$E" --links "$work/host-ok/tang"
+  expect_pass 'links/host web_server (the same, in the web-server example)' "$E" --links "$work/host-ok/web_server"
+  expect_fail 'links/a host may not link anything else (the tang command linking the JIT)' 'lang-tang -> runtime-jit' \
+    "$E" --links "$work/host-bad/tang"
+  expect_fail 'links/a program that is not a host may not link runtime-debug (another example)' \
+    'lang-tang -> runtime-debug' "$E" --links "$work/other-bad/pause_resume"
+  expect_fail 'links/the non-host program is named' 'other-bad/pause_resume' \
+    "$E" --links "$work/other-bad/pause_resume"
+  expect_fail 'links/a shared object linking text (the library is never a host)' 'lang-tang -> text' \
+    "$E" --links "$work/so-text"
   expect_fail 'links/planted-tang-program (the tang command linking ctang)' 'lang-tang -> tang' \
     "$E" --links "$work/exe-planted/tang"
   expect_fail 'links/planted-tang-program names the program' 'exe-planted/tang' \

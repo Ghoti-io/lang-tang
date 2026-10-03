@@ -8,6 +8,20 @@
 # "any engine library -> ctang, except under test/". It also includes nothing
 # of ctang's bytecode machinery: nothing is built on `binary.h` (AD-9).
 #
+# The one exception is the hosts. The library (the shared and the static
+# object, everything under src/ and include/ but the `tang` command) never
+# names the debugger, or `text`, which only the debugger needs; two programs
+# do, because a host is where a debugger is attached and a DAP session is
+# served (story 13): src/tang.c (the `tang` command) and examples/web_server.c.
+# They may include runtime-debug and text, and only the `tang` binary and the
+# web_server example binary may have them in their NEEDED list - and, because
+# text requires them, chron and regex with them. The allowance is by file, not
+# by directory: an include of the debugger in any other file, a different
+# example included, is the edge this gate exists to catch. tests/ is not
+# scanned at all (it is where the oracle may include ctang), so a test runner
+# may link runtime-debug for its framing helpers; that is a host too, and no
+# test binary is named to this gate.
+#
 # The rule is checked twice because the two checks see different things: a
 # manifest and a clean #include list can both be right while the shared object
 # still links a forbidden library, and an #include can be forbidden while the
@@ -42,6 +56,24 @@ mode="${1:?$usage}"
 shift
 
 ALLOWED='cutil|unicode|runtime-core|runtime-heap|lang-tang'
+# What a host may include or link as well. The link set is the include set and
+# what text requires (its own NEEDED entries are chron and regex).
+HOST_INCLUDES='runtime-debug|text'
+HOST_LINKS='runtime-debug|text|chron|regex'
+# The hosts, by path under the root for an include and by file name for a
+# program. Nothing else is one.
+is_host_source() {
+  case "$1" in
+    src/tang.c | examples/web_server.c) return 0 ;;
+  esac
+  return 1
+}
+is_host_program() {
+  case "$(basename "$1" .exe)" in
+    tang | web_server) return 0 ;;
+  esac
+  return 1
+}
 status=0
 
 case "$mode" in
@@ -78,11 +110,15 @@ $found"
         n="${line%%:*}"
         lib="$(printf '%s\n' "$line" \
           | sed -E 's/.*[<"]ghoti\.io\/([^\/>"]+)\/.*/\1/')"
-        if ! printf '%s\n' "$lib" | grep -qE "^($ALLOWED)\$"; then
-          printf 'check-edges: forbidden edge lang-tang -> %s: %s:%s: %s\n' \
-            "$lib" "$f" "$n" "${line#*:}" >&2
-          status=1
+        if printf '%s\n' "$lib" | grep -qE "^($ALLOWED)\$"; then
+          continue
         fi
+        if is_host_source "${f#"$target"/}" && printf '%s\n' "$lib" | grep -qE "^($HOST_INCLUDES)\$"; then
+          continue
+        fi
+        printf 'check-edges: forbidden edge lang-tang -> %s: %s:%s: %s\n' \
+          "$lib" "$f" "$n" "${line#*:}" >&2
+        status=1
       done <<HITS
 $hits
 HITS
@@ -90,7 +126,7 @@ HITS
     if [ "$status" -ne 0 ]; then
       exit 1
     fi
-    printf 'check-edges: %d source files, every #include of another Ghoti library is cutil, unicode, runtime-core, runtime-heap or this library, and none is binary.h\n' \
+    printf 'check-edges: %d source files, every #include of another Ghoti library is cutil, unicode, runtime-core, runtime-heap or this library (the hosts src/tang.c and examples/web_server.c may also include runtime-debug and text), and none is binary.h\n' \
       "$count"
     ;;
 
@@ -152,11 +188,15 @@ $t"
             # Exactly an allowed name, or one followed by a BRANCH suffix
             # (cutil-dev, cutil-0-debug); never a different library that
             # merely starts with one.
-            if ! printf '%s\n' "$lib" | grep -qE "^($ALLOWED)(-.*)?\$"; then
-              printf 'check-edges: forbidden edge lang-tang -> %s: %s has NEEDED %s\n' \
-                "$lib" "$so" "$dep" >&2
-              status=1
+            if printf '%s\n' "$lib" | grep -qE "^($ALLOWED)(-.*)?\$"; then
+              continue
             fi
+            if is_host_program "$so" && printf '%s\n' "$lib" | grep -qE "^($HOST_LINKS)(-.*)?\$"; then
+              continue
+            fi
+            printf 'check-edges: forbidden edge lang-tang -> %s: %s has NEEDED %s\n' \
+              "$lib" "$so" "$dep" >&2
+            status=1
             ;;
         esac
       done
@@ -164,7 +204,7 @@ $t"
     if [ "$status" -ne 0 ]; then
       exit 1
     fi
-    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library\n' \
+    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library (the tang and web_server programs may also link runtime-debug and text)\n' \
       "$count"
     ;;
 

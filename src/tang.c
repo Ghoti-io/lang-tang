@@ -43,6 +43,19 @@
  * the first error, and `--errors` writes the error list to stderr after the
  * run, one `template:file:line: message` an entry, with the chain of template
  * calls above it indented under it.
+ *
+ * `--dap` makes the command a host of the debugger (story 13): the Debug Adapter
+ * Protocol is spoken on stdin and stdout, so the rendered output of the run goes
+ * to stderr instead, and the source must come from a file or `--evaluate`. The
+ * engine is asked to poll at every statement, a `runtime-debug` debugger is
+ * attached, and the host loop is the one of runtime-debug's
+ * `examples/dap_session.c`: serve the client until `configurationDone`, run, and
+ * at every pause tell the client, serve it, and resume or end the run as it
+ * asked. A pause that is not the debugger's (a `--fuel` budget) is shown to the
+ * client once, and the next `continue` unwinds the run (exit status 6): the
+ * command has no policy for raising a budget. This is one of the two files in
+ * the library that may name the debugger (tools/check-edges.sh); the shared
+ * object never does.
  */
 
 #include <ghoti.io/lang-tang/macros.h>
@@ -59,6 +72,10 @@
 #include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
+#ifdef GLTANG_WITH_DEBUG
+#include <ghoti.io/runtime-debug/runtime-debug.h>
+#include <signal.h>
+#endif
 #include <errno.h>
 #include <stdlib.h>
 
@@ -99,6 +116,12 @@ static void print_help_text(void) {
     "  --errors                      After the run, write the error list to stderr, one\n"
     "                                template:file:line: message per entry, the template\n"
     "                                calls above it indented under it\n"
+    "  --dap                         Speak the Debug Adapter Protocol on stdin and stdout\n"
+    "                                (breakpoints are set against the file name as given\n"
+    "                                here); the run's output goes to stderr. Needs a FILE\n"
+    "                                or --evaluate, and not --tree. A --fuel pause is\n"
+    "                                shown to the client once; the next continue ends the\n"
+    "                                run (exit status 6)\n"
     "  --cleanup, -c                 Accepted for ctang compatibility; this\n"
     "                                command always releases what it allocates\n"
     "  --help, -h                    Display this help message\n"
@@ -170,6 +193,7 @@ typedef struct Options {
   bool log_errors;
   bool halt_on_error;
   bool show_errors;
+  bool dap;
 } Options;
 
 /** Writes the error list to stderr: `template:file:line: message`, then the chain, indented. */
@@ -194,6 +218,121 @@ static void write_errors(const GLTANG_Execution * execution) {
   }
 }
 
+
+#ifdef GLTANG_WITH_DEBUG
+/** The debugger and its session, for `--dap`. All NULL when there is none. */
+typedef struct DebugHost {
+  GRDBG_Debugger * debugger;
+  GRDBG_Transport * transport;
+  GRDBG_Dap * dap;
+  bool live;      ///< The client is still there to be told things.
+  bool detached;  ///< The client said `disconnect` (or went away).
+} DebugHost;
+
+static void debug_host_destroy(DebugHost * host) {
+  // The session holds the debugger, so it goes before the context does.
+  grdbg_dap_destroy(host->dap);
+  grdbg_transport_destroy(host->transport);
+  memset(host, 0, sizeof(*host));
+}
+
+/** Attaches a debugger to the context and opens a DAP session on stdin and stdout. */
+static int debug_host_create(DebugHost * host, GRCORE_Context * context, const char * name) {
+  GRDBG_Result result = grdbg_debugger_attach(context, NULL, &host->debugger);
+  if (result == GRDBG_OK) {
+    result = grdbg_transport_create_fd(0, 1, NULL, &host->transport);
+  }
+  if (result == GRDBG_OK) {
+    result = grdbg_dap_create(host->debugger, host->transport, NULL, &host->dap);
+  }
+  if (result != GRDBG_OK) {
+    fprintf(stderr, "%s: the debugger could not be set up: %s\n", name, grdbg_result_string(result));
+    debug_host_destroy(host);
+    return result == GRDBG_ERR_OOM ? EXIT_MEMORY : EXIT_SETUP;
+  }
+  host->live = true;
+  return 0;
+}
+
+/**
+ * One `grdbg_dap_serve`. A session that failed has disarmed the debugger and
+ * is over: the run goes on free of it, and this says so on stderr.
+ */
+static GRDBG_ServeResult debug_host_serve(DebugHost * host, const char * name) {
+  GRDBG_ServeResult served = GRDBG_SERVE_DETACH;
+  if (!host->live) {
+    return GRDBG_SERVE_DETACH;
+  }
+  GRDBG_Result result = grdbg_dap_serve(host->dap, &served);
+  if (result != GRDBG_OK) {
+    fprintf(stderr, "%s: the debug session ended: %s\n", name, grdbg_result_string(result));
+    grdbg_debugger_disarm(host->debugger);
+    host->live = false;
+    host->detached = true;
+    return GRDBG_SERVE_DETACH;
+  }
+  if (served == GRDBG_SERVE_DETACH) {
+    host->detached = true;
+  }
+  return served;
+}
+
+/** True if the pause has a cause the debugger did not vote for (a budget). */
+static bool pause_is_a_budget(const GRCORE_Context * context) {
+  const GRCORE_Key * ours = grdbg_debugger_key();
+  for (size_t k = 0; k < grcore_context_pause_key_count(context); ++k) {
+    if (grcore_context_pause_key(context, k) != ours) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The host loop of runtime-debug's examples/dap_session.c: serve until
+ * `configurationDone`, run, and at every pause notify, serve and resume (or end
+ * the run, as the client asked).
+ */
+static GRCORE_Result run_debugged(DebugHost * host, GRCORE_Context * context, GLTANG_Execution * execution,
+    const char * name, GRCORE_Outcome * outcome) {
+  bool terminate = debug_host_serve(host, name) == GRDBG_SERVE_TERMINATE;
+  if (terminate) {
+    grcore_context_terminate(context);
+  }
+  GRCORE_Result ran = grcore_run(context, gltang_execution_entry, execution, outcome);
+  while (ran == GRCORE_OK && *outcome == GRCORE_OUTCOME_PAUSED) {
+    // A budget's pause is shown once; whatever the client answers, the run is
+    // unwound after it, because nothing here raises a budget.
+    bool unwind = pause_is_a_budget(context);
+    if (host->live && grdbg_dap_notify_stopped(host->dap) != GRDBG_OK) {
+      grdbg_debugger_disarm(host->debugger);
+      host->live = false;
+      host->detached = true;
+    }
+    if (debug_host_serve(host, name) == GRDBG_SERVE_TERMINATE) {
+      unwind = true;
+    }
+    if (unwind) {
+      grcore_context_terminate(context);
+    }
+    ran = grcore_resume(context, outcome);
+  }
+  return ran;
+}
+
+/** Reports the end of the run to the client and answers its `disconnect`. */
+static void debug_host_finish(DebugHost * host, const char * name, int status) {
+  if (!host->live || host->detached) {
+    return;
+  }
+  if (grdbg_dap_notify_finished(host->dap, status) != GRDBG_OK) {
+    host->live = false;
+    return;
+  }
+  (void)debug_host_serve(host, name);
+}
+#endif
+
 static int run_tree(const GLTANG_Tree * tree, const char * name, const Options * options) {
   GLTANG_ParseError error = {0, 0, {0}};
   GLTANG_Program * program = NULL;
@@ -216,6 +355,10 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   GRHEAP_Heap * heap = NULL;
   GLTANG_Execution * execution = NULL;
   GLTANG_SeedSequence * seeds = NULL;
+#ifdef GLTANG_WITH_DEBUG
+  DebugHost debug;
+  memset(&debug, 0, sizeof(debug));
+#endif
   GRCORE_Result step = grcore_group_create(NULL, NULL, &group);
   if (step == GRCORE_OK) {
     step = grcore_options_create(NULL, &core_options);
@@ -274,6 +417,10 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   if (configured == GLTANG_OK) {
     configured = gltang_execution_set_halt_on_error(execution, options->halt_on_error);
   }
+  if (configured == GLTANG_OK && options->dap) {
+    // A line breakpoint and a step can only stop where the engine polls.
+    configured = gltang_execution_set_statement_polls(execution, true);
+  }
   if (configured != GLTANG_OK) {
     status = configured == GLTANG_ERR_OOM ? EXIT_MEMORY : EXIT_SETUP;
     if (status == EXIT_SETUP) {
@@ -282,22 +429,40 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     goto done;
   }
 
+  // The DAP stream owns stdout under --dap, so the run's output goes to stderr.
+  FILE * out = options->dap ? stderr : stdout;
   GRCORE_Outcome outcome = GRCORE_OUTCOME_FINISHED;
-  GRCORE_Result ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
+  GRCORE_Result ran;
+#ifdef GLTANG_WITH_DEBUG
+  if (options->dap) {
+    signal(SIGPIPE, SIG_IGN);
+    int attached = debug_host_create(&debug, context, name);
+    if (attached) {
+      status = attached;
+      goto done;
+    }
+    ran = run_debugged(&debug, context, execution, name, &outcome);
+  }
+  else {
+    ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
+  }
+#else
+  ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
+#endif
   char * text = NULL;
   size_t length = 0;
   if (gltang_execution_output_render(execution, &text, &length) == GLTANG_OK) {
-    fwrite(text, 1, length, stdout);
+    fwrite(text, 1, length, out);
     gltang_buffer_free(text);
   }
   else {
     // The output could not be built, so what the program printed is lost:
     // that is the same failure as running out of memory, and not a success.
-    fflush(stdout);
+    fflush(out);
     status = EXIT_MEMORY;
     goto done;
   }
-  fflush(stdout);
+  fflush(out);
   if (ran == GRCORE_OK && outcome == GRCORE_OUTCOME_FINISHED) {
     status = 0;
   }
@@ -322,11 +487,19 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   if (options->show_errors) {
     write_errors(execution);
   }
+#ifdef GLTANG_WITH_DEBUG
+  if (options->dap) {
+    debug_host_finish(&debug, name, status);
+  }
+#endif
 
 done:
   if (status == EXIT_MEMORY) {
     fprintf(stderr, "%s: out of memory\n", name);
   }
+#ifdef GLTANG_WITH_DEBUG
+  debug_host_destroy(&debug);
+#endif
   if (context) {
     grcore_context_destroy(context);
   }
@@ -396,6 +569,9 @@ int main(int argc, const char * argv[]) {
     else if (!strcmp(argv[i], "--errors")) {
       options.show_errors = true;
     }
+    else if (!strcmp(argv[i], "--dap")) {
+      options.dap = true;
+    }
     else if (argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "tang: unknown option %s\n", argv[i]);
       return EXIT_USAGE;
@@ -415,6 +591,20 @@ int main(int argc, const char * argv[]) {
   if (is_script && is_template) {
     fprintf(stderr, "tang: give either --script or --template, not both\n");
     return EXIT_USAGE;
+  }
+  if (options.dap) {
+#ifndef GLTANG_WITH_DEBUG
+    fprintf(stderr, "tang: --dap is not available: this tang was built without runtime-debug\n");
+    return EXIT_USAGE;
+#endif
+    if (dump_tree) {
+      fprintf(stderr, "tang: --dap and --tree cannot be combined: --tree runs nothing to debug\n");
+      return EXIT_USAGE;
+    }
+    if (!eval && !file_name) {
+      fprintf(stderr, "tang: --dap needs a FILE or --evaluate: standard input carries the debug session\n");
+      return EXIT_USAGE;
+    }
   }
   // The source given with --evaluate is code (`tang -e 'print(1+2);'` prints
   // 3); a file or stdin is a template unless it is told otherwise.

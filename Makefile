@@ -244,6 +244,43 @@ endif
 endif
 INCLUDE += $(RHEAP_CFLAGS)
 
+# runtime-debug and text: for the two hosts, the `tang` command (src/tang.c)
+# and the web-server example (examples/web_server.c), and for nothing else
+# (AD-2, story 13). They are not in INCLUDE or DEP_LIBS, so the shared and the
+# static library link neither, and tools/check-edges.sh checks that by file and
+# by NEEDED entry. text is listed because runtime-debug reads JSON with it; the
+# debugger's own .pc file requires it, and it is a hard error to be without
+# either, like every other dependency. WITH_DEBUG=no is the way to build the
+# library and its unit tests on a machine without them: the two hosts then
+# refuse to build, by name, instead of building without --dap.
+WITH_DEBUG ?= yes
+ifeq ($(WITH_DEBUG),yes)
+RDEBUG_PC ?= ghoti.io-runtime-debug$(BRANCH)
+RDEBUG_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RDEBUG_PC) 2>/dev/null)
+RDEBUG_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RDEBUG_PC) 2>/dev/null)
+ifeq ($(strip $(RDEBUG_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-runtime-debug was not found by pkg-config. The tang command and the web-server example use it. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file - or pass WITH_DEBUG=no to build the library and its tests without the two hosts. There is deliberately no sibling-checkout fallback.)
+endif
+endif
+TEXT_PC ?= ghoti.io-text$(BRANCH)
+TEXT_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(TEXT_PC) 2>/dev/null)
+TEXT_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(TEXT_PC) 2>/dev/null)
+ifeq ($(strip $(TEXT_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-text was not found by pkg-config. runtime-debug requires it, so the tang command and the web-server example do. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file - or pass WITH_DEBUG=no. There is deliberately no sibling-checkout fallback.)
+endif
+endif
+# What the two hosts add to their compile and link lines, and nothing else does.
+HOST_CFLAGS := $(RDEBUG_CFLAGS) $(TEXT_CFLAGS) -DGLTANG_WITH_DEBUG
+HOST_LIBS := $(RDEBUG_LIBS) $(TEXT_LIBS)
+else ifeq ($(WITH_DEBUG),no)
+HOST_CFLAGS :=
+HOST_LIBS :=
+else
+$(error WITH_DEBUG must be yes or no, not '$(WITH_DEBUG)')
+endif
+
 # Everything a link needs, in dependency order: the collector, the core, then
 # the libraries the ported front end uses.
 DEP_LIBS := $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS)
@@ -302,6 +339,13 @@ TEST_LDFLAGS := -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wra
 
 TEST_PAIRS := $(shell find tests/unit -type f -name 'test_*.cpp' 2>/dev/null | sort | grep -v test_helpers | while read f; do \
 	echo "$$f|$$(basename "$$f" .cpp | sed 's/test_/test/; s/^test\([a-z]\)/test\U\1/')"; done)
+# test_tang_dap drives the real `tang` command, which exists only with
+# WITH_DEBUG=yes (it links the debugger). Without it the suite is left out and
+# the build says so; it is the one unit suite WITH_DEBUG=no drops.
+ifeq ($(WITH_DEBUG),no)
+$(info WITH_DEBUG=no: tests/unit/test_tang_dap.cpp is not built (it runs the tang command, which needs runtime-debug))
+TEST_PAIRS := $(filter-out tests/unit/test_tang_dap.cpp|%,$(TEST_PAIRS))
+endif
 TEST_SOURCES := $(foreach pair,$(TEST_PAIRS),$(word 1,$(subst |, ,$(pair))))
 TEST_NAMES := $(foreach pair,$(TEST_PAIRS),$(word 2,$(subst |, ,$(pair))))
 TEST_EXECUTABLES := $(addprefix $(APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
@@ -309,7 +353,12 @@ TEST_EXECUTABLES := $(addprefix $(APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_
 EXAMPLE_SOURCES := $(shell find examples -type f -name '*.c' 2>/dev/null)
 EXAMPLES := $(patsubst examples/%.c,$(APP_DIR)/examples/%$(EXE_EXTENSION),$(EXAMPLE_SOURCES))
 
+ifeq ($(WITH_DEBUG),yes)
 all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) ## Build the shared and static libraries and the tang command
+else
+all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build the shared and static libraries (WITH_DEBUG=no: not the tang command)
+	@printf 'all: WITH_DEBUG=no, so the tang command and the web-server example were not built (they need runtime-debug)\n' >&2
+endif
 
 TEST_DEPFILES := $(foreach pair,$(TEST_PAIRS),$(OBJ_DIR)/tests/$(basename $(notdir $(word 1,$(subst |, ,$(pair))))).d)
 DEPFILES := $(LIBOBJECTS:.o=.d) $(OBJ_DIR)/tang.d $(TEST_HELPER_OBJ:.o=.d) $(TEST_DEPFILES)
@@ -443,11 +492,22 @@ $(APP_DIR)/$(STATIC_TARGET): $(LIBOBJECTS)
 # would be, so that `readelf -d` on it shows what an installed copy needs.
 $(OBJ_DIR)/tang.o: src/tang.c $(FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+	$(CC) $(CFLAGS) $(INCLUDE) $(HOST_CFLAGS) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
+ifeq ($(WITH_DEBUG),yes)
 $(APP_DIR)/tang$(EXE_EXTENSION): $(OBJ_DIR)/tang.o $(APP_DIR)/$(TARGET)
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -o $@ $(OBJ_DIR)/tang.o -L$(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH) $(LDFLAGS) $(DEP_LIBS) -Wl,-rpath,$(abspath $(APP_DIR))
+	$(CC) $(CFLAGS) -o $@ $(OBJ_DIR)/tang.o -L$(APP_DIR) -l$(SUITE)-$(PROJECT)$(BRANCH) $(LDFLAGS) $(HOST_LIBS) $(DEP_LIBS) -Wl,-rpath,$(abspath $(APP_DIR))
+else
+# A tang without --dap is not a build this makefile makes: the command either
+# has the debugger or does not exist, so that nobody runs one believing it has.
+# (force-flags is phony: without a prerequisite that is never current, a tang
+# built earlier with the debugger would satisfy this rule and nothing would say
+# that this build does not make one.)
+$(APP_DIR)/tang$(EXE_EXTENSION): force-flags
+	@printf 'make: the tang command is a host of runtime-debug (--dap) and WITH_DEBUG=no was given, so it is not built. Use WITH_DEBUG=yes with ghoti.io-runtime-debug installed.\n' >&2
+	@exit 1
+endif
 
 ifneq ($(TEST_HELPER_SRC),)
 $(TEST_HELPER_OBJ): $(TEST_HELPER_SRC) $(FLAGS_STAMP) | $(GEN_HEADERS)
@@ -475,10 +535,30 @@ endef
 $(foreach pair,$(TEST_PAIRS),\
 	$(eval $(call test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
 
+# The suite that runs the real command needs it built, in every tree: the
+# sanitizer and valgrind runs of it still drive the ordinary release `tang`.
+ifeq ($(WITH_DEBUG),yes)
+$(APP_DIR)/testTang_dap$(EXE_EXTENSION): | $(APP_DIR)/tang$(EXE_EXTENSION)
+endif
+
 $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) \
 		$(FLAGS_STAMP) | $(APP_DIR)/$(TARGET) $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS)
+
+# The web-server example is a host of the debugger: it links runtime-debug and
+# text, which no other example may (tools/check-edges.sh).
+ifeq ($(WITH_DEBUG),yes)
+$(APP_DIR)/examples/web_server$(EXE_EXTENSION): examples/web_server.c $(APP_DIR)/$(STATIC_TARGET) \
+		$(FLAGS_STAMP) | $(APP_DIR)/$(TARGET) $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) $(HOST_CFLAGS) -MMD -MP -MF $(@D)/web_server.d -o $@ $< $(LDFLAGS) $(CORELIBRARY) $(HOST_LIBS) $(CUTIL_LIBS) -pthread
+-include $(APP_DIR)/examples/web_server.d
+else
+$(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
+	@printf 'make: the web-server example is a host of runtime-debug and WITH_DEBUG=no was given, so it is not built. Use WITH_DEBUG=yes with ghoti.io-runtime-debug installed.\n' >&2
+	@exit 1
+endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
@@ -504,10 +584,16 @@ TEST_LD_PATH := $(APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)
 # Builds each example and runs it: an example that is only built can rot into
 # something that compiles and does nothing it claims. It is a test gate for
 # the same reason (a failing example fails `make test`).
+# The web server is a server: run with --self-test it plays its own client,
+# checks what it served, and exits.
 examples: $(APP_DIR)/$(TARGET) $(EXAMPLES) ## Build the examples and run each
 	@for e in $(EXAMPLES); do \
 		printf '\n### Example %s ###\n\n' "$$(basename $$e $(EXE_EXTENSION))"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$e || exit 1; \
+		case "$$(basename $$e $(EXE_EXTENSION))" in \
+			web_server) args=--self-test ;; \
+			*) args= ;; \
+		esac; \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$e $$args || exit 1; \
 	done
 
 # clang accepts -Wstrict-aliasing and implements nothing, so under clang the
@@ -567,9 +653,9 @@ check-labels: ## Fail if a public header has no (or the wrong) stable/free label
 # After the shared library is built, because the link line it reads is that
 # file's NEEDED list: the manifest and the #include lines can both be clean
 # while the .so, or the tang command that links it, links something forbidden.
-check-edges: $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) ## Fail on a forbidden #include or NEEDED edge (AD-2)
+check-edges: $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES) ## Fail on a forbidden #include or NEEDED edge (AD-2)
 	@tools/check-edges.sh --includes .
-	@tools/check-edges.sh --links $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION)
+	@tools/check-edges.sh --links $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES)
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
 	@CC="$(CC)" tools/check-gates.sh
@@ -867,6 +953,10 @@ endef
 $(foreach pair,$(TEST_PAIRS),\
 	$(eval $(call asan-test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
 
+ifeq ($(WITH_DEBUG),yes)
+$(ASAN_APP_DIR)/testTang_dap$(EXE_EXTENSION): | $(APP_DIR)/tang$(EXE_EXTENSION)
+endif
+
 ASAN_TEST_EXECUTABLES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
 ASAN_RUNTIME := $(shell $(CC) -print-file-name=libasan.so 2>/dev/null)
 
@@ -959,6 +1049,10 @@ endef
 
 $(foreach pair,$(TEST_PAIRS),\
 	$(eval $(call tsan-test-executable-rule,$(word 1,$(subst |, ,$(pair))),$(word 2,$(subst |, ,$(pair))))))
+
+ifeq ($(WITH_DEBUG),yes)
+$(TSAN_APP_DIR)/testTang_dap$(EXE_EXTENSION): | $(APP_DIR)/tang$(EXE_EXTENSION)
+endif
 
 TSAN_TEST_EXECUTABLES := $(addprefix $(TSAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
 
@@ -1292,7 +1386,7 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(TSAN_FLAGS_STAMP): force-flags

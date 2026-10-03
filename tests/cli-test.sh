@@ -282,6 +282,65 @@ esac
 status "-h exits 0" 0 "$TANG" -h
 status "--cleanup is accepted" 0 "$TANG" -c -s -e '1'
 
+# --dap (story 13): the Debug Adapter Protocol on stdin and stdout, the run's
+# own output on stderr. The scripted sessions with a breakpoint, steps and a
+# fuel pause are in tests/unit/test_tang_dap.cpp; here is what only the shell
+# sees: the misuse, the exit statuses, and that the stream is the protocol's.
+status "--dap with --tree exits 2" 2 "$TANG" --dap --tree -s -e '1'
+out="$("$TANG" --dap --tree -s -e '1' 2>&1)"
+check "--dap with --tree says so" "tang: --dap and --tree cannot be combined: --tree runs nothing to debug" "$out"
+status "--dap with the source on stdin exits 2" 2 "$TANG" --dap
+out="$("$TANG" --dap </dev/null 2>&1)"
+check "--dap with stdin as the source says why" "tang: --dap needs a FILE or --evaluate: standard input carries the debug session" "$out"
+
+# A framed message: Content-Length, a blank line, the body.
+frame() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+session="$( { frame '{"seq":1,"type":"request","command":"initialize","arguments":{"adapterID":"tang"}}'
+  frame '{"seq":2,"type":"request","command":"launch","arguments":{}}'
+  frame '{"seq":3,"type":"request","command":"configurationDone"}'
+  frame '{"seq":4,"type":"request","command":"disconnect","arguments":{}}'; } )"
+printf '%s' "$session" > "$TMPFILE"
+plain="$("$TANG" -s -e 'print(1 + 2);' 2>&1)"
+check "plain -e prints 3" "3" "$plain"
+# stdout is the protocol and only the protocol; stderr is what the program printed.
+"$TANG" --dap -s -e 'print(1 + 2);' < "$TMPFILE" > "$TMPFILE.out" 2> "$TMPFILE.err"
+code=$?
+check "--dap session runs to the end and exits 0" "0" "$code"
+check "--dap puts the run's output on stderr" "3" "$(cat "$TMPFILE.err")"
+case "$(cat "$TMPFILE.out")" in
+  "Content-Length: "*"\"event\":\"initialized\""*"\"event\":\"exited\""*"\"exitCode\":0"*"\"event\":\"terminated\""*)
+    printf '  ok    --dap stdout is the protocol: initialized, exited with 0, terminated\n' ;;
+  *) printf '  FAIL  --dap stdout is the protocol\n        got [%s]\n' "$(cat "$TMPFILE.out")"
+     failures=$((failures + 1)) ;;
+esac
+# A fuel pause is shown to the client once; the next continue ends the run (6).
+session="$( { frame '{"seq":1,"type":"request","command":"initialize","arguments":{"adapterID":"tang"}}'
+  frame '{"seq":2,"type":"request","command":"launch","arguments":{}}'
+  frame '{"seq":3,"type":"request","command":"configurationDone"}'
+  frame '{"seq":4,"type":"request","command":"continue","arguments":{"threadId":1}}'
+  frame '{"seq":5,"type":"request","command":"disconnect","arguments":{}}'; } )"
+printf '%s' "$session" > "$TMPFILE"
+"$TANG" --dap --fuel 100 -s -e 'while (true) {}' < "$TMPFILE" > "$TMPFILE.out" 2> /dev/null
+check "--dap with a budget pause, continued, exits 6" "6" "$?"
+case "$(cat "$TMPFILE.out")" in
+  *"\"event\":\"stopped\""*"\"reason\":\"pause\""*"fuel"*"\"exitCode\":6"*) printf '  ok    --dap reports the fuel pause, then the end with exit code 6\n' ;;
+  *) printf '  FAIL  --dap reports the fuel pause, then the end with exit code 6\n        got [%s]\n' "$(cat "$TMPFILE.out")"
+     failures=$((failures + 1)) ;;
+esac
+# A client that closes the stream before configurationDone: the run goes free.
+"$TANG" --dap -s -e 'print(7);' < /dev/null > /dev/null 2> "$TMPFILE.err"
+check "--dap with a client that is already gone runs free (status)" "0" "$?"
+check "--dap with a client that is already gone runs free (output)" "7" "$(cat "$TMPFILE.err")"
+rm -f "$TMPFILE.out" "$TMPFILE.err"
+out="$("$TANG" --help)"
+case "$out" in
+  *"--dap"*"Debug Adapter Protocol"*) printf '  ok    --help describes --dap\n' ;;
+  *) printf '  FAIL  --help describes --dap\n        got [%s]\n' "$out"
+     failures=$((failures + 1)) ;;
+esac
+
 if [ "$failures" -ne 0 ]; then
   printf '\n%s CLI check(s) failed.\n' "$failures"
   exit 1
