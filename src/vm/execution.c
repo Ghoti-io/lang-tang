@@ -713,6 +713,10 @@ static void fill_item(GLTANG_Value v, GLTANG_ResultItem * out) {
       out->text = gltang_error_kind_message(out->error);
       out->length = strlen(out->text);
       break;
+    case GLTANG_KIND_LIBRARY:
+      out->text = gltang_library_name(((const GLTANG_LibraryObject *)gltang_object(v))->library);
+      out->length = out->text ? strlen(out->text) : 0;
+      break;
     default: break;
   }
 }

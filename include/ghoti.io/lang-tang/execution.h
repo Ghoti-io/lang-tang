@@ -415,7 +415,7 @@ typedef struct GLTANG_ResultItem {
   bool boolean;           ///< ::GLTANG_KIND_BOOL.
   int64_t integer;        ///< ::GLTANG_KIND_INTEGER.
   double number;          ///< ::GLTANG_KIND_FLOAT.
-  const char * text;      ///< A string's bytes, or an error's message; else NULL.
+  const char * text;      ///< A string's bytes, an error's message, or a library's name; else NULL.
   size_t length;          ///< The byte count of `text`.
   size_t size;            ///< An array's length, a map's count, a string's graphemes.
   GLTANG_ErrorKind error; ///< ::GLTANG_KIND_ERROR: which one.

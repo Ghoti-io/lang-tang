@@ -123,6 +123,17 @@ TEST(Math, Constants) {
   EXPECT_EQ(run.context.raw(), "3.141593");
 }
 
+TEST(Library, ALibraryInAContainerIsReadWithItsName) {
+  tt::Run run("use math; use random; [math, random, 3];");
+  ASSERT_TRUE(run.context.is_array());
+  auto first = run.context.element(0);
+  ASSERT_TRUE(first.present);
+  EXPECT_EQ(first.item.kind, GLTANG_KIND_LIBRARY);
+  EXPECT_EQ(first.text(), "math");
+  EXPECT_EQ(run.context.element(1).text(), "random");
+  EXPECT_EQ(run.context.describe(), "[Library: math, Library: random, 3]");
+}
+
 TEST(Library, UseAs) {
   {
     tt::Run run("use math as m; m;");
