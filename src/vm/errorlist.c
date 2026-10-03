@@ -219,7 +219,7 @@ GLTANG_Value gltang_vm_error_created(GLTANG_Execution * exec, GLTANG_Value error
     return error;
   }
   exec->halted = true;
-  if (gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
+  if (GLTANG_NATIVE_POLL(exec, HALT_REQUEST, 0) != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
   return error;

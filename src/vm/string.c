@@ -49,6 +49,7 @@
 typedef struct Pacer {
   GLTANG_Execution * exec;
   size_t since;  ///< Bytes (or element-equivalents) since the last poll.
+  GLTANG_NativeId native;  ///< Which native is paced, for the gate.
 } Pacer;
 
 static GLTANG_Status pace(Pacer * pacer, size_t units) {
@@ -56,7 +57,7 @@ static GLTANG_Status pace(Pacer * pacer, size_t units) {
   if (pacer->since >= GLTANG_POLL_BYTES) {
     size_t work = pacer->since / GLTANG_WORK_BYTES_PER_FUEL;
     pacer->since = 0;
-    return gltang_vm_native_poll(pacer->exec, work ? work : 1);
+    return gltang_vm_native_poll_as(pacer->exec, pacer->native, work ? work : 1);
   }
   return GLTANG_ST_OK;
 }
@@ -124,16 +125,18 @@ static bool is_plain_ascii(const char * bytes, size_t length) {
 }
 
 GLTANG_Value gltang_vm_string_from_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+  // The scan, the break iterator and the copy are each one call that cannot be
+  // paced from inside, so the work is charged before them, for the plain-ASCII
+  // path too: a guest that reads a host string in a loop pays for the copy it
+  // makes each time (the native gate found this path charging nothing).
+  if (GLTANG_NATIVE_POLL(exec, STRING_FROM_UTF8, length / GLTANG_WORK_BYTES_PER_FUEL + 1) != GLTANG_ST_OK) {
+    return GLTANG_V_UNWIND;
+  }
   if (is_plain_ascii(bytes, length)) {
     return gltang_vm_string_from_ascii(exec, bytes, length, type);
   }
   if (length > UINT32_MAX || guni_utf8_validate(bytes, length, NULL) != GUNI_OK) {
     return GLTANG_V_NULL;
-  }
-  // The break iterator is one library call and cannot be paced from inside, so
-  // its cost is charged before it.
-  if (gltang_vm_native_poll(exec, length / GLTANG_WORK_BYTES_PER_FUEL + 1) != GLTANG_ST_OK) {
-    return GLTANG_V_UNWIND;
   }
   size_t * bounds = gcu_allocator_malloc(exec->allocator, (length + 1u) * sizeof(size_t));
   if (!bounds) {
@@ -254,7 +257,7 @@ GLTANG_Value gltang_vm_string_concat(GLTANG_Execution * exec, GLTANG_Value a, GL
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, STRING_CONCAT);
   GLTANG_Status poll = GLTANG_ST_OK;
   uint32_t * offsets = gltang_string_offsets(s);
   if (offsets) {
@@ -336,7 +339,7 @@ static GLTANG_Value substring(GLTANG_Execution * exec, GLTANG_Value v, size_t st
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, STRING_SUBSTRING);
   GLTANG_Status poll = GLTANG_ST_OK;
   uint32_t * offsets = gltang_string_offsets(s);
   const uint32_t * source_offsets = gltang_string_offsets(x);
@@ -386,7 +389,7 @@ GLTANG_Value gltang_vm_string_slice(GLTANG_Execution * exec, GLTANG_Value v, int
   size_t total = 0;
   size_t segments = 0;
   GLTANG_String_Type previous = GLTANG_UNICODE_STRING_TYPE_TRUSTED;
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, STRING_SLICE);
   int64_t g = start;
   for (int64_t k = 0; k < count; ++k) {
     size_t gi = (size_t)g;
@@ -467,7 +470,7 @@ GLTANG_Value gltang_vm_string_retag(GLTANG_Execution * exec, GLTANG_Value v, GLT
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, STRING_RETAG);
   GLTANG_Status poll = GLTANG_ST_OK;
   uint32_t * offsets = gltang_string_offsets(s);
   if (offsets) {
@@ -601,7 +604,7 @@ bool gltang_vm_render_block(const GLTANG_StringBlock * s, char ** out, size_t * 
 
 GLTANG_Value gltang_vm_string_render(GLTANG_Execution * exec, GLTANG_Value v) {
   const GLTANG_StringBlock * x = gltang_vm_string(v);
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, STRING_RENDER);
   // Pass one: the size of the encoding.
   size_t length = 0;
   bool has_cr = false;

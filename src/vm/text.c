@@ -155,7 +155,8 @@ static GLTANG_Status sink_pace(GLTANG_Sink * sink, size_t bytes) {
   if (sink->pace_since >= GLTANG_POLL_BYTES) {
     size_t work = sink->pace_since / GLTANG_WORK_BYTES_PER_FUEL;
     sink->pace_since = 0;
-    return gltang_vm_native_poll(sink->exec, work ? work : 1);
+    return sink->mode == GLTANG_SINK_OUTPUT ? GLTANG_NATIVE_POLL(sink->exec, PRINT, work ? work : 1)
+                                            : GLTANG_NATIVE_POLL(sink->exec, RENDER_TO_STRING, work ? work : 1);
   }
   return GLTANG_ST_OK;
 }

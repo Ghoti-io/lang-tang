@@ -76,6 +76,11 @@ GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work) {
   return GLTANG_ST_OK;
 }
 
+GLTANG_Status gltang_vm_native_poll_as(GLTANG_Execution * exec, GLTANG_NativeId native, uint64_t work) {
+  (void)native;
+  return gltang_vm_native_poll(exec, work);
+}
+
 GLTANG_Status gltang_vm_alloc(GLTANG_Execution * exec, const GRHEAP_Type * type, size_t bytes, void ** out) {
   GRHEAP_Result r = grheap_alloc_sized(exec->heap, type, bytes, out);
   if (r == GRHEAP_OK) {
@@ -86,7 +91,7 @@ GLTANG_Status gltang_vm_alloc(GLTANG_Execution * exec, const GRHEAP_Type * type,
     // is gone. The runtime poll turns that into a verdict, after the collector
     // has had its chance to reclaim; if it still says continue, the operation
     // fails as an allocation failure does.
-    if (gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
+    if (GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK) {
       return GLTANG_ST_UNWIND;
     }
   }

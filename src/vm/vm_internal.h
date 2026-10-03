@@ -465,6 +465,28 @@ void gltang_vm_flush_fuel(GLTANG_Execution * exec);
  */
 GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work);
 
+/**
+ * The engine's natives, from natives.def: who is polling the runtime. The id
+ * changes nothing at run time; it is the name the native gate reads in the
+ * sources (see natives.def), and a name that is not in the list does not
+ * compile.
+ */
+typedef enum GLTANG_NativeId {
+#define GLTANG_NATIVE(id, unbounded, text) GLTANG_NATIVE_##id,
+#include "natives.def"
+#undef GLTANG_NATIVE
+  GLTANG_NATIVE_COUNT
+} GLTANG_NativeId;
+
+/** Polls the runtime for `native`, charging `work` fuel (at least the poll). */
+GLTANG_Status gltang_vm_native_poll_as(GLTANG_Execution * exec, GLTANG_NativeId native, uint64_t work);
+
+/** A poll that names its native. */
+#define GLTANG_NATIVE_POLL(exec, native, work) gltang_vm_native_poll_as((exec), GLTANG_NATIVE_##native, (work))
+
+/** A pacer's initialiser, naming the native it paces. */
+#define GLTANG_PACER(exec, native) {(exec), 0, GLTANG_NATIVE_##native}
+
 /** @brief Allocates a heap object of `bytes`; maps the failure to a status. */
 GLTANG_Status gltang_vm_alloc(GLTANG_Execution * exec, const GRHEAP_Type * type, size_t bytes, void ** out);
 

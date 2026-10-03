@@ -527,7 +527,7 @@ resume_loop:
               gltang_vm_activation_free(exec, act);
               // The memory budget's verdict comes first, as for any call.
               GRCORE_Result refused = opened != GRCORE_OK ? opened : pushed;
-              if (refused == GRCORE_ERR_LIMIT && gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
+              if (refused == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
                 goto unwound;
               }
               r = exec->roots[GLTANG_ROOT_OOM];
@@ -587,7 +587,7 @@ resume_loop:
         if (pushed != GRCORE_OK) {
           // The stack could not grow: the memory budget refused it, or the
           // allocator did. The budget's verdict comes first.
-          if (pushed == GRCORE_ERR_LIMIT && gltang_vm_native_poll(exec, 0) != GLTANG_ST_OK) {
+          if (pushed == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
             goto unwound;
           }
           r = exec->roots[GLTANG_ROOT_OOM];

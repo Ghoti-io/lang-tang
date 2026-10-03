@@ -1,0 +1,61 @@
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2024-2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Lang-tang.
+ *
+ * Ghoti.io Lang-tang is free software: you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License version
+ * 3 as published by the Free Software Foundation.
+ *
+ * Ghoti.io Lang-tang is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/*
+ * The engine's natives: every operation whose work the guest controls and that
+ * therefore polls the runtime (AD-21: a native cannot pause; it returns the
+ * limit to the interpreter, which unwinds). One entry per way of reaching the
+ * runtime poll, and the only list there is:
+ *
+ *     GLTANG_NATIVE(NAME, unbounded, "what the guest does to reach it")
+ *
+ * `unbounded` is 1 for an operation whose work grows with something the guest
+ * chooses (a length, a count, a depth of containers), so that it paces itself
+ * with a poll every few kilobytes, and 0 for a verdict poll: one poll, with no
+ * work, taken when an allocation or a push was refused so that the budget's
+ * verdict comes before the refusal's error.
+ *
+ * Every poll in the engine goes through GLTANG_NATIVE_POLL(exec, NAME, work) or
+ * through a pacer made with GLTANG_PACER(exec, NAME), which name an entry here
+ * (a name that is not here does not compile). tests/unit/test_native_gate.cpp
+ * reads this file and the sources: a poll that does not name an entry, an entry
+ * nothing names, and an unbounded entry with no row in the gate's table (a row
+ * that runs adversarial input under a tiny budget and requires a verdict within
+ * a bounded amount of work) each fail the build. Add a native: add it here,
+ * name it at its poll, add its row.
+ */
+
+GLTANG_NATIVE(ARRAY_GROW, 1, "assign past the end of an array, which grows and refills its storage")
+GLTANG_NATIVE(DEEP_COPY, 1, "store, slice or concatenate containers, which copies them")
+GLTANG_NATIVE(EQUALITY, 1, "compare two large containers with == or !=")
+GLTANG_NATIVE(ARRAY_CONCAT, 1, "array + array")
+GLTANG_NATIVE(ARRAY_REPEAT, 1, "array * count")
+GLTANG_NATIVE(ARRAY_SLICE, 1, "slice an array")
+GLTANG_NATIVE(STRING_CONCAT, 1, "string + anything, which copies both")
+GLTANG_NATIVE(STRING_SUBSTRING, 1, "cut a piece out of a string")
+GLTANG_NATIVE(STRING_SLICE, 1, "slice a string with a step, or reverse it")
+GLTANG_NATIVE(STRING_RETAG, 1, "give a string another encoding (.html, .percent, ...)")
+GLTANG_NATIVE(STRING_RENDER, 1, "encode a string (.render)")
+GLTANG_NATIVE(STRING_FROM_UTF8, 1, "make a string from bytes the host or a literal gave")
+GLTANG_NATIVE(PRINT, 1, "print a large string or container")
+GLTANG_NATIVE(RENDER_TO_STRING, 1, "render a container to text (as string, or + with a container)")
+GLTANG_NATIVE(ALLOCATION_REFUSED, 0, "an allocation the memory budget refused")
+GLTANG_NATIVE(CALL_REFUSED, 0, "a call whose frame the budget or the allocator refused")
+GLTANG_NATIVE(HALT_REQUEST, 0, "the halt option's request, posted when the first error is created")

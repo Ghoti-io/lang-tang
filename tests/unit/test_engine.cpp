@@ -992,3 +992,26 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ---------------------------------------------------------------------------
+// CAP-2: reading a host string charges for the copy, on the plain-ASCII path too
+// ---------------------------------------------------------------------------
+
+TEST(Natives, ReadingAHugeHostStringInALoopIsChargedForEachCopy) {
+  // The native gate found the ASCII fast path of string_from_utf8 charging
+  // nothing: a guest that reads a host's 1 MiB string in a loop paid a few
+  // fuel units for each megabyte it copied. A hundred reads are 1.6 million
+  // fuel, so a budget of 100,000 stops it; before, the loop finished.
+  Compiled compiled("n = 0; for (i = 0; i < 100; i += 1) { use big; n += 1; } n;");
+  ASSERT_TRUE(compiled.ok());
+  Config config;
+  config.fuel = 100000;
+  Context context(compiled.program, config);
+  ASSERT_TRUE(context.ok());
+  ASSERT_TRUE(context.add_library("big", tt::Host::string(std::string(1u << 20, 'x'))));
+  context.attach();
+  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
+  EXPECT_TRUE(r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) << "r=" << r;
+  EXPECT_LT(grcore_context_fuel_used(context.context), 100000u + 20000u);
+  context.has_run = true;
+}

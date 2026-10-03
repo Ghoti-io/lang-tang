@@ -50,6 +50,7 @@
 typedef struct Pacer {
   GLTANG_Execution * exec;
   size_t since;
+  GLTANG_NativeId native;  ///< Which native is paced, for the gate.
 } Pacer;
 
 static GLTANG_Status pace(Pacer * pacer, size_t elements) {
@@ -57,7 +58,7 @@ static GLTANG_Status pace(Pacer * pacer, size_t elements) {
   if (pacer->since >= GLTANG_POLL_BYTES) {
     size_t work = pacer->since / GLTANG_WORK_BYTES_PER_FUEL;
     pacer->since = 0;
-    return gltang_vm_native_poll(pacer->exec, work ? work : 1);
+    return gltang_vm_native_poll_as(pacer->exec, pacer->native, work ? work : 1);
   }
   return GLTANG_ST_OK;
 }
@@ -209,7 +210,7 @@ static GLTANG_Value array_concat(GLTANG_Execution * exec, GLTANG_Value a, GLTANG
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, ARRAY_CONCAT);
   GLTANG_Value failure = GLTANG_V_NULL;
   GLTANG_Status st = append_copies(exec, result, a, &pacer, &failure);
   if (st == GLTANG_ST_OK) {
@@ -241,7 +242,7 @@ static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, ARRAY_REPEAT);
   GLTANG_Value failure = GLTANG_V_NULL;
   GLTANG_Status st = GLTANG_ST_OK;
   for (int64_t k = 0; k < count && st == GLTANG_ST_OK; ++k) {
@@ -654,7 +655,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   if (!gltang_vm_temp_push(exec, result)) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, ARRAY_SLICE);
   GLTANG_Value failure = GLTANG_V_NULL;
   GLTANG_Status st = GLTANG_ST_OK;
   int64_t i = start;

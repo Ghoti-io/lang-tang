@@ -51,6 +51,7 @@ static void put_pointer(GLTANG_Execution * exec, void * holder, void ** slot, vo
 typedef struct Pacer {
   GLTANG_Execution * exec;
   size_t since;
+  GLTANG_NativeId native;  ///< Which native is paced, for the gate.
 } Pacer;
 
 static GLTANG_Status pace(Pacer * pacer, size_t elements) {
@@ -59,7 +60,7 @@ static GLTANG_Status pace(Pacer * pacer, size_t elements) {
   if (pacer->since >= GLTANG_POLL_BYTES) {
     size_t work = pacer->since / GLTANG_WORK_BYTES_PER_FUEL;
     pacer->since = 0;
-    return gltang_vm_native_poll(pacer->exec, work ? work : 1);
+    return gltang_vm_native_poll_as(pacer->exec, pacer->native, work ? work : 1);
   }
   return GLTANG_ST_OK;
 }
@@ -150,7 +151,7 @@ GLTANG_Value gltang_vm_array_grow(GLTANG_Execution * exec, GLTANG_Value array, s
   if (!gltang_vm_temp_push(exec, gltang_value_of(store))) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, ARRAY_GROW);
   GLTANG_ArrayStore * old = a->store.typed;
   GLTANG_Status poll = GLTANG_ST_OK;
   for (size_t i = 0; i < a->length && poll == GLTANG_ST_OK; ++i) {
@@ -380,7 +381,7 @@ GLTANG_Value gltang_vm_deep_copy(GLTANG_Execution * exec, GLTANG_Value v) {
     return v;
   }
   int fail = COPY_OK;
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, DEEP_COPY);
   GLTANG_Value copy = copy_rec(exec, v, 0, &fail, &pacer);
   switch (fail) {
     case COPY_OK: return copy;
@@ -453,7 +454,7 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
 }
 
 GLTANG_Value gltang_vm_equal(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b) {
-  Pacer pacer = {exec, 0};
+  Pacer pacer = GLTANG_PACER(exec, EQUALITY);
   switch (equal_rec(a, b, 0, &pacer)) {
     case EQ_TRUE: return GLTANG_V_TRUE;
     case EQ_FALSE: return GLTANG_V_FALSE;
