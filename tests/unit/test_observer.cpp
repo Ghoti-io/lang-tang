@@ -1,0 +1,649 @@
+/**
+ * @file
+ *
+ * The frame-differential observer (tests/observer.h) over lang-tang: one program
+ * is run plain, under GC torture with barrier-verify, on a stack that moves at
+ * every push, and with the poll phases shuffled (AD-5), and the four traces of
+ * the abstract frames are compared poll by poll. They must be equal, and so
+ * must the output, the result and the error list.
+ *
+ * The instrument is also shown to fail: a planted slot mismatch, a missing poll
+ * and a different depth are each reported with the poll index and the frame; an
+ * order-dependent DECIDE handler is caught by the shuffled run and an
+ * order-independent one is not.
+ *
+ * Copyright 2026 by Corey Pennycuff
+ */
+
+#include "exec_harness.h"
+#include "fuzz/gen.h"
+#include "observer.h"
+#include "test_helpers.h"
+
+#include <algorithm>
+#include <chrono>
+#include <dirent.h>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <sstream>
+
+namespace {
+
+struct Part {
+  std::string name;
+  std::string source;
+  uint64_t fuel = 100000;
+  GLTANG_ScopePolicy policy = GLTANG_SCOPE_EMPTY;
+  tt::Mode mode = tt::Mode::Script;
+};
+
+/// A program, the templates it can call, and how much fuel each leg of the run
+/// gets (so that the run pauses and is resumed many times).
+struct Case {
+  std::string name;
+  std::string source;
+  tt::Mode mode = tt::Mode::Script;
+  std::vector<Part> parts;
+  uint64_t step = 400;
+  size_t limit = 20000;  ///< The most polls recorded; the count of polls is compared beyond it.
+};
+
+struct RunConfig {
+  std::string label;
+  int torture = 0;
+  int verify = 0;
+  int moving = 0;
+  bool shuffle = false;
+  uint64_t seed = 0;
+};
+
+const RunConfig kPlain = {"plain", 0, 0, 0, false, 0};
+const RunConfig kTorture = {"torture+verify", 1, 1, 0, false, 0};
+const RunConfig kMoving = {"moving stack", 0, 0, 1, false, 0};
+const RunConfig kShuffled = {"phase-shuffled", 0, 0, 0, true, 0x5eed};
+
+struct Observed {
+  observer::Trace trace;
+  std::string raw, rendered, result_kind, result_text, errors;
+  size_t pauses = 0;
+  bool finished = false;
+  GRCORE_Result ran = GRCORE_OK;
+  std::string describe() const { return raw + "|" + rendered + "|" + result_kind + ":" + result_text + "|" + errors; }
+};
+
+std::string canonical_result_text(tt::Context & context) {
+  return context.describe();
+}
+
+/// Runs a case under a configuration, observing every poll. `extra` may register
+/// more handlers on the context before the run starts.
+Observed observe(const Case & c, const RunConfig & rc, const std::function<void(GRCORE_Context *)> & extra = nullptr) {
+  Observed out;
+  tt::Compiled page(c.source, c.mode, "page.tang");
+  EXPECT_TRUE(page.ok()) << c.name << ": " << page.error.message;
+  if (!page.ok()) {
+    return out;
+  }
+  tt::Config config;
+  config.fuel = c.step;
+  config.torture = rc.torture;
+  config.verify = rc.verify;
+  config.moving_stack = rc.moving;
+  tt::Context context(page.program, config);
+  EXPECT_TRUE(context.ok());
+  if (!context.ok()) {
+    return out;
+  }
+  EXPECT_EQ(gltang_execution_set_name(context.execution, "page"), GLTANG_OK);
+  std::vector<std::unique_ptr<tt::Compiled>> compiled;
+  for (const Part & part : c.parts) {
+    compiled.push_back(std::make_unique<tt::Compiled>(part.source, part.mode, (part.name + ".tang").c_str()));
+    EXPECT_TRUE(compiled.back()->ok()) << part.name << ": " << compiled.back()->error.message;
+    EXPECT_EQ(gltang_library_add_template(context.library(), part.name.c_str(), compiled.back()->program, part.fuel, part.policy), GLTANG_OK);
+  }
+  observer::Observer obs;
+  obs.trace.limit = c.limit;
+  EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
+  if (extra) {
+    extra(context.context);
+  }
+  if (rc.shuffle) {
+    EXPECT_EQ(grcore_context_set_phase_shuffle(context.context, true, rc.seed), GRCORE_OK);
+  }
+  bool done = context.execute();
+  while (!done && context.paused() && out.pauses < 4000) {
+    ++out.pauses;
+    // Give the run and its innermost open scope more, and go on.
+    uint64_t used = grcore_context_fuel_used(context.context);
+    grcore_context_set_fuel(context.context, used + c.step);
+    uint64_t depth = grcore_context_fuel_scope_depth(context.context);
+    if (depth > 0) {
+      // A scope that is out (a development PAUSE policy stops at it) is raised;
+      // one that still has fuel is left alone, or no scope would ever end a run.
+      uint64_t top = grcore_context_fuel_scope_top(context.context);
+      uint64_t remaining = 1, scope_used = 0;
+      if (grcore_context_fuel_scope_remaining(context.context, top, &remaining) == GRCORE_OK && remaining == 0 &&
+          grcore_context_fuel_scope_used(context.context, top, &scope_used) == GRCORE_OK) {
+        grcore_context_fuel_scope_set_budget(context.context, top, scope_used + c.step);
+      }
+    }
+    done = context.resume();
+  }
+  out.ran = context.ran;
+  out.finished = done;
+  out.raw = context.raw();
+  out.rendered = context.rendered();
+  out.result_kind = std::to_string((int)context.kind());
+  out.result_text = canonical_result_text(context);
+  for (size_t i = 0; i < context.error_count(); ++i) {
+    auto e = context.error(i);
+    out.errors += e.template_name() + ":" + std::to_string(e.e.line) + "[" + e.chain_text() + "]" + std::to_string((int)e.e.how) + ":" + e.message() + ";";
+  }
+  out.trace = std::move(obs.trace);
+  return out;
+}
+
+/// Compares two observations; reports the first divergence with its poll and frame.
+::testing::AssertionResult same(const Case & c, const Observed & a, const std::string & la, const Observed & b, const std::string & lb) {
+  observer::Divergence d;
+  if (observer::first_divergence(a.trace, b.trace, &d)) {
+    return ::testing::AssertionFailure() << c.name << ": " << la << " against " << lb << ": " << d.str();
+  }
+  if (a.describe() != b.describe()) {
+    return ::testing::AssertionFailure() << c.name << ": " << la << " against " << lb << ": output, result or error list differ:\n  " << a.describe() << "\n  " << b.describe();
+  }
+  if (a.pauses != b.pauses) {
+    return ::testing::AssertionFailure() << c.name << ": " << la << " paused " << a.pauses << " times, " << lb << " " << b.pauses;
+  }
+  return ::testing::AssertionSuccess();
+}
+
+std::vector<std::string> list_files(const std::string & dir) {
+  std::vector<std::string> names;
+  if (DIR * d = opendir(dir.c_str())) {
+    while (dirent * e = readdir(d)) {
+      std::string n = e->d_name;
+      if (n.size() > 5 && n.compare(n.size() - 5, 5, ".tang") == 0) {
+        names.push_back(n);
+      }
+    }
+    closedir(d);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+/// The corpus files that are small, finish within a modest budget on lang-tang,
+/// and are not refused: the first `limit` of them, in name order.
+std::vector<Case> corpus_cases(const std::string & sub, tt::Mode mode, size_t limit) {
+  std::vector<Case> cases;
+  std::string dir = std::string(GLTANG_TEST_DATA) + "/corpus/" + sub;
+  for (const std::string & name : list_files(dir)) {
+    if (cases.size() >= limit) {
+      break;
+    }
+    if (name.find("reject") != std::string::npos || name.find("runaway") != std::string::npos || name.find("break-continue") != std::string::npos ||
+        name.find("heavy") != std::string::npos || name.find("fib") != std::string::npos || name.find("random") != std::string::npos ||
+        name.find("tests-first") != std::string::npos || name.find("nested-deep") != std::string::npos || name.find("deeper") != std::string::npos ||
+        name.find("trailing-function") != std::string::npos) {
+      continue;
+    }
+    std::string source = read_file(dir + "/" + name);
+    if (source.size() > 500) {
+      continue;
+    }
+    tt::Compiled compiled(source, mode, name.c_str());
+    if (!compiled.ok()) {
+      continue;
+    }
+    tt::Config config;
+    config.fuel = 20000;
+    tt::Context probe(compiled.program, config);
+    if (!probe.ok() || !probe.execute()) {
+      continue;
+    }
+    Case c;
+    c.name = sub + "/" + name;
+    c.source = source;
+    c.mode = mode;
+    c.step = 20;
+    cases.push_back(c);
+  }
+  return cases;
+}
+
+const char * kPage = "use sidebar;\nprint(\"<main>\" + sidebar());";
+const char * kSidebar = "use nav; print(nav()); print(\"<aside>\");";
+
+/// The handwritten cases: pauses inside calls, nested template calls, scopes of
+/// each policy that are exhausted, natives that poll, errors across a boundary.
+std::vector<Case> site_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step = 50) {
+    Case c;
+    c.name = "site/" + name;
+    c.source = source;
+    c.parts = std::move(parts);
+    c.step = step;
+    cases.push_back(c);
+  };
+  add("empty policy nav loop", kPage, {{"sidebar", kSidebar, 10000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}, {"nav", "while (true) {}", 500, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});
+  add("segments policy", kPage, {{"sidebar", kSidebar, 10000, GLTANG_SCOPE_EMPTY, tt::Mode::Script},
+      {"nav", "print(\"a\"); print(\"b\"); while (true) {}", 300, GLTANG_SCOPE_SEGMENTS, tt::Mode::Script}});
+  add("pause policy nav", kPage, {{"sidebar", kSidebar, 10000, GLTANG_SCOPE_EMPTY, tt::Mode::Script},
+      {"nav", "n = 0; while (n < 150) { n += 1; } print(\"nav\");", 100, GLTANG_SCOPE_PAUSE, tt::Mode::Script}});
+  add("function inside a template", kPage, {{"sidebar", kSidebar, 10000, GLTANG_SCOPE_EMPTY, tt::Mode::Script},
+      {"nav", "function spin(n) { k = 0; while (k < n) { k += 1; } return k; }\nprint(spin(120));", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});
+  add("three deep",
+      "use a; x = 1; print(a());",
+      {{"a", "use b; y = 2; print(b());", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script},
+       {"b", "use c; z = 3; print(c());", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script},
+       {"c", "w = 0; while (w < 90) { w += 1; } print(w);", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});
+  add("template with text and tags",
+      "use row; print(\"<ul>\"); for (i = 0; i < 6; i += 1) { print(row()); } print(\"</ul>\");",
+      {{"row", "<li><%= \"a&b\" %> <% j = 0; while (j < 5) { j += 1; } %><%= j %></li>", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}});
+  add("native string building in a scope",
+      "use nav; keep = [1, 2, 3]; s = nav(); print(keep.size); print(\"x\");",
+      {{"nav", "s = \"x\"; while (true) { s = s + s; }", 700, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});
+  add("error across the boundary",
+      "use t; print(\"[\" + t() + \"]\");",
+      {{"t", "print(\"a\"); y = 1 / 0; y;", 1000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}});
+  add("recursion with pauses",
+      "function f(n) { if (n == 0) { return 0; } return 1 + f(n - 1); }\nprint(f(40)); f(30);", {}, 30);
+  add("recursion in a template",
+      "use t; print(t());",
+      {{"t", "function g(n) { if (n <= 0) { return 1; } return n * g(n - 1); }\nprint(g(12));", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}}, 25);
+  add("globals and locals", "x = 1; y = \"s\"; function f(a, b) { global x; x = x + a; z = [a, b]; return z; }\nprint(f(2, \"q\")); print(x); f(5, 6);", {}, 20);
+  add("many children under the ceiling",
+      "use child; for (i = 0; i < 40; i += 1) { child(); } print(\"done\");",
+      {{"child", "t = 1;", 1000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}}, 70);
+  return cases;
+}
+
+/// Generated programs (tests/fuzz/gen.h): many polls, loops, calls, errors.
+std::vector<Case> generated_cases(uint64_t seeds) {
+  std::vector<Case> cases;
+  for (uint64_t seed = 1; seed <= seeds; ++seed) {
+    for (gen::Mode mode : {gen::Mode::Script, gen::Mode::Template}) {
+      Case c;
+      c.name = "generated/" + std::to_string(seed) + (mode == gen::Mode::Script ? "-script" : "-template");
+      c.source = gen::generate(seed, mode).source;
+      c.mode = mode == gen::Mode::Script ? tt::Mode::Script : tt::Mode::Template;
+      c.step = 150;
+      c.limit = 150;  // a poll costs a millisecond to record: the first 150 and the count of the rest
+      cases.push_back(c);
+    }
+  }
+  return cases;
+}
+
+std::vector<Case> all_cases() {
+  std::vector<Case> cases = corpus_cases("script", tt::Mode::Script, 40);
+  for (Case & c : generated_cases(6)) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : corpus_cases("template", tt::Mode::Template, 12)) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : site_cases()) {
+    cases.push_back(std::move(c));
+  }
+  return cases;
+}
+
+}  // namespace
+
+TEST(Observer, TheCaseSetHoldsAtLeastFortyPrograms) {
+  std::vector<Case> cases = all_cases();
+  EXPECT_GE(cases.size(), 40u);
+  size_t with_parts = 0;
+  for (const Case & c : cases) {
+    with_parts += !c.parts.empty();
+  }
+  EXPECT_GE(with_parts, 8u) << "template calls and scopes are in the set";
+}
+
+TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutputResultAndErrors) {
+  std::vector<Case> cases = all_cases();
+  ASSERT_GE(cases.size(), 40u);
+  size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0;
+  for (const Case & c : cases) {
+    auto started = std::chrono::steady_clock::now();
+    Observed plain = observe(c, kPlain);
+    if (std::getenv("GLTANG_OBSERVER_VERBOSE")) {
+      std::printf("  %s: %zu polls, %zu pauses, %.3fs\n", c.name.c_str(), plain.trace.total, plain.pauses,
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+      std::fflush(stdout);
+    }
+    ASSERT_TRUE(plain.finished || plain.pauses > 0 || !plain.raw.empty() || plain.ran != GRCORE_OK) << c.name;
+    EXPECT_GT(plain.trace.polls.size(), 0u) << c.name << " recorded no polls: the observer is not seeing the run";
+    EXPECT_EQ(plain.trace.polls.size(), std::min(plain.trace.total, c.limit)) << c.name;
+    polls += plain.trace.polls.size();
+    pauses += plain.pauses;
+    for (const auto & p : plain.trace.polls) {
+      deep += p.frames.size() > 2;
+      for (const auto & f : p.frames) {
+        for (const auto & s : f.scopes) {
+          scopes_with_variables += !s.variables.empty();
+        }
+      }
+    }
+    Observed torture = observe(c, kTorture);
+    EXPECT_TRUE(same(c, plain, kPlain.label, torture, kTorture.label));
+    Observed moving = observe(c, kMoving);
+    EXPECT_TRUE(same(c, plain, kPlain.label, moving, kMoving.label));
+    Observed shuffled = observe(c, kShuffled);
+    EXPECT_TRUE(same(c, plain, kPlain.label, shuffled, kShuffled.label));
+  }
+  EXPECT_GT(polls, 1800u);
+  EXPECT_GT(pauses, 50u) << "the set includes runs that pause and resume";
+  EXPECT_GT(deep, 20u) << "the set includes polls inside nested calls";
+  EXPECT_GT(scopes_with_variables, 100u) << "scopes and their variables are recorded";
+  std::printf("  observer: %zu programs x 4 configurations, %zu polls, %zu pauses\n", cases.size(), polls, pauses);
+}
+
+TEST(Observer, AllInstrumentsTogetherAlsoGiveTheSameTrace) {
+  std::vector<Case> cases = site_cases();
+  RunConfig all = {"torture+verify+moving+shuffled", 1, 1, 1, true, 99};
+  for (const Case & c : cases) {
+    Observed plain = observe(c, kPlain);
+    Observed everything = observe(c, all);
+    EXPECT_TRUE(same(c, plain, kPlain.label, everything, all.label));
+  }
+}
+
+TEST(Observer, ATraceRecordsDepthIdentityLocationSlotsAndScopes) {
+  Case c;
+  c.name = "shape";
+  c.source = "function f(a) { local = a + 1; k = 0; while (k < 30) { k += 1; } return local; }\nx = f(5); print(x);";
+  c.step = 25;
+  Observed o = observe(c, kPlain);
+  ASSERT_GT(o.trace.polls.size(), 5u);
+  // Find a poll inside f.
+  const observer::PollRecord * inside = nullptr;
+  bool saw_local = false;
+  for (const auto & p : o.trace.polls) {
+    if (p.frames.size() == 2) {
+      inside = inside ? inside : &p;
+      for (const auto & v : p.frames[0].scopes[0].variables) {
+        saw_local = saw_local || (v.name == "local" && v.text == "6");
+      }
+    }
+  }
+  ASSERT_NE(inside, nullptr);
+  const observer::FrameRecord & top = inside->frames[0];
+  EXPECT_EQ(top.depth, 0u);
+  EXPECT_EQ(inside->frames[1].depth, 1u);
+  EXPECT_EQ(top.engine, "lang-tang");
+  EXPECT_EQ(top.file, "page.tang");
+  EXPECT_GT(top.line, 0);
+  EXPECT_EQ(top.slots.size(), top.slot_count);
+  EXPECT_GE(top.slot_count, 5u);
+  EXPECT_EQ(top.slots[0].kind, GRCORE_SLOT_RAW);
+  bool saw_value_slot = false;
+  for (const auto & s : top.slots) {
+    saw_value_slot = saw_value_slot || s.kind == GRCORE_SLOT_VALUE;
+  }
+  EXPECT_TRUE(saw_value_slot);
+  ASSERT_GE(top.scopes.size(), 2u);
+  EXPECT_EQ(top.scopes[0].kind, GRCORE_SCOPE_LOCAL);
+  EXPECT_EQ(top.scopes[0].name, "f");
+  EXPECT_TRUE(saw_local) << "the local `local` reads 6 at some poll inside f";
+  EXPECT_EQ(top.scopes.back().kind, GRCORE_SCOPE_GLOBAL);
+}
+
+// ---------------------------------------------------------------------------
+// The instrument is seen to fail
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A trace with several frames and varied polls: the nested template case.
+Observed nested_trace() {
+  Case c;
+  for (const Case & k : site_cases()) {
+    if (k.name == "site/three deep") {
+      c = k;
+    }
+  }
+  return observe(c, kPlain);
+}
+
+/// A poll with at least two frames and a slot, where the next poll differs.
+size_t pick_poll(const observer::Trace & t) {
+  for (size_t p = 5; p + 1 < t.polls.size(); ++p) {
+    if (t.polls[p].frames.size() >= 3 && !t.polls[p].frames[1].slots.empty()) {
+      observer::Trace a, b;
+      a.polls = {t.polls[p]};
+      b.polls = {t.polls[p + 1]};
+      a.total = b.total = 1;
+      observer::Divergence d;
+      if (observer::first_divergence(a, b, &d)) {
+        return p;
+      }
+    }
+  }
+  return 0;
+}
+
+}  // namespace
+
+TEST(ObserverFails, AnEqualPairOfTracesIsNotAFalseAlarm) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  observer::Divergence d;
+  EXPECT_FALSE(observer::first_divergence(a.trace, b.trace, &d)) << d.str();
+  EXPECT_GT(a.trace.polls.size(), 20u);
+}
+
+TEST(ObserverFails, APlantedSlotMismatchIsReportedWithThePollAndTheFrame) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  size_t poll = pick_poll(a.trace);
+  ASSERT_GT(poll, 0u);
+  ASSERT_TRUE(observer::plant_slot_mismatch(&b.trace, poll, 1, 0));
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_TRUE(d.has_frame);
+  EXPECT_EQ(d.frame, 1u);
+  EXPECT_NE(d.what.find("slot 0 text"), std::string::npos) << d.str();
+  EXPECT_NE(d.str().find("poll " + std::to_string(poll)), std::string::npos);
+  EXPECT_NE(d.str().find("frame 1"), std::string::npos);
+  // A VALUE slot, deeper in.
+  Observed c = nested_trace();
+  size_t value_slot = 0;
+  for (size_t i = 0; i < a.trace.polls[poll].frames[0].slots.size(); ++i) {
+    if (a.trace.polls[poll].frames[0].slots[i].kind == GRCORE_SLOT_VALUE) {
+      value_slot = i;
+    }
+  }
+  ASSERT_TRUE(observer::plant_slot_mismatch(&c.trace, poll, 0, value_slot));
+  ASSERT_TRUE(observer::first_divergence(a.trace, c.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_EQ(d.frame, 0u);
+}
+
+TEST(ObserverFails, AMissingPollIsReportedAtThePollWhereTheTracesPartCompany) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  size_t poll = pick_poll(a.trace);
+  ASSERT_GT(poll, 0u);
+  ASSERT_TRUE(observer::plant_missing_poll(&b.trace, poll));
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  // And a poll missing at the very end: the number of polls differs.
+  Observed e = nested_trace();
+  ASSERT_TRUE(observer::plant_missing_poll(&e.trace, e.trace.polls.size() - 1));
+  ASSERT_TRUE(observer::first_divergence(a.trace, e.trace, &d));
+  EXPECT_EQ(d.poll, a.trace.polls.size() - 1);
+  EXPECT_NE(d.what.find("number of polls"), std::string::npos) << d.str();
+}
+
+TEST(ObserverFails, ADifferentDepthIsReportedWithThePollAndTheFrameThatIsMissing) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  size_t poll = pick_poll(a.trace);
+  ASSERT_GT(poll, 0u);
+  size_t frames = a.trace.polls[poll].frames.size();
+  ASSERT_TRUE(observer::plant_different_depth(&b.trace, poll));
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_TRUE(d.has_frame);
+  EXPECT_EQ(d.frame, frames - 1);
+  EXPECT_NE(d.what.find("depth"), std::string::npos) << d.str();
+}
+
+TEST(ObserverFails, AChangedVariableAndALocationAreReportedToo) {
+  Observed a = nested_trace();
+  Observed b = nested_trace();
+  size_t poll = pick_poll(a.trace);
+  ASSERT_GT(poll, 0u);
+  bool done = false;
+  for (auto & scope : b.trace.polls[poll].frames[0].scopes) {
+    if (!scope.variables.empty() && !done) {
+      scope.variables[0].text += "?";
+      done = true;
+    }
+  }
+  ASSERT_TRUE(done);
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_EQ(d.frame, 0u);
+  EXPECT_NE(d.what.find("variable"), std::string::npos) << d.str();
+  Observed c = nested_trace();
+  c.trace.polls[poll].frames[2].line += 1;
+  ASSERT_TRUE(observer::first_divergence(a.trace, c.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_EQ(d.frame, 2u);
+  EXPECT_NE(d.what.find("location"), std::string::npos) << d.str();
+}
+
+// ---------------------------------------------------------------------------
+// Phase shuffle: an order-dependent DECIDE handler is caught, an independent one is not
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct Flag {
+  bool a_ran = false;
+  uint64_t polls = 0;
+};
+
+void decide_a(GRCORE_Context *, void * value, GRCORE_PollCall *) {
+  static_cast<Flag *>(value)->a_ran = true;
+}
+
+/// Votes pause unless A has already run in this poll: its vote depends on the
+/// order the two ran in.
+void decide_b_order_dependent(GRCORE_Context *, void * value, GRCORE_PollCall * call) {
+  if (!static_cast<Flag *>(value)->a_ran) {
+    grcore_pollcall_vote(call, GRCORE_VERDICT_PAUSE);
+  }
+}
+
+/// Votes pause at every seventh poll, whatever else ran.
+void decide_b_independent(GRCORE_Context *, void * value, GRCORE_PollCall * call) {
+  Flag * f = static_cast<Flag *>(value);
+  if (f->polls % 7 == 3) {
+    grcore_pollcall_vote(call, GRCORE_VERDICT_PAUSE);
+  }
+}
+
+void observe_reset(GRCORE_Context *, void * value, GRCORE_PollCall *) {
+  Flag * f = static_cast<Flag *>(value);
+  f->a_ran = false;
+  ++f->polls;
+}
+
+const GRCORE_Key kKeyA = {"order A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_a};
+const GRCORE_Key kKeyBDependent = {"order B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_order_dependent};
+const GRCORE_Key kKeyBIndependent = {"independent B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_independent};
+const GRCORE_Key kKeyReset = {"reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, nullptr, observe_reset};
+
+Case shuffle_case() {
+  Case c;
+  c.name = "shuffle";
+  c.source = "s = 0; for (i = 0; i < 40; i += 1) { s += i; } print(s); s;";
+  c.step = 100000;
+  return c;
+}
+
+}  // namespace
+
+TEST(PhaseShuffle, AnOrderDependentDecideHandlerIsCaughtByTheShuffledRun) {
+  Case c = shuffle_case();
+  Flag plain_flag, shuffled_flag;
+  auto make = [&](Flag * flag) {
+    return [flag](GRCORE_Context * context) {
+      ASSERT_EQ(grcore_context_register(context, &kKeyA, flag), GRCORE_OK);
+      ASSERT_EQ(grcore_context_register(context, &kKeyBDependent, flag), GRCORE_OK);
+      ASSERT_EQ(grcore_context_register(context, &kKeyReset, flag), GRCORE_OK);
+    };
+  };
+  Observed plain = observe(c, kPlain, make(&plain_flag));
+  Observed shuffled = observe(c, kShuffled, make(&shuffled_flag));
+  EXPECT_EQ(plain.pauses, 0u) << "in registration order A runs before B, which never votes";
+  EXPECT_GT(shuffled.pauses, 0u) << "with the order shuffled B sometimes runs first and votes";
+  observer::Divergence d;
+  ASSERT_TRUE(observer::first_divergence(plain.trace, shuffled.trace, &d)) << "the shuffled run's trace must differ";
+  EXPECT_NE(d.what.find("verdict"), std::string::npos) << d.str();
+  EXPECT_FALSE(same(c, plain, "plain", shuffled, "shuffled")) << "the comparison used by the four-way test fails on it";
+}
+
+TEST(PhaseShuffle, AnOrderIndependentDecideHandlerIsNotCaught) {
+  Case c = shuffle_case();
+  Flag plain_flag, shuffled_flag;
+  auto make = [&](Flag * flag) {
+    return [flag](GRCORE_Context * context) {
+      ASSERT_EQ(grcore_context_register(context, &kKeyA, flag), GRCORE_OK);
+      ASSERT_EQ(grcore_context_register(context, &kKeyBIndependent, flag), GRCORE_OK);
+      ASSERT_EQ(grcore_context_register(context, &kKeyReset, flag), GRCORE_OK);
+    };
+  };
+  Observed plain = observe(c, kPlain, make(&plain_flag));
+  Observed shuffled = observe(c, kShuffled, make(&shuffled_flag));
+  EXPECT_GT(plain.pauses, 0u) << "the independent handler does vote";
+  EXPECT_TRUE(same(c, plain, "plain", shuffled, "shuffled"));
+}
+
+TEST(PhaseShuffle, TheShuffleReallyReordersTheHandlers) {
+  struct Probe {
+    std::vector<int> * order;
+    int id;
+  };
+  static const GRCORE_Key probe_key = {"probe", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_OBSERVE, nullptr,
+      [](GRCORE_Context *, void * value, GRCORE_PollCall *) {
+        Probe * p = static_cast<Probe *>(value);
+        p->order->push_back(p->id);
+      }};
+  Case c = shuffle_case();
+  auto run = [&](const RunConfig & rc) {
+    std::vector<int> order;
+    std::vector<Probe> probes = {{&order, 0}, {&order, 1}, {&order, 2}, {&order, 3}};
+    observe(c, rc, [&](GRCORE_Context * context) {
+      for (Probe & p : probes) {
+        ASSERT_EQ(grcore_context_register(context, &probe_key, &p), GRCORE_OK);
+      }
+    });
+    return order;
+  };
+  std::vector<int> plain = run(kPlain);
+  std::vector<int> shuffled = run(kShuffled);
+  ASSERT_GE(plain.size(), 8u);
+  bool plain_in_order = true;
+  for (size_t i = 0; i < plain.size(); ++i) {
+    plain_in_order = plain_in_order && plain[i] == (int)(i % 4);
+  }
+  EXPECT_TRUE(plain_in_order) << "without the shuffle the handlers run in registration order";
+  EXPECT_NE(plain, shuffled) << "with it they do not";
+}
+
+int main(int argc, char ** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

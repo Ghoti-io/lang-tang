@@ -33,6 +33,8 @@
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 
+#include <malloc.h>
+
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -52,6 +54,11 @@ struct Tracker {
   long calls = 0;
   long fail_at = 0;     ///< 0: never.
   bool fired = false;
+  // The bytes the group holds from the allocator and from the page provider,
+  // now and at the most. The native gate reads the peak as the work a run did
+  // with memory, a counter the test owns.
+  size_t live_bytes = 0;
+  size_t peak_bytes = 0;
   GRCORE_Allocator allocator;
   GRCORE_PageProvider pages;
   const GRCORE_PageProvider * base_pages = grcore_page_provider_default();
@@ -77,6 +84,13 @@ struct Tracker {
     return false;
   }
 
+  void grew(size_t bytes) {
+    live_bytes += bytes;
+    if (live_bytes > peak_bytes) {
+      peak_bytes = live_bytes;
+    }
+  }
+
   static void * do_malloc(void * ctx, size_t size) {
     Tracker * t = static_cast<Tracker *>(ctx);
     if (t->should_fail()) {
@@ -84,6 +98,9 @@ struct Tracker {
     }
     void * p = std::malloc(size ? size : 1);
     t->live_blocks += p != nullptr;
+    if (p) {
+      t->grew(malloc_usable_size(p));
+    }
     return p;
   }
 
@@ -94,6 +111,9 @@ struct Tracker {
     }
     void * p = std::calloc(n ? n : 1, size ? size : 1);
     t->live_blocks += p != nullptr;
+    if (p) {
+      t->grew(malloc_usable_size(p));
+    }
     return p;
   }
 
@@ -102,16 +122,24 @@ struct Tracker {
     if (t->should_fail()) {
       return nullptr;
     }
+    size_t before = old ? malloc_usable_size(old) : 0;
     void * p = std::realloc(old, size ? size : 1);
     if (p && !old) {
       ++t->live_blocks;
+    }
+    if (p) {
+      size_t after = malloc_usable_size(p);
+      t->live_bytes -= before;
+      t->grew(after);
     }
     return p;
   }
 
   static void do_free(void * ctx, void * p) {
     if (p) {
-      --static_cast<Tracker *>(ctx)->live_blocks;
+      Tracker * t = static_cast<Tracker *>(ctx);
+      --t->live_blocks;
+      t->live_bytes -= malloc_usable_size(p);
       std::free(p);
     }
   }
@@ -123,12 +151,16 @@ struct Tracker {
     }
     void * p = t->base_pages->map(t->base_pages->ctx, size);
     t->live_pages += p != nullptr;
+    if (p) {
+      t->grew(size);
+    }
     return p;
   }
 
   static void do_unmap(void * ctx, void * p, size_t size) {
     Tracker * t = static_cast<Tracker *>(ctx);
     --t->live_pages;
+    t->live_bytes -= size;
     t->base_pages->unmap(t->base_pages->ctx, p, size);
   }
 };
@@ -209,6 +241,13 @@ struct Config {
   uint64_t gc_threshold = GRHEAP_DEFAULT_GC_THRESHOLD;
   bool arena = false;
   long fail_at = 0;                   ///< Fail the Nth allocation of the run (0: never).
+  // The instruments, each three-way: -1 takes the environment's choice
+  // (GRHEAP_TORTURE, GRHEAP_VERIFY, GLTANG_TEST_MOVING_STACK, which is how a
+  // whole suite is run under them), 0 forces it off and 1 forces it on. The
+  // observer runs one program under several settings in one process.
+  int torture = -1;
+  int verify = -1;
+  int moving_stack = -1;
 };
 
 inline bool moving_stack_requested() {
@@ -247,6 +286,7 @@ class Context {
   GRCORE_Outcome outcome = GRCORE_OUTCOME_FINISHED;
   bool has_run = false;
   bool arena = false;  ///< Arena mode never collects, so torture has nothing to count.
+  bool torture_on = false;  ///< Whether this context's heap was made with torture on.
   GLTANG_Library * root = nullptr;   ///< The execution's library, attached when the run starts.
   bool attached = false;
 
@@ -278,6 +318,13 @@ class Context {
       }
       gltang_heap_options_configure(heap_options);
       grheap_options_set_gc_threshold(heap_options, config.gc_threshold);
+      if (config.torture >= 0) {
+        grheap_options_set_torture(heap_options, config.torture != 0);
+      }
+      if (config.verify >= 0) {
+        grheap_options_set_verify(heap_options, config.verify != 0 ? GRHEAP_VERIFY_ABORT : GRHEAP_VERIFY_OFF);
+      }
+      torture_on = grheap_options_get_torture(heap_options);
       if (config.arena) {
         grheap_options_set_mode(heap_options, GRHEAP_MODE_ARENA);
       }
@@ -289,7 +336,7 @@ class Context {
       if (created != GLTANG_OK) {
         break;
       }
-      if (moving_stack_requested()) {
+      if (config.moving_stack > 0 || (config.moving_stack < 0 && moving_stack_requested())) {
         grcore_stack_set_always_move(grcore_context_stack(context), true);
       }
     } while (false);
@@ -312,8 +359,7 @@ class Context {
       GRHEAP_Stats stats;
       if (grheap_stats(heap, &stats) == GRHEAP_OK) {
         EXPECT_EQ(stats.verify_violations, 0u) << "a pointer was written into a heap object without grheap_store";
-        const char * torture = std::getenv("GRHEAP_TORTURE");
-        if (!arena && torture && *torture && std::strcmp(torture, "0") != 0 && stats.allocations > 1) {
+        if (!arena && torture_on && stats.allocations > 1) {
           // The instrument is on only if it ran: a torture suite that never
           // collected would pass for the wrong reason.
           EXPECT_GT(stats.torture_collections, 0u);
