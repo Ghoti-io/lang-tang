@@ -28,8 +28,6 @@ using tt::Config;
 using tt::Context;
 using tt::Mode;
 
-constexpr size_t kHeader = 4;  // the frame header: function, pc, sp, flags
-
 extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled);
 
 namespace {
@@ -247,6 +245,12 @@ const char * const kLoop =
 }  // namespace
 
 #ifdef GLTANG_WITH_JIT
+
+namespace {
+// The frame header: function, pc, sp, flags. Only the JIT's frame tests read
+// it, so it is declared inside their guard (clang rejects an unused one).
+constexpr size_t kHeader = 4;
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Tier-up

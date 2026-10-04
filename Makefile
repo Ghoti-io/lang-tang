@@ -363,7 +363,12 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
 	check-edges check-gates examples cli-test fuzz-replay test-oracle check-planted-quick
 
-VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=definite,indirect,possible --track-origins=yes --error-exitcode=1 --suppressions=tests/valgrind.supp
+# Valgrind runs threads one at a time under a lock that is not fair by default:
+# a thread that never blocks (the interpreter loop) can hold it for minutes while
+# the profiler's timer thread, woken after its millisecond, waits to be
+# scheduled, so a timer-driven test sees a handful of samples instead of
+# thousands. --fair-sched=yes hands the lock over in turn.
+VALGRIND_FLAGS := --leak-check=full --show-leak-kinds=definite,indirect,possible --track-origins=yes --error-exitcode=1 --suppressions=tests/valgrind.supp --fair-sched=yes
 
 TEST_HELPER_SRC := $(wildcard tests/test_helpers.cpp)
 TEST_HELPER_OBJ := $(patsubst tests/%.cpp,$(OBJ_DIR)/tests/%.o,$(TEST_HELPER_SRC))
@@ -723,7 +728,7 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 # part of `make test-torture`; `make check-planted` runs all twelve.
 ####################################################################
 
-PLANTED_ENV = PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
+PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
 
 check-planted-quick: ## Planted defects 03 to 12 (phase shuffle, native gate, frame observer, oracle, the JIT, the two of snapshots)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
@@ -976,6 +981,14 @@ endif
 
 UBSAN_CHECKS := undefined,float-cast-overflow
 ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) -fno-sanitize-recover=$(UBSAN_CHECKS) -fno-omit-frame-pointer -g -O1
+# clang's `undefined` group includes `enum`, which GCC's does not: it reports a
+# load of an enum value outside the enumerators. The tests pass such values on
+# purpose (static_cast<Kind>(99)) to prove the C API refuses an unknown kind,
+# which is undefined in C++ but is exactly the input under test, so the check
+# is switched off under clang and the compilers sanitize the same set.
+ifneq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
+ASAN_UBSAN_FLAGS += -fno-sanitize=enum
+endif
 COV_BUILD_DIR := ./build/$(BUILD)-cov
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
@@ -1045,11 +1058,24 @@ endif
 
 ASAN_TEST_EXECUTABLES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
 ASAN_RUNTIME := $(shell $(CC) -print-file-name=libasan.so 2>/dev/null)
+# How the sanitized test programs are started. GCC's runtime is a shared
+# libasan.so, which has to be preloaded because the libraries under test are
+# loaded by a program that was not linked against it. clang links its own
+# runtime statically into every program it builds with -fsanitize=address, so
+# there is nothing to preload - and preloading libasan.so beside it, or
+# anything else (this workstation's desktop sets LD_PRELOAD), makes the runtime
+# abort with "ASan runtime does not come first". So with clang the preload is
+# emptied instead of set.
+ifneq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
+ASAN_PRELOAD = LD_PRELOAD=
+else
+ASAN_PRELOAD = LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}"
+endif
 
 test-asan: $(ASAN_TEST_EXECUTABLES) ## Build with ASan+UBSan and run the tests
 	@for test_exe in $(ASAN_TEST_EXECUTABLES); do \
 		printf '\n### ASan+UBSan %s ###\n\n' "$$(basename $$test_exe)"; \
-		LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}" \
+		$(ASAN_PRELOAD) \
 		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
 			$$test_exe --gtest_brief=1 || exit 1; \
 	done
@@ -1061,7 +1087,7 @@ test-torture: $(ASAN_TORTURE_EXECUTABLES) check-planted-slow ## ASan+UBSan with 
 	@for test_exe in $(ASAN_TORTURE_EXECUTABLES); do \
 		printf '\n### ASan+UBSan torture %s ###\n\n' "$$(basename $$test_exe)"; \
 		GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 GLTANG_TEST_MOVING_STACK=1 \
-		LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}" \
+		$(ASAN_PRELOAD) \
 		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
 			$$test_exe --gtest_brief=1 || exit 1; \
 	done

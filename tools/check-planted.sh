@@ -35,6 +35,12 @@
 #   --all       every case (the default); `make check-planted`
 #   --selftest  prove the script itself: a patch that applies to nothing fails
 #               it, and a patch that breaks nothing is reported as not caught
+# PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
+# copy is built the same way, in its own tree (release-nojit for no). Cases 08,
+# 09 and 10 plant a defect in the JIT, which a JIT=no build does not contain, so
+# with no they are SKIPPED, loudly, and counted as skipped and never as caught:
+# the summary line gives both numbers, and a run in which nothing was caught
+# fails (an all-skipped run proves nothing). With yes every case runs.
 # PLANTED_PREFIX is the PREFIX the dependencies were installed with (empty for
 # none) and PLANTED_LIBDIR the directory their shared libraries are in; the
 # pkg-config path is the caller's, as for every make in this library.
@@ -49,6 +55,14 @@ LOG="$ROOT/build/planted/build.log"
 JOBS="${PLANTED_JOBS:-8}"
 PREFIX="${PLANTED_PREFIX:-}"
 LIBDIR="${PLANTED_LIBDIR:-}"
+JIT="${PLANTED_JIT:-yes}"
+case "$JIT" in
+  yes) TREE=release ;;
+  no) TREE=release-nojit ;;
+  *) printf 'check-planted: PLANTED_JIT must be yes or no, not %s\n' "$JIT" >&2; exit 2 ;;
+esac
+# Cases whose defect is in code only a JIT=yes build contains.
+JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back"
 
 if [ -z "$LIBDIR" ]; then
   printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
@@ -85,41 +99,41 @@ trap cleanup EXIT INT TERM
 
 # The test that must notice each patch: the make target that builds it (or the
 # runner script for the oracle), and the command that runs it in the copy.
-APPS="$WORK/build/linux/release/apps"
+APPS="$WORK/build/linux/$TREE/apps"
 LDPATH="$APPS:$LIBDIR"
 
 target_of() {
   case "$1" in
-    01-*|02-*) echo "build/linux/release/apps/testExecute_complex" ;;
-    03-*|05-*|08-*) echo "build/linux/release/apps/testObserver" ;;
-    09-*|10-*) echo "build/linux/release/apps/testJit" ;;
-    11-*|12-*) echo "build/linux/release/apps/testSnapshot" ;;
-    04-*) echo "build/linux/release/apps/testNative_gate" ;;
-    06-*|07-*) echo "build/linux/release/apps/oracle/oracle_ctang build/linux/release/apps/testOracle" ;;
-    selftest) echo "build/linux/release/apps/testObserver" ;;
+    01-*|02-*) echo "build/linux/$TREE/apps/testExecute_complex" ;;
+    03-*|05-*|08-*) echo "build/linux/$TREE/apps/testObserver" ;;
+    09-*|10-*) echo "build/linux/$TREE/apps/testJit" ;;
+    11-*|12-*) echo "build/linux/$TREE/apps/testSnapshot" ;;
+    04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
+    06-*|07-*) echo "build/linux/$TREE/apps/oracle/oracle_ctang build/linux/$TREE/apps/testOracle" ;;
+    selftest) echo "build/linux/$TREE/apps/testObserver" ;;
   esac
 }
 
 run_test() {
   case "$1" in
     01-*|02-*)
-      (cd "$WORK" && env GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testExecute_complex --gtest_brief=1) ;;
+      (cd "$WORK" && env GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testExecute_complex --gtest_brief=1) ;;
     03-*|05-*|selftest)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testObserver --gtest_brief=1) ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1) ;;
     08-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.PlainTorture*') ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.PlainTorture*') ;;
     09-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
     10-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testJit --gtest_brief=1 --gtest_filter='Jit.AMissedWriteBack*') ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.AMissedWriteBack*') ;;
     11-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
     12-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.OutputSoFar*:SnapshotCorpus.EveryProgram*') ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.OutputSoFar*:SnapshotCorpus.EveryProgram*') ;;
     04-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testNative_gate --gtest_brief=1) ;;
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testNative_gate --gtest_brief=1) ;;
     06-*|07-*)
-      (cd "$WORK" && env GLTANG_ORACLE_RUNNER="$APPS/oracle/oracle_ctang" LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testOracle --gtest_brief=1) ;;
+      (cd "$WORK" && env GLTANG_ORACLE_RUNNER="$APPS/oracle/oracle_ctang" LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testOracle --gtest_brief=1) ;;
   esac
 }
 
@@ -140,7 +154,7 @@ name_of_test() {
 build() {
   # Incremental: only what the patch touched is rebuilt. The environment's make
   # flags are not this make's.
-  (cd "$WORK" && env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL make -j"$JOBS" $PREFIX_ARG $(target_of "$1") >>"$LOG" 2>&1)
+  (cd "$WORK" && env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL -u JIT make -j"$JOBS" JIT="$JIT" $PREFIX_ARG $(target_of "$1") >>"$LOG" 2>&1)
 }
 
 # The files a patch names, from its +++ lines.
@@ -265,6 +279,22 @@ if [ "$SELFTEST" = 1 ]; then
     printf '  FAIL: a harmless patch was not reported as not caught (rc %s)\n' "$rc" >&2
     failures=$((failures + 1))
   fi
+  # JIT=no skips the cases whose defect lives in the JIT, says so, and does not
+  # count a skip as a catch: a run that can only skip fails. (The nested run is
+  # a fresh script; it makes its own copy and removes it, after this one is done
+  # with its own.)
+  skip_out="$(PLANTED_JIT=no "$0" 08-jit-wrong-tag 09-jit-skipped-fuel 2>&1)"
+  skip_rc=$?
+  case "$skip_out" in
+    *"planted 08-jit-wrong-tag"*"SKIPPED"*"planted 09-jit-skipped-fuel"*"SKIPPED"*) skip_said=1 ;;
+    *) skip_said=0 ;;
+  esac
+  if [ "$skip_rc" -eq 1 ] && [ "$skip_said" -eq 1 ]; then
+    printf '  ok   under JIT=no the JIT cases are skipped out loud, and a run of nothing but skips fails\n'
+  else
+    printf '  FAIL: JIT=no did not skip the JIT cases visibly and fail an all-skipped run (rc %s): %s\n' "$skip_rc" "$skip_out" >&2
+    failures=$((failures + 1))
+  fi
   if [ "$failures" -ne 0 ]; then
     exit 1
   fi
@@ -283,11 +313,21 @@ fi
 
 make_copy
 count=0
+skipped=0
 for c in $CASES; do
   patch_file="$PATCHES/$c.patch"
   if [ ! -f "$patch_file" ]; then
     printf 'check-planted: no patch %s\n' "$patch_file" >&2
     exit 2
+  fi
+  if [ "$JIT" = no ]; then
+    case " $JIT_ONLY " in
+      *" $c "*)
+        printf 'planted %s\n  SKIPPED: JIT=no builds no JIT, so there is nothing to plant this defect in; it runs under JIT=yes\n' "$c"
+        skipped=$((skipped + 1))
+        continue
+        ;;
+    esac
   fi
   count=$((count + 1))
   if ! run_case "$c" "$patch_file"; then
@@ -296,11 +336,11 @@ for c in $CASES; do
 done
 
 if [ "$count" -eq 0 ]; then
-  printf 'check-planted: no case ran, so this measures nothing\n' >&2
+  printf 'check-planted: no case ran (%s skipped), so this measures nothing\n' "$skipped" >&2
   exit 1
 fi
 if [ "$failures" -ne 0 ]; then
-  printf 'check-planted: %s of %s planted defects were not caught by their instrument, or their control failed\n' "$failures" "$count" >&2
+  printf 'check-planted: %s of %s planted defects were not caught by their instrument, or their control failed (%s skipped)\n' "$failures" "$count" "$skipped" >&2
   exit 1
 fi
-printf 'check-planted: all %s planted defects were caught by the instrument named for them, and each control passed\n' "$count"
+printf 'check-planted: all %s planted defects were caught by the instrument named for them, and each control passed; %s skipped (JIT=%s)\n' "$count" "$skipped" "$JIT"

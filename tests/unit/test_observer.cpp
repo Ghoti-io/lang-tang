@@ -69,6 +69,7 @@ const RunConfig kLinesPlain = {"statement polls, plain", 0, 0, 0, false, 0, true
 const RunConfig kLinesTorture = {"statement polls, torture+verify", 1, 1, 0, false, 0, true};
 const RunConfig kLinesMoving = {"statement polls, moving stack", 0, 0, 1, false, 0, true};
 const RunConfig kLinesShuffled = {"statement polls, phase-shuffled", 0, 0, 0, true, 0x5eed, true};
+#ifdef GLTANG_WITH_JIT  // only the JIT arm's tests read these; clang rejects an unused one
 // The same program with every function tiering up at its first poll (story
 // 15). The reference for each is the interpreter's trace, and the instruments
 // are the ones above: a JIT frame is an interpreter frame, written at the poll,
@@ -80,6 +81,7 @@ const RunConfig kJitMoving = {"jit, moving stack", 0, 0, 1, false, 0, false, 1};
 const RunConfig kJitShuffled = {"jit, phase-shuffled", 0, 0, 0, true, 0x5eed, false, 1};
 const RunConfig kLinesJit = {"statement polls, jit", 0, 0, 0, false, 0, true, 1};
 const RunConfig kLinesJitMoving = {"statement polls, jit, moving stack", 0, 0, 1, false, 0, true, 1};
+#endif
 
 struct Observed {
   observer::Trace trace;
