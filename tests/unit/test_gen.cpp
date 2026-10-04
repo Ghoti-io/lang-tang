@@ -155,14 +155,13 @@ TEST(Generator, EveryProgramRunsToTheEndOnLangTangAndRunsTheSameTwice) {
 
 TEST(Generator, TheGeneratedBatchProducesOutputErrorsAndEveryResultKind) {
   std::set<std::string> kinds;
-  size_t with_output = 0, with_error_results = 0;
+  size_t with_output = 0;
   for (uint64_t seed = 1; seed <= kSeeds; ++seed) {
     gen::Program p = gen::generate(seed, gen::Mode::Script);
     oracle::Verdict v = oracle::lang_tang_run(p.source, true);
     ASSERT_EQ(v.kind, oracle::Kind::Output);
     kinds.insert(v.result_kind);
     with_output += !v.output.empty();
-    with_error_results += v.result_kind == "error";
   }
   EXPECT_GT(with_output, kSeeds / 2) << "most programs print something";
   EXPECT_TRUE(kinds.count("integer") || kinds.count("string") || kinds.count("array"));

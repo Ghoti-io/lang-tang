@@ -148,6 +148,15 @@ class Tang {
       close(from_child[1]);
       std::vector<const char *> argv;
       std::string path = tang_path();
+      // The command is an ordinary release build with its own library next to
+      // it. A sanitizer run puts a different apps directory first in
+      // LD_LIBRARY_PATH (where an installed, older lang-tang can win over the
+      // command's own RUNPATH) and may preload its runtime: neither belongs in
+      // the child.
+      std::string own = path.substr(0, path.rfind('/'));
+      const char * inherited = std::getenv("LD_LIBRARY_PATH");
+      setenv("LD_LIBRARY_PATH", (own + (inherited && *inherited ? std::string(":") + inherited : std::string())).c_str(), 1);
+      unsetenv("LD_PRELOAD");
       argv.push_back(path.c_str());
       for (const std::string & a : args) {
         argv.push_back(a.c_str());

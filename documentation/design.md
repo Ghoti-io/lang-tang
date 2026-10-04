@@ -367,8 +367,9 @@ budget means the same thing to a host that turns it on. Its body is
 so with `gltang_execution_set_statement_polls(execution, false)` (the default)
 it is one load and one branch, and polls, fuel, pause locations and frame traces
 are what they were before the opcode existed (the suite shows it: no existing
-expected value changed except the two that are properties of the bytecode, the
-cost table's "every opcode costs at least one" and the disassembly counts). With
+expected value changed except the one that is a property of the bytecode, the
+cost table test's "every opcode costs at least one", which now names `LINE` as the
+one that costs none). With
 it on it is the `POLL` body, so the debugger, the observer and the fuel check see
 nothing new but a more frequent engine. The engine never asks whether a debugger
 is attached (AD-2): the host that attaches one turns the option on, on that

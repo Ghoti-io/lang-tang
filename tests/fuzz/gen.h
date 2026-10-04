@@ -112,7 +112,6 @@ class Builder {
   bool tag_open_ = false;
   bool in_ranged_ = false;
   int loop_depth_ = 0;
-  int loop_vars_used_ = 0;
   bool have_random_ = false;
   bool have_math_ = false;
 
