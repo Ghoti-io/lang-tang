@@ -3,8 +3,9 @@
  *
  * The oracle differential's pieces, as plain C++ so that a planted case can
  * drive each one: a verdict and the comparison between two of them, the
- * child-process driver with its wall-clock kill, the divergence ledger and its
- * validator, and the judge that holds the comparison against the ledger.
+ * child-process driver with its wall-clock kill (POSIX only), the divergence
+ * ledger and its validator, and the judge that holds the comparison against
+ * the ledger.
  *
  * Nothing here includes ctang. The program that does is oracle_ctang.c, which
  * the driver runs as a child.
@@ -23,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
@@ -32,11 +34,13 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifndef _WIN32
 #include <poll.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
-#include <unistd.h>
+#endif
 
 namespace oracle {
 
@@ -159,6 +163,13 @@ inline std::string difference(const Verdict & lang_tang, const Verdict & ctang) 
   return "result " + lang_tang.result_kind + " differs at byte " + std::to_string(k) + ": lang-tang `" + around(lang_tang.result_text, k) +
       "`, ctang `" + around(ctang.result_text, k) + "`";
 }
+
+#ifndef _WIN32
+// The driver below runs the ctang runner as a child with fork, poll, an
+// address-space limit and a SIGKILL, none of which Windows has, so it exists
+// only on POSIX. The pure pieces around it (a verdict, the comparison, the
+// ledger, the judge) are compiled everywhere, and lang-tang's own side of the
+// differential runs on Windows; the comparison with ctang does not.
 
 // -------------------------------------------------------------------------
 // The child-process driver
@@ -332,6 +343,8 @@ inline Verdict ctang_run_verdict(const std::string & runner, const std::string &
   }
   throw std::runtime_error("the oracle runner printed something unreadable for " + file + ": " + r.output);
 }
+
+#endif // _WIN32
 
 // -------------------------------------------------------------------------
 // The divergence ledger
@@ -546,20 +559,15 @@ inline Judgement judge(const std::vector<Entry> & entries, const Ledger & ledger
 inline std::vector<std::string> list_corpus(const std::string & root) {
   std::vector<std::string> files;
   for (const char * dir : {"script", "template"}) {
-    std::string path = root + "/" + dir;
-    std::string cmd = "ls " + path + " 2>/dev/null";
-    FILE * p = popen(cmd.c_str(), "r");
-    if (!p) {
-      continue;
-    }
-    char name[1024];
-    while (fgets(name, sizeof(name), p)) {
-      std::string n = trim(name);
+    // Not `ls` through popen: that needs a POSIX shell, which a Windows
+    // process does not have, and it silently listed nothing there.
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(root + "/" + dir, ec), end; !ec && it != end; it.increment(ec)) {
+      std::string n = it->path().filename().string();
       if (n.size() > 5 && n.compare(n.size() - 5, 5, ".tang") == 0) {
         files.push_back(std::string(dir) + "/" + n);
       }
     }
-    pclose(p);
   }
   std::sort(files.begin(), files.end());
   return files;

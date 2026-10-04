@@ -27,6 +27,18 @@
 
 #include <gtest/gtest.h>
 
+#ifdef _WIN32
+
+// The session is played with fork, pipes, poll and /proc/self/exe, and the
+// command's --dap needs the descriptor transport, which is a stub on Windows
+// (runtime-debug's transport.h). What the command does there instead (a message
+// and exit status 7) is checked by tests/cli-test.sh.
+TEST(TangDap, NeedsTheDescriptorTransportAndSoIsNotRunOnWindows) {
+  GTEST_SKIP() << "fork, pipes and poll; --dap is unsupported on Windows (see cli-test.sh)";
+}
+
+#else  // !_WIN32
+
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -755,6 +767,8 @@ TEST(TangDap, ABreakpointInCompiledCodeStopsAtTheRightLineWithTheRightLocalsAndS
 }
 
 #endif  // GLTANG_WITH_JIT
+
+#endif  // _WIN32
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

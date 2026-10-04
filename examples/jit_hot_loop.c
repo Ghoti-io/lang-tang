@@ -49,6 +49,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* runtime-jit compiles for Linux x86-64 and Linux arm64 and for nothing else
+ * (its backend.h), whatever the library was built with. */
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
+#define JIT_BACKEND_EXISTS 1
+#else
+#define JIT_BACKEND_EXISTS 0
+#endif
+
 typedef struct Run {
   char output[64];
   long long result;
@@ -151,6 +159,15 @@ int main(void) {
     goto done;
   }
   printf("same output, result and fuel with the JIT off\n");
+  if (gltang_jit_built() && !JIT_BACKEND_EXISTS) {
+    /* The JIT is built but runtime-jit has no backend for this target, so
+     * nothing tiers up: the two runs above were both the interpreter's and
+     * agree, which is all that can be shown. Exit status 77 is "skipped": the
+     * Makefile counts it and does not fail. */
+    printf("SKIP: the JIT is built but this target has no native code backend, so no function tiers up\n");
+    status = 77;
+    goto done;
+  }
   if (gltang_jit_built()) {
     printf("compiled %llu function(s); entered compiled code %llu time(s), %llu call(s) returned from it, and it left for the interpreter %llu time(s)\n",
         (unsigned long long)compiled.stats.functions_compiled, (unsigned long long)compiled.stats.entries,

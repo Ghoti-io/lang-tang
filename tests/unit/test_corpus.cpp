@@ -12,6 +12,7 @@
 #include "oracle/oracle.h"
 
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <set>
 
@@ -142,12 +143,12 @@ TEST(Corpus, TheNodeTypeTableCoversEveryClassTheHeadersDeclare) {
   EXPECT_EQ(declared, sizeof(kVtables) / sizeof(kVtables[0]));
   // And no header was missed: the directory holds exactly these plus the base
   // and the umbrella.
-  FILE * ls = popen(("ls " + std::string(GLTANG_TEST_DATA) + "/../include/ghoti.io/lang-tang/ast | wc -l").c_str(), "r");
-  ASSERT_NE(ls, nullptr);
-  int count = 0;
-  ASSERT_EQ(fscanf(ls, "%d", &count), 1);
-  pclose(ls);
-  EXPECT_EQ((size_t)count, declared + 2); // astNode.h and astNodeAll.h
+  size_t count = 0;
+  for (const auto & entry : std::filesystem::directory_iterator(std::string(GLTANG_TEST_DATA) + "/../include/ghoti.io/lang-tang/ast")) {
+    (void)entry;
+    ++count;
+  }
+  EXPECT_EQ(count, declared + 2); // astNode.h and astNodeAll.h
 }
 
 TEST(Corpus, EveryAcceptedTreeCountsTheSameWaysOverAndWalksOnce) {

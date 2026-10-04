@@ -261,6 +261,7 @@ TEST(Jit, ABuiltJitSaysSo) {
 }
 
 TEST(Jit, AHotLoopTiersUpAndGivesTheInterpretersOutput) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = kLoop;
   Outcome plain, jit;
@@ -277,6 +278,7 @@ TEST(Jit, AHotLoopTiersUpAndGivesTheInterpretersOutput) {
 }
 
 TEST(Jit, ThresholdOneContinuesTheSameInvocationInCompiledCode) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // One call, so the invocation that crossed the threshold is the only one:
   // it is the compiled code that ran the loop.
   Scenario sc;
@@ -291,6 +293,7 @@ TEST(Jit, ThresholdOneContinuesTheSameInvocationInCompiledCode) {
 }
 
 TEST(Jit, AThresholdOfTwoHundredPollsCompilesAfterTwoHundredAndZeroMeansNever) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // With the library's default (the constant) a function compiles after 200
   // polls: a loop of 50 iterations does not reach it, one of 500 does.
   if (GLTANG_JIT_DEFAULT_THRESHOLD != 200u) {
@@ -315,6 +318,7 @@ TEST(Jit, AThresholdOfTwoHundredPollsCompilesAfterTwoHundredAndZeroMeansNever) {
 }
 
 TEST(Jit, AnExecutionThatIsGivenNoThresholdHasTheLibrarysDefault) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   if (tt::jit_threshold_requested() >= 0) {
     GTEST_SKIP() << "GLTANG_TEST_JIT_THRESHOLD overrides the default for every harness-made execution";
   }
@@ -348,6 +352,7 @@ TEST(Jit, TheThresholdIsRefusedOnceTheRunHasStarted) {
 // ---------------------------------------------------------------------------
 
 TEST(Jit, IntegerOverflowInsideCompiledCodeDeoptimizesAndTheInterpreterBoxesTheResult) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
       "function add(a, b) { return a + b; }\n"
@@ -366,6 +371,7 @@ TEST(Jit, IntegerOverflowInsideCompiledCodeDeoptimizesAndTheInterpreterBoxesTheR
 }
 
 TEST(Jit, AnOperandThatIsNotASmallIntegerDeoptimizesAtTheOperation) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
       "function add(a, b) { return a + b; }\n"
@@ -385,6 +391,7 @@ TEST(Jit, AnOperandThatIsNotASmallIntegerDeoptimizesAtTheOperation) {
 }
 
 TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRunsInTheInterpreter) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
       "function g(x) { return x * 2; }\n"
@@ -397,6 +404,7 @@ TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRun
 }
 
 TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompiledBecauseALineComesFirst) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // Every statement begins with LINE, which is inline, so the "first operation
   // after the entry poll leaves compiled code" decline cannot be reached from
   // source: both functions are compiled, and the difference is where they leave.
@@ -417,6 +425,7 @@ TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompil
 }
 
 TEST(Jit, AFunctionThatDeoptimizesEightTimesIsDiscardedAndNeverCompiledAgain) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(a) { return a + 1; }\nfor (i = 0; i < 14; i += 1) { f(\"x\"); }\nprint(f(2));\n";
   Outcome plain, jit;
@@ -434,6 +443,7 @@ TEST(Jit, AFunctionThatDeoptimizesEightTimesIsDiscardedAndNeverCompiledAgain) {
 // ---------------------------------------------------------------------------
 
 TEST(Jit, ACompiledLoopWithNothingPendingNeverCallsThePollHelperAndStillChargesFuel) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) { i = 0; while (i < n) { i = i + 1; } return i; }\nprint(f(20000));";
   Outcome plain, jit;
@@ -445,6 +455,7 @@ TEST(Jit, ACompiledLoopWithNothingPendingNeverCallsThePollHelperAndStillChargesF
 }
 
 TEST(Jit, AFuelBudgetThatRunsOutInsideCompiledCodePausesAtTheSamePollWithTheSameFuelAndResumes) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) { s = 0; i = 0; while (i < n) { s = s + i; i = i + 1; } return s; }\nprint(f(300)); print(f(40));";
   sc.fuel = 100;
@@ -465,6 +476,7 @@ TEST(Jit, AFuelBudgetThatRunsOutInsideCompiledCodePausesAtTheSamePollWithTheSame
 }
 
 TEST(Jit, AnInterruptAtACompiledPollPausesAtTheRightFileAndLineAndResumeCompletes) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) {\n  s = 0;\n  i = 0;\n  while (i < n) {\n    s = s + i;\n    i = i + 1;\n  }\n  return s;\n}\nprint(f(2000));";
   sc.script = true;
@@ -484,6 +496,7 @@ TEST(Jit, AnInterruptAtACompiledPollPausesAtTheRightFileAndLineAndResumeComplete
 }
 
 TEST(Jit, ATerminateRequestUnwindsAtACompiledPollLikeTheInterpretersOwn) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) { i = 0; while (i < n) { i = i + 1; } return i; }\nprint(f(100000));";
   sc.script = true;
@@ -500,6 +513,7 @@ TEST(Jit, ATerminateRequestUnwindsAtACompiledPollLikeTheInterpretersOwn) {
 }
 
 TEST(Jit, ATemplateScopeThatRunsOutInsideCompiledCodeUnwindsWithTheScopeErrorAndTheErrorListEntry) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "use t; print(\"[\" + t() + \"]\"); print(\"after\");";
   Part t;
@@ -516,6 +530,7 @@ TEST(Jit, ATemplateScopeThatRunsOutInsideCompiledCodeUnwindsWithTheScopeErrorAnd
 }
 
 TEST(Jit, FuelIsTheSameOnEveryTierForTheSameProgramAndBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   const char * programs[] = {
       kLoop,
       "function f(a, b) { if (a < b) { return a * b; } return a - b; }\ns = 0; for (i = 0; i < 40; i += 1) { s = s + f(i, 20); } print(s);",
@@ -537,6 +552,7 @@ TEST(Jit, FuelIsTheSameOnEveryTierForTheSameProgramAndBudget) {
 }
 
 TEST(Jit, StatementPollsInCompiledCodeAreTheInterpretersAndAreReadAtEveryLineNotWhenCompiled) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) {\n  s = 0;\n  i = 0;\n  while (i < n) {\n    s = s + i;\n    i = i + 1;\n  }\n  return s;\n}\nprint(f(30));\nprint(f(30));";
   sc.statement_polls = true;
@@ -551,6 +567,7 @@ TEST(Jit, StatementPollsInCompiledCodeAreTheInterpretersAndAreReadAtEveryLineNot
 }
 
 TEST(Jit, ASwitchFlippedWhileCompiledCodeRunsTakesEffectAtTheNextLineAndCostsNothingWhenClear) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // The execution's statement-poll switch is turned on at the tenth poll and off
   // at the fortieth by the poll handler, while the compiled loop runs. Both tiers
   // must poll at the same places: the compiled LINE reads the switch every time.
@@ -580,6 +597,7 @@ TEST(Jit, ASwitchFlippedWhileCompiledCodeRunsTakesEffectAtTheNextLineAndCostsNot
 }
 
 TEST(Jit, AMissedWriteBackAtAPollWouldLoseWhatTheCollectorDidToASlot) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // A collector that moves objects updates the references in the guest frame,
   // and the compiled code that continues must see them. The poll handler plays
   // that collector: it overwrites a local in the top frame at one poll. If the
@@ -610,6 +628,7 @@ TEST(Jit, AMissedWriteBackAtAPollWouldLoseWhatTheCollectorDidToASlot) {
 // ---------------------------------------------------------------------------
 
 TEST(Jit, ARefusedNativeDepthMeansTheFunctionIsNotEnteredAndTheBudgetIsUntouched) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = kLoop;
   sc.native_depth = 0;
@@ -628,6 +647,7 @@ TEST(Jit, ARefusedNativeDepthMeansTheFunctionIsNotEnteredAndTheBudgetIsUntouched
 }
 
 TEST(Jit, CodeMemoryThatTheBudgetRefusesMarksTheFunctionNeverCompileAndTheRunContinues) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = kLoop;
   // The most the interpreter needs, measured with the JIT counting but never
@@ -647,6 +667,7 @@ TEST(Jit, CodeMemoryThatTheBudgetRefusesMarksTheFunctionNeverCompileAndTheRunCon
 }
 
 TEST(Jit, APageProviderThatCannotProtectRefusesTheCompileAndTheRunContinues) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = kLoop;
   sc.fail_protect = true;
@@ -670,6 +691,7 @@ std::string function_with_locals(int locals) {
 }  // namespace
 
 TEST(Jit, AFunctionWithManyLocalsIsCompiledAndOneWithTooManySlotsIsDeclinedWithoutHarm) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // 300 locals fit the 1,024-slot limit: the top level and f are compiled.
   Scenario tall;
   tall.source = function_with_locals(300);
@@ -694,6 +716,7 @@ TEST(Jit, AFunctionWithManyLocalsIsCompiledAndOneWithTooManySlotsIsDeclinedWitho
 // ---------------------------------------------------------------------------
 
 TEST(Jit, AMovingGuestStackIsReloadedAfterEveryPollInsideCompiledCode) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = "function f(n) { s = 0; i = 0; while (i < n) { s = s + i; i = i + 1; } return s; }\nprint(f(200)); print(f(50));";
   sc.script = true;
@@ -705,6 +728,7 @@ TEST(Jit, AMovingGuestStackIsReloadedAfterEveryPollInsideCompiledCode) {
 }
 
 TEST(Jit, ACollectionAtACompiledPollSeesEveryReferenceInTheGuestFrame) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // The references are arguments, so they are in registers of compiled code and
   // in the guest frame the poll wrote; the handler collects at some polls, and
   // the program must still read them afterwards.
@@ -728,6 +752,7 @@ TEST(Jit, ACollectionAtACompiledPollSeesEveryReferenceInTheGuestFrame) {
 }
 
 TEST(Jit, AContextPausedInsideCompiledCodeResumesOnAnotherThreadWithTheSameOutput) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   // The compiled code is gone from the native stack at a pause (the guest frame
   // holds everything), so the context can move to another thread, and every hop
   // that enters a function again enters compiled code on its own thread.
@@ -799,6 +824,7 @@ std::vector<std::string> tang_files(const std::string & sub) {
 }  // namespace
 
 TEST(Jit, TheCorpusRunsToTheSameVerdictWithEveryFunctionCompiledAtItsFirstPoll) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   uint64_t entries = 0, programs = 0, deopts = 0, compared = 0;
   for (const char * sub : {"script", "template"}) {
     for (const std::string & path : tang_files(sub)) {
@@ -835,6 +861,7 @@ TEST(Jit, TheCorpusRunsToTheSameVerdictWithEveryFunctionCompiledAtItsFirstPoll) 
 }
 
 TEST(Jit, GeneratedProgramsRunToTheSameVerdictWithEveryFunctionCompiledAtItsFirstPoll) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   uint64_t entries = 0, compared = 0;
   for (uint64_t seed = 1; seed <= 60; ++seed) {
     for (gen::Mode mode : {gen::Mode::Script, gen::Mode::Template}) {

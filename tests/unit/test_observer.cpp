@@ -409,9 +409,13 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
 #ifdef GLTANG_WITH_JIT
   // The differential is not vacuous: compiled code ran, its polls took the slow
   // path where the observer was watching, and some of them paused the run.
-  EXPECT_GT(jit_entries, 100u) << "the JIT runs entered compiled code";
-  EXPECT_GT(jit_slow_polls, 100u) << "polls inside compiled code took the slow path";
-  EXPECT_GT(jit_refused_pauses, 5u) << "a pause at a poll inside compiled code is in the set";
+  // Where there is no native backend the JIT runs are the interpreter's, and
+  // there is no compiled code to have entered.
+  if (jit_backend_present()) {
+    EXPECT_GT(jit_entries, 100u) << "the JIT runs entered compiled code";
+    EXPECT_GT(jit_slow_polls, 100u) << "polls inside compiled code took the slow path";
+    EXPECT_GT(jit_refused_pauses, 5u) << "a pause at a poll inside compiled code is in the set";
+  }
 #endif
   std::printf("  observer: %zu programs x %d configurations (%d with statement polls), %zu polls, %zu pauses\n", cases.size(),
 #ifdef GLTANG_WITH_JIT

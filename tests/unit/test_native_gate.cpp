@@ -40,6 +40,30 @@
 #include <thread>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <atomic>
+
+// alarm(2) does not exist on Windows. A watchdog thread stands in for it: if the
+// alarm is neither cancelled (alarm(0)) nor replaced in time, it ends the
+// process with the status SIGALRM's default action would give (128 + 14), so a
+// hang is a failure and not a stuck suite there too.
+static std::atomic<unsigned> g_alarm_generation{0};
+static unsigned alarm(unsigned seconds) {
+  unsigned mine = ++g_alarm_generation;
+  if (seconds != 0) {
+    std::thread([seconds, mine] {
+      std::this_thread::sleep_for(std::chrono::seconds(seconds));
+      if (g_alarm_generation.load() == mine) {
+        std::fputs("test_native_gate: the alarm fired: a case did not reach a verdict in time\n", stderr);
+        std::fflush(stderr);
+        std::_Exit(142);
+      }
+    }).detach();
+  }
+  return 0;
+}
+#endif
+
 namespace {
 
 const uint64_t kUnlimited = GRCORE_UNLIMITED;

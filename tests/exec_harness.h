@@ -53,6 +53,18 @@ namespace tt {
 // ---------------------------------------------------------------------------
 
 /// Counts the live blocks and pages a group hands out, and fails the Nth.
+/// The size of the block malloc handed out: what glibc calls its usable size and
+/// the Windows C runtime calls _msize. Both are at least what was asked for.
+#if defined(_WIN32)
+inline size_t usable_size(void * block) {
+  return _msize(block);
+}
+#else
+inline size_t usable_size(void * block) {
+  return malloc_usable_size(block);
+}
+#endif
+
 struct Tracker {
   long live_blocks = 0;
   long live_pages = 0;
@@ -108,7 +120,7 @@ struct Tracker {
     void * p = std::malloc(size ? size : 1);
     t->live_blocks += p != nullptr;
     if (p) {
-      t->grew(malloc_usable_size(p));
+      t->grew(usable_size(p));
     }
     return p;
   }
@@ -121,7 +133,7 @@ struct Tracker {
     void * p = std::calloc(n ? n : 1, size ? size : 1);
     t->live_blocks += p != nullptr;
     if (p) {
-      t->grew(malloc_usable_size(p));
+      t->grew(usable_size(p));
     }
     return p;
   }
@@ -131,13 +143,13 @@ struct Tracker {
     if (t->should_fail()) {
       return nullptr;
     }
-    size_t before = old ? malloc_usable_size(old) : 0;
+    size_t before = old ? usable_size(old) : 0;
     void * p = std::realloc(old, size ? size : 1);
     if (p && !old) {
       ++t->live_blocks;
     }
     if (p) {
-      size_t after = malloc_usable_size(p);
+      size_t after = usable_size(p);
       t->live_bytes -= before < t->live_bytes ? before : t->live_bytes;
       t->grew(after);
     }
@@ -148,7 +160,7 @@ struct Tracker {
     if (p) {
       Tracker * t = static_cast<Tracker *>(ctx);
       --t->live_blocks;
-      { size_t u = malloc_usable_size(p); t->live_bytes -= u < t->live_bytes ? u : t->live_bytes; }
+      { size_t u = usable_size(p); t->live_bytes -= u < t->live_bytes ? u : t->live_bytes; }
       std::free(p);
     }
   }

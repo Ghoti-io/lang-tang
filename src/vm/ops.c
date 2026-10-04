@@ -41,7 +41,7 @@
 #include <ghoti.io/cutil/memory.h>
 #include "vm_internal.h"
 
-#define ERROR(kind) gltang_vm_make_error(exec, (kind))
+#define MAKE_ERROR(kind) gltang_vm_make_error(exec, (kind))
 
 // ---------------------------------------------------------------------------
 // Pacing, shared by the loops that copy elements
@@ -76,7 +76,7 @@ static bool is_float_value(GLTANG_Value v) {
 }
 
 static GLTANG_Value overflow(GLTANG_Execution * exec, bool positive) {
-  return ERROR(positive ? GLTANG_ERROR_INTEGER_TOO_LARGE : GLTANG_ERROR_INTEGER_TOO_SMALL);
+  return MAKE_ERROR(positive ? GLTANG_ERROR_INTEGER_TOO_LARGE : GLTANG_ERROR_INTEGER_TOO_SMALL);
 }
 
 static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Value a, GLTANG_Value b) {
@@ -102,7 +102,7 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
         return gltang_vm_make_int(exec, r);
       case GLTANG_OP_DIV:
         if (y == 0) {
-          return ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
+          return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
         }
         if (x == INT64_MIN && y == -1) {
           return overflow(exec, true);
@@ -110,7 +110,7 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
         return gltang_vm_make_int(exec, x / y);
       case GLTANG_OP_MOD:
         if (y == 0) {
-          return ERROR(GLTANG_ERROR_MODULO_BY_ZERO);
+          return MAKE_ERROR(GLTANG_ERROR_MODULO_BY_ZERO);
         }
         // x % -1 is 0 for every x, and the hardware trap on INT64_MIN % -1 is
         // never reached.
@@ -118,7 +118,7 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
       default:
         break;
     }
-    return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   double x = gltang_vm_number(a);
   double y = gltang_vm_number(b);
@@ -128,12 +128,12 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
     case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
     case GLTANG_OP_DIV:
       if (y == 0.0) {
-        return ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
+        return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
       }
       return gltang_vm_make_float(exec, x / y);
     default:
       // `%` on floats is not supported (4.2).
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
 
@@ -153,7 +153,7 @@ static GLTANG_Value compare(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Va
     order = x < y ? -1 : (x > y ? 1 : (x == y ? 0 : 2));
   }
   else {
-    return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   bool r = false;
   if (order != 2) {
@@ -222,7 +222,7 @@ static GLTANG_Value array_concat(GLTANG_Execution * exec, GLTANG_Value a, GLTANG
 
 static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_t count) {
   if (count < 0) {
-    return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   size_t length = (size_t)gltang_vm_array(a)->length;
   if (length == 0) {
@@ -232,7 +232,7 @@ static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_
   // A count too large to allocate is Out of memory (4.2). The bound is on the
   // element count, not the byte count.
   if ((uint64_t)count > ((uint64_t)1 << 31) / length) {
-    return ERROR(GLTANG_ERROR_OUT_OF_MEMORY);
+    return MAKE_ERROR(GLTANG_ERROR_OUT_OF_MEMORY);
   }
   size_t total = length * (size_t)count;
   GLTANG_Value result = gltang_vm_array_new(exec, total);
@@ -283,7 +283,7 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
         }
         GLTANG_ValueKind other_kind = gltang_vm_kind(other);
         if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG) {
-          return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+          return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
         }
         if (a_string && b_string) {
           return gltang_vm_string_concat(exec, a, b);
@@ -305,7 +305,7 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
       if (gltang_v_is_kind(a, GLTANG_OBJ_ARRAY) && gltang_v_is_kind(b, GLTANG_OBJ_ARRAY)) {
         return array_concat(exec, a, b);
       }
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     }
     case GLTANG_OP_MUL:
       if (gltang_v_is_kind(a, GLTANG_OBJ_ARRAY) && is_integer_value(b)) {
@@ -317,14 +317,14 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
       if (gltang_vm_is_number(a) && gltang_vm_is_number(b)) {
         return arithmetic(exec, op, a, b);
       }
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     case GLTANG_OP_MOD:
       if (is_integer_value(a) && is_integer_value(b)) {
         return arithmetic(exec, op, a, b);
       }
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     default:
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
 
@@ -339,7 +339,7 @@ GLTANG_Value gltang_vm_op_neg(GLTANG_Execution * exec, GLTANG_Value v) {
   if (is_float_value(v)) {
     return gltang_vm_make_float(exec, -gltang_vm_float(v));
   }
-  return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+  return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ static GLTANG_Value string_to_int(GLTANG_Execution * exec, GLTANG_Value v) {
     ++p;
   }
   if (p >= end || *p < '0' || *p > '9') {
-    return ERROR(GLTANG_ERROR_NOT_A_NUMBER);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_A_NUMBER);
   }
   uint64_t magnitude = 0;
   bool too_big = false;
@@ -406,14 +406,18 @@ static GLTANG_Value string_to_float(GLTANG_Execution * exec, GLTANG_Value v) {
   bool none = end == text;
   gcu_allocator_free(exec->allocator, copy);
   if (none) {
-    return ERROR(GLTANG_ERROR_NOT_A_NUMBER);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_A_NUMBER);
   }
   return gltang_vm_make_float(exec, d);
 }
 
 static GLTANG_Value float_to_int(GLTANG_Execution * exec, double d) {
-  if (isnan(d)) {
-    return ERROR(GLTANG_ERROR_NOT_A_NUMBER);
+  // NaN is the one value unequal to itself. isnan(d) is the same test, but
+  // MinGW's isnan is a macro that picks among float, double and long double
+  // by size, and its float arm converts d to float where -Wfloat-conversion
+  // sees it even though that arm is not taken.
+  if (d != d) {
+    return MAKE_ERROR(GLTANG_ERROR_NOT_A_NUMBER);
   }
   if (d >= 9223372036854775808.0) {
     return overflow(exec, true);
@@ -427,10 +431,10 @@ static GLTANG_Value float_to_int(GLTANG_Execution * exec, double d) {
 GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type) {
   GLTANG_ValueKind kind = gltang_vm_kind(v);
   if (kind == GLTANG_KIND_ERROR) {
-    return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }
   if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG) {
-    return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   switch (type) {
     case GLTANG_CAST_TYPE_BOOLEAN:
@@ -442,7 +446,7 @@ GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_C
         case GLTANG_KIND_INTEGER: return v;
         case GLTANG_KIND_FLOAT: return float_to_int(exec, gltang_vm_float(v));
         case GLTANG_KIND_STRING: return string_to_int(exec, v);
-        default: return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+        default: return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
       }
     case GLTANG_CAST_TYPE_FLOAT:
       switch (kind) {
@@ -451,12 +455,12 @@ GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_C
         case GLTANG_KIND_INTEGER: return gltang_vm_make_float(exec, (double)gltang_vm_int(v));
         case GLTANG_KIND_FLOAT: return v;
         case GLTANG_KIND_STRING: return string_to_float(exec, v);
-        default: return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+        default: return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
       }
     case GLTANG_CAST_TYPE_STRING:
       return gltang_vm_to_string(exec, v);
   }
-  return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+  return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,7 +471,7 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
   switch (gltang_vm_kind(container)) {
     case GLTANG_KIND_ARRAY: {
       if (!is_integer_value(index)) {
-        return ERROR(GLTANG_ERROR_INVALID_INDEX);
+        return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
       }
       int64_t i = gltang_vm_int(index);
       const GLTANG_ArrayObject * array = gltang_vm_array(container);
@@ -479,7 +483,7 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
     }
     case GLTANG_KIND_STRING: {
       if (!is_integer_value(index)) {
-        return ERROR(GLTANG_ERROR_INVALID_INDEX);
+        return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
       }
       int64_t i = gltang_vm_int(index);
       int64_t n = (int64_t)gltang_vm_string(container)->grapheme_length;
@@ -490,14 +494,14 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
     }
     case GLTANG_KIND_MAP: {
       if (!gltang_v_is_kind(index, GLTANG_OBJ_STRING)) {
-        return ERROR(GLTANG_ERROR_MAP_KEY_NOT_STRING);
+        return MAKE_ERROR(GLTANG_ERROR_MAP_KEY_NOT_STRING);
       }
       const GLTANG_StringBlock * key = gltang_vm_string(index);
       bool found;
       return gltang_vm_map_get(container, gltang_string_bytes(key), (size_t)key->byte_length, &found);
     }
     default:
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
 
@@ -537,12 +541,12 @@ GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value conta
       if (name_is(name, length, "render")) {
         return gltang_vm_string_render(exec, container);
       }
-      return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
     case GLTANG_KIND_ARRAY:
       if (name_is(name, length, "size")) {
         return gltang_vm_make_int(exec, (int64_t)gltang_vm_array(container)->length);
       }
-      return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
     case GLTANG_KIND_MAP: {
       // A map has no attributes of its own, so a name is a key; one it does
       // not hold is null (13.7, 13.38).
@@ -554,7 +558,7 @@ GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value conta
     case GLTANG_KIND_RNG:
       return gltang_vm_rng_attr(exec, container, name, length);
     default:
-      return ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }
 }
 
@@ -620,7 +624,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   bool is_array = gltang_v_is_kind(container, GLTANG_OBJ_ARRAY);
   bool is_string = gltang_v_is_kind(container, GLTANG_OBJ_STRING);
   if (!is_array && !is_string) {
-    return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+    return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   // A part whose value is null is an omitted part, as in ctang, whose parser
   // pushes a null for each part the source leaves out and whose slice takes a
@@ -635,7 +639,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   for (unsigned bit = 0; bit < 3; ++bit) {
     if (flags & (1u << bit)) {
       if (!is_integer_value(values[bit])) {
-        return ERROR(GLTANG_ERROR_INVALID_INDEX);
+        return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
       }
       numbers[bit] = gltang_vm_int(values[bit]);
     }
@@ -643,7 +647,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   int64_t length = is_array ? (int64_t)gltang_vm_array(container)->length : (int64_t)gltang_vm_string(container)->grapheme_length;
   int64_t start, count;
   if (!slice_indices(length, flags & 1u, numbers[0], flags & 2u, numbers[1], numbers[2], &start, &count)) {
-    return ERROR(GLTANG_ERROR_INVALID_INDEX);
+    return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
   }
   if (is_string) {
     return gltang_vm_string_slice(exec, container, start, count, numbers[2]);
@@ -697,14 +701,14 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
   switch (gltang_vm_kind(container)) {
     case GLTANG_KIND_ARRAY: {
       if (!is_integer_value(index)) {
-        return ERROR(GLTANG_ERROR_INVALID_INDEX);
+        return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
       }
       int64_t i = gltang_vm_int(index);
       int64_t n = (int64_t)gltang_vm_array(container)->length;
       if (i < 0) {
         i += n;
         if (i < 0) {
-          return ERROR(GLTANG_ERROR_INVALID_INDEX);
+          return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
         }
       }
       if (i >= n) {
@@ -727,7 +731,7 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
     }
     case GLTANG_KIND_MAP: {
       if (!gltang_v_is_kind(index, GLTANG_OBJ_STRING)) {
-        return ERROR(GLTANG_ERROR_MAP_KEY_NOT_STRING);
+        return MAKE_ERROR(GLTANG_ERROR_MAP_KEY_NOT_STRING);
       }
       GLTANG_Value stored = stored_value(exec, v, adopt);
       if (stored == GLTANG_V_UNWIND || (gltang_vm_is_error(stored) && stored != v)) {
@@ -737,7 +741,7 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
       return r == container ? stored : r;
     }
     default:
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
 
@@ -753,8 +757,8 @@ GLTANG_Value gltang_vm_op_set_attr(GLTANG_Execution * exec, GLTANG_Value contain
     }
     case GLTANG_KIND_ARRAY:
       // The error subscripting an array with a string would be.
-      return ERROR(GLTANG_ERROR_INVALID_INDEX);
+      return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
     default:
-      return ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }

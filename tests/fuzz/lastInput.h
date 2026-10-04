@@ -47,11 +47,24 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+// The record is a shared memory mapping that outlives the process, which is
+// mmap, and the replay and the fuzzers that include this are Linux tools. On
+// Windows (where only the replay is built) recording is off, as it is when
+// LAST_INPUT_FILE is /dev/null; the replay reports a crash by dying.
+static inline void gltang_fuzz_record_last_input(const char * default_path,
+    const uint8_t * data, size_t size) {
+  (void)default_path;
+  (void)data;
+  (void)size;
+}
+#else
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -110,5 +123,7 @@ static inline void gltang_fuzz_record_last_input(const char * default_path,
     memcpy(record->bytes, data, record->size);
   }
 }
+
+#endif // _WIN32
 
 #endif // GHOTIIO_LANG_TANG_FUZZ_LAST_INPUT_H

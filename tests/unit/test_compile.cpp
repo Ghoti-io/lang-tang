@@ -36,7 +36,7 @@ std::string chain(int pluses) {
 namespace {
 
 std::string dump_of(GLTANG_Program * program) {
-  FILE * file = tmpfile();
+  FILE * file = temp_file();
   gltang_program_dump(program, file);
   rewind(file);
   std::string text;
@@ -207,7 +207,7 @@ TEST(Program, LocateGivesLinesAndRefusesPlacesThatAreNotInTheProgram) {
 TEST(Program, ADumpListsEveryFunctionWithOpcodeNames) {
   tt::Compiled compiled("function f(a) { return a + 1; }\nf(2);");
   ASSERT_TRUE(compiled.ok());
-  FILE * file = tmpfile();
+  FILE * file = temp_file();
   ASSERT_NE(file, nullptr);
   gltang_program_dump(compiled.program, file);
   long length = ftell(file);
@@ -329,7 +329,7 @@ TEST(TreeDepth, PrintingATallTreeIsLinearNotQuadratic) {
   // The printer writes to stdout; point stdout at a file to measure it.
   // Restores fd 1 on every path out of the scope.
   struct Redirect {
-    FILE * file = tmpfile();
+    FILE * file = temp_file();
     int saved = -1;
     Redirect() {
       if (file) {
@@ -370,6 +370,7 @@ TEST(TreeDepth, PrintingATallTreeIsLinearNotQuadratic) {
 // ---------------------------------------------------------------------------
 
 TEST(AllocationFailure, EachAllocationCompileMakesFailedInTurnGivesAnAnswerAndLeaksNothing) {
+  GLTANG_REQUIRE_ALLOC_SWEEP();
   // A function body long enough that its code buffer must grow.
   std::string long_body = "x = 0;";
   for (int i = 0; i < 60; ++i) {

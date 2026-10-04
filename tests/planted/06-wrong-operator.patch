@@ -12,4 +12,4 @@
 +        return gltang_vm_make_int(exec, r + 1);  /* planted: integer multiplication is one too large */
        case GLTANG_OP_DIV:
          if (y == 0) {
-           return ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
+           return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);

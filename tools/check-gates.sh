@@ -172,11 +172,14 @@ expect_fail 'edges/planted-no-include-dir (a population that is missing half)' '
 expect_fail 'edges/empty (includes)' 'measuring nothing' "$E" --includes "$work/empty"
 
 printf 'check-edges --links\n'
-# TODO(windows): the .dll arm has not been run; objdump -p is the reader there.
+# The .dll arm (objdump -p is the reader there) has run under wine, cross-built
+# (tools/xwin in the workspace); it has not run on a Windows machine.
+# EXE is the suffix the compiler puts on a program whatever -o was told: without
+# it the fixtures were built and then not found under the names they were given.
 case "$(uname -s)" in
-  MINGW* | MSYS*) SHEXT=dll; SHFLAGS="-shared" ;;
-  Darwin) SHEXT=dylib; SHFLAGS="-dynamiclib" ;;
-  *) SHEXT=so; SHFLAGS="-shared -fPIC" ;;
+  MINGW* | MSYS*) SHEXT=dll; SHFLAGS="-shared"; EXE=.exe ;;
+  Darwin) SHEXT=dylib; SHFLAGS="-dynamiclib"; EXE= ;;
+  *) SHEXT=so; SHFLAGS="-shared -fPIC"; EXE= ;;
 esac
 stubs="$work/stubs"
 mkdir -p "$stubs" "$work/planted-tang" "$work/planted-debug" "$work/planted-jit" "$work/control" "$work/dev" "$work/exe-planted" "$work/exe-control" "$work/host-ok" "$work/host-bad" "$work/other-bad" "$work/so-text"
@@ -228,24 +231,24 @@ built=1
     -l:libghoti.io-runtime-heap-0.$SHEXT &&
   $CC $SHFLAGS -o "$work/dev/libdev.$SHEXT" "$work/dev.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-dev.$SHEXT &&
-  $CC -o "$work/exe-planted/tang" "$work/exe_planted.c" \
+  $CC -o "$work/exe-planted/tang$EXE" "$work/exe_planted.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-tang-0.$SHEXT \
     -l:libghoti.io-lang-tang-0.$SHEXT &&
-  $CC -o "$work/exe-control/tang" "$work/exe_control.c" \
+  $CC -o "$work/exe-control/tang$EXE" "$work/exe_control.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-cutil-0.$SHEXT \
     -l:libghoti.io-unicode-0.$SHEXT -l:libghoti.io-runtime-core-0.$SHEXT \
     -l:libghoti.io-runtime-heap-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-text-0.$SHEXT" "$work/text.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-chron-0.$SHEXT" "$work/chron.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-regex-0.$SHEXT" "$work/regex.c" &&
-  $CC -o "$work/host-ok/tang" "$work/host_ok.c" \
+  $CC -o "$work/host-ok/tang$EXE" "$work/host_ok.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-debug-0.$SHEXT -l:libghoti.io-text-0.$SHEXT \
     -l:libghoti.io-chron-0.$SHEXT -l:libghoti.io-regex-0.$SHEXT -l:libghoti.io-cutil-0.$SHEXT \
     -l:libghoti.io-lang-tang-0.$SHEXT &&
-  cp "$work/host-ok/tang" "$work/host-ok/web_server" &&
-  $CC -o "$work/host-bad/tang" "$work/host_bad.c" \
+  cp "$work/host-ok/tang$EXE" "$work/host-ok/web_server$EXE" &&
+  $CC -o "$work/host-bad/tang$EXE" "$work/host_bad.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-jit-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
-  $CC -o "$work/other-bad/pause_resume" "$work/other_bad.c" \
+  $CC -o "$work/other-bad/pause_resume$EXE" "$work/other_bad.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-debug-0.$SHEXT -l:libghoti.io-lang-tang-0.$SHEXT &&
   $CC $SHFLAGS -o "$work/so-text/libplanted.$SHEXT" "$work/planted_text.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-text-0.$SHEXT
@@ -257,7 +260,7 @@ else
   expect_pass 'links/control (cutil, unicode, runtime-core, runtime-heap)' "$E" --links "$work/control"
   expect_pass 'links/cutil with a BRANCH suffix (-dev)' "$E" --links "$work/dev"
   expect_pass 'links/program control (cutil, unicode, runtime-core, runtime-heap, lang-tang)' \
-    "$E" --links "$work/exe-control/tang"
+    "$E" --links "$work/exe-control/tang$EXE"
   expect_fail 'links/planted-tang (a shared object linking ctang)' 'lang-tang -> tang' \
     "$E" --links "$work/planted-tang"
   expect_fail 'links/planted-tang names the object' 'libplanted' \
@@ -267,20 +270,20 @@ else
   expect_pass 'links/planted-jit with JIT=yes (the shared object may link runtime-jit)' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-jit"
   expect_fail 'links/planted-tang with JIT=yes (only runtime-jit is added)' 'lang-tang -> tang' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-tang"
   expect_pass 'links/host tang (runtime-debug, text and what text needs are allowed in the tang command)' \
-    "$E" --links "$work/host-ok/tang"
-  expect_pass 'links/host web_server (the same, in the web-server example)' "$E" --links "$work/host-ok/web_server"
+    "$E" --links "$work/host-ok/tang$EXE"
+  expect_pass 'links/host web_server (the same, in the web-server example)' "$E" --links "$work/host-ok/web_server$EXE"
   expect_fail 'links/a host may not link anything else (the tang command linking the JIT)' 'lang-tang -> runtime-jit' \
-    "$E" --links "$work/host-bad/tang"
+    "$E" --links "$work/host-bad/tang$EXE"
   expect_fail 'links/a program that is not a host may not link runtime-debug (another example)' \
-    'lang-tang -> runtime-debug' "$E" --links "$work/other-bad/pause_resume"
+    'lang-tang -> runtime-debug' "$E" --links "$work/other-bad/pause_resume$EXE"
   expect_fail 'links/the non-host program is named' 'other-bad/pause_resume' \
-    "$E" --links "$work/other-bad/pause_resume"
+    "$E" --links "$work/other-bad/pause_resume$EXE"
   expect_fail 'links/a shared object linking text (the library is never a host)' 'lang-tang -> text' \
     "$E" --links "$work/so-text"
   expect_fail 'links/planted-tang-program (the tang command linking ctang)' 'lang-tang -> tang' \
-    "$E" --links "$work/exe-planted/tang"
+    "$E" --links "$work/exe-planted/tang$EXE"
   expect_fail 'links/planted-tang-program names the program' 'exe-planted/tang' \
-    "$E" --links "$work/exe-planted/tang"
+    "$E" --links "$work/exe-planted/tang$EXE"
 fi
 expect_fail 'links/empty' 'measuring nothing' "$E" --links "$work/empty"
 expect_fail 'links/a path that does not exist' 'does not exist' "$E" --links "$work/no-such-thing"

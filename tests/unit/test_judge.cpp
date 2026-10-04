@@ -151,6 +151,11 @@ TEST(Judge, KilledCtangAgainstPausedAgrees) {
   EXPECT_TRUE(j.ok());
 }
 
+#ifdef _WIN32
+TEST(Driver, ReadsAChildsOutputAndExit) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ReadsAChildsOutputAndExit) {
   auto r = oracle::run_child({"/bin/sh", "-c", "printf 'ok 7\\n'"}, 5000);
   EXPECT_FALSE(r.timed_out);
@@ -158,7 +163,13 @@ TEST(Driver, ReadsAChildsOutputAndExit) {
   EXPECT_EQ(r.exit_code, 0);
   EXPECT_EQ(r.output, "ok 7\n");
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, AHungChildIsKilledAtTheWallClockAndIsAVerdict) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, AHungChildIsKilledAtTheWallClockAndIsAVerdict) {
   // A runner that sleeps: the stand-in for a ctang that hangs.
   auto r = oracle::run_child({"/bin/sh", "-c", "sleep 30"}, 300);
@@ -166,26 +177,45 @@ TEST(Driver, AHungChildIsKilledAtTheWallClockAndIsAVerdict) {
   EXPECT_LT(r.seconds, 10.0);
   EXPECT_EQ(oracle::ctang_verdict("/bin/sh", "-c", "sleep 30", 300).kind, oracle::Kind::Killed);
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ACrashingChildIsAVerdictToo) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ACrashingChildIsAVerdictToo) {
   EXPECT_EQ(oracle::ctang_verdict("/bin/sh", "-c", "kill -SEGV $$", 5000).kind, oracle::Kind::Killed);
   auto r = oracle::run_child({"/bin/sh", "-c", "kill -ABRT $$"}, 5000);
   EXPECT_TRUE(r.signaled);
   EXPECT_EQ(r.signal_number, SIGABRT);
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ACrashDisagreesWithARejection) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ACrashDisagreesWithARejection) {
   Verdict ct = oracle::ctang_verdict("/bin/sh", "-c", "kill -SEGV $$", 5000);
   EXPECT_FALSE(oracle::agree(Verdict::reject(), ct));
   EXPECT_TRUE(oracle::agree(Verdict::paused(), ct));
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ABrokenRunnerThrowsRatherThanPassingAsAVerdict) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ABrokenRunnerThrowsRatherThanPassingAsAVerdict) {
   // Exit 3 is "cannot read the file": a broken harness, never a verdict.
   EXPECT_THROW(oracle::ctang_verdict("/bin/sh", "-c", "exit 3", 5000), std::runtime_error);
   EXPECT_THROW(oracle::ctang_verdict("/bin/sh", "-c", "echo gibberish", 5000), std::runtime_error);
   EXPECT_THROW(oracle::ctang_verdict("/no/such/runner", "script", "x", 5000), std::runtime_error);
 }
+#endif
 
 TEST(Judge, TheParseDifferentialDoesNotJudgeStaleness) {
   // A row names the files that diverge in execution; those parse the same, and
@@ -206,6 +236,11 @@ TEST(Judge, AnExecutionDivergenceNamesTheFileAndBothResults) {
   EXPECT_TRUE(any_mentions(j.failures, "bool"));
 }
 
+#ifdef _WIN32
+TEST(Driver, ParsesTheRunReplies) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ParsesTheRunReplies) {
   Verdict v = oracle::ctang_run_verdict("/bin/sh", "-c", "printf 'output 6869\\nresult integer 3432\\n'", 5000);
   EXPECT_EQ(v.kind, oracle::Kind::Output);
@@ -218,7 +253,13 @@ TEST(Driver, ParsesTheRunReplies) {
   EXPECT_EQ(empty.result_text, "");
   EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "echo refused", 5000).kind, oracle::Kind::Reject);
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ARunReplyThatIsNotExactlyTheFormatIsAHarnessFailure) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ARunReplyThatIsNotExactlyTheFormatIsAHarnessFailure) {
   for (const char * reply : {"", "output 6869", "output 6869\\n", "output 686\\nresult null \\n", "output zz\\nresult null \\n",
            "output 68\\nresult null\\n", "result null \\noutput 68\\n", "output 68\\nresult null \\nextra\\n", "refused\\nextra\\n"}) {
@@ -226,19 +267,32 @@ TEST(Driver, ARunReplyThatIsNotExactlyTheFormatIsAHarnessFailure) {
     EXPECT_THROW(oracle::ctang_run_verdict("/bin/sh", "-c", cmd, 5000), std::runtime_error) << "reply: " << reply;
   }
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ARunnerThatIsKilledOrCrashesIsAVerdictInRunModeToo) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ARunnerThatIsKilledOrCrashesIsAVerdictInRunModeToo) {
   EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "kill -SEGV $$", 5000).kind, oracle::Kind::Killed);
   EXPECT_EQ(oracle::ctang_run_verdict("/bin/sh", "-c", "sleep 30", 300).kind, oracle::Kind::Killed);
   EXPECT_THROW(oracle::ctang_run_verdict("/bin/sh", "-c", "exit 4", 5000), std::runtime_error);
 }
+#endif
 
+#ifdef _WIN32
+TEST(Driver, ParsesBothVerdictLines) {
+  GTEST_SKIP() << "the child-process driver (fork, poll, /bin/sh) is POSIX-only";
+}
+#else
 TEST(Driver, ParsesBothVerdictLines) {
   EXPECT_EQ(oracle::ctang_verdict("/bin/sh", "-c", "echo error", 5000).kind, oracle::Kind::Reject);
   Verdict v = oracle::ctang_verdict("/bin/sh", "-c", "echo 'ok 12'", 5000);
   EXPECT_EQ(v.kind, oracle::Kind::Accept);
   EXPECT_EQ(v.nodes, 12u);
 }
+#endif
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

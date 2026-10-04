@@ -58,6 +58,7 @@ std::vector<Subject> subjects() {
 } // namespace
 
 TEST(AllocationFailure, EachAllocationFailedInTurnGivesAnAnswerAndLeaksNothing) {
+  GLTANG_REQUIRE_ALLOC_SWEEP();
   for (const Subject & subject : subjects()) {
     // What the source does when nothing fails.
     GLTANG_Result expected;
@@ -111,6 +112,7 @@ TEST(AllocationFailure, EachAllocationFailedInTurnGivesAnAnswerAndLeaksNothing) 
 }
 
 TEST(AllocationFailure, TheFirstAllocationFailingIsOutOfMemoryAndChangesNothing) {
+  GLTANG_REQUIRE_ALLOC_SWEEP();
   GLTANG_Tree * sentinel = reinterpret_cast<GLTANG_Tree *>(0x3);
   GLTANG_Tree * tree = sentinel;
   GLTANG_ParseError error = {7, 8, "keep"};
@@ -126,6 +128,7 @@ TEST(AllocationFailure, TheFirstAllocationFailingIsOutOfMemoryAndChangesNothing)
 }
 
 TEST(AllocationFailure, TheScannersOwnBufferGrowthIsReportedAsOutOfMemoryNotASyntaxError) {
+  GLTANG_REQUIRE_ALLOC_SWEEP();
   // The scanner's failure to grow a token buffer reaches the parser as a token
   // it has no rule for, which bison reports as a syntax error. The result must
   // still be OOM. A long string forces the growth path.

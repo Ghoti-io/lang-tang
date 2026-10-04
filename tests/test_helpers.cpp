@@ -10,10 +10,27 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <windows.h>
+#endif
 #include <sstream>
 
+#if defined(__GLIBC__)
 #include <execinfo.h>
+#else
+// No backtrace() off glibc: GLTANG_TRACK_STACKS, a debugging aid for a failing
+// sweep, then records and prints no frames.
+static int backtrace(void **, int) {
+  return 0;
+}
+static void backtrace_symbols_fd(void * const *, int, int) {
+}
+#endif
 #include <map>
 #include <atomic>
 #include <unordered_set>
@@ -152,6 +169,14 @@ long calls() {
   return g_calls;
 }
 
+bool available() {
+  long before = g_calls;
+  void * block = gcu_malloc(1);
+  bool seen = g_calls != before;
+  gcu_free(block);
+  return seen;
+}
+
 bool fired() {
   return g_fired;
 }
@@ -182,6 +207,19 @@ void dump_live() {
   }
 }
 } // namespace alloc_sweep
+
+FILE * temp_file() {
+#ifdef _WIN32
+  static std::atomic<unsigned> counter{0};
+  std::string name = (std::filesystem::temp_directory_path() /
+      ("gltang-test-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(++counter) + ".tmp")).string();
+  // _O_TEMPORARY: the file goes away when the last handle closes.
+  int fd = _open(name.c_str(), _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY | _O_TEMPORARY, _S_IREAD | _S_IWRITE);
+  return fd < 0 ? nullptr : _fdopen(fd, "w+b");
+#else
+  return tmpfile();
+#endif
+}
 
 std::string read_file(const std::string & path) {
   std::ifstream file(path, std::ios::binary);

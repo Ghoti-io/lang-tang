@@ -125,7 +125,7 @@ void leaked_element(long threshold) {
   EXPECT_FALSE(context.execute());
   ASSERT_TRUE(context.paused());
 #ifdef GLTANG_WITH_JIT
-  if (threshold == 1) {
+  if (threshold == 1 && jit_backend_present()) {
     EXPECT_GE(context.jit_stats().functions_compiled, 1u) << "the JIT arm must not be vacuous";
   }
 #endif

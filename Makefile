@@ -114,9 +114,11 @@ else ifeq ($(UNAME_S), Darwin)
 	PC_LIB_DIR := $(LIB_INSTALL_PATH)/$(SUITE)
 	override BUILD := mac/$(BUILD)
 
-# TODO(windows): the Windows branches in this file were adapted from font's
-# and have never been run, nor has GLTANG_API's dllexport/dllimport switching.
-# See notes/suite/WINDOWS-TODO.md.
+# The MINGW64 branch below has been cross-built and run under wine, with a
+# uname and cygpath that imitate MSYS2 (tools/xwin/m1-run.sh in the workspace);
+# that includes GLTANG_API's dllexport/dllimport switching, which the probe
+# consumes. It has not run on a Windows machine, and the MINGW32 branch has not
+# run at all. See notes/suite/WINDOWS-TODO.md.
 else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)
 	OS_NAME := Windows
 	LIB_EXTENSION := dll
@@ -645,14 +647,18 @@ TEST_LD_PATH := $(APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)
 # The web server is a server: run with --self-test it plays its own client,
 # checks what it served, and exits.
 examples: $(APP_DIR)/$(TARGET) $(EXAMPLES) ## Build the examples and run each
-	@for e in $(EXAMPLES); do \
+	@ran=0; skipped=0; for e in $(EXAMPLES); do \
 		printf '\n### Example %s ###\n\n' "$$(basename $$e $(EXE_EXTENSION))"; \
 		case "$$(basename $$e $(EXE_EXTENSION))" in \
 			web_server) args=--self-test ;; \
 			*) args= ;; \
 		esac; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$e $$args || exit 1; \
-	done
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$e $$args; rc=$$?; \
+		if [ $$rc -eq 77 ]; then skipped=$$((skipped + 1)); \
+		elif [ $$rc -ne 0 ]; then exit 1; \
+		else ran=$$((ran + 1)); fi; \
+	done; \
+	printf '\nexamples: %s ran, %s skipped (exit status 77: not available on this target)\n' "$$ran" "$$skipped"
 
 # clang accepts -Wstrict-aliasing and implements nothing, so under clang the
 # probe can never be reported and the gate would fail for a reason that says
@@ -730,6 +736,13 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
 
+# The planted cases need `patch`, a full second build tree, the ctang oracle and
+# (08 to 10) a JIT backend, and Windows has none of the last two; they are
+# skipped there, by name, as check-symbols is.
+ifeq ($(OS_NAME), Windows)
+check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
+	@printf '%s: skipped on Windows (the planted defects need patch, the ctang oracle and a JIT backend)\n' "$@"
+else
 check-planted-quick: ## Planted defects 03 to 12 (phase shuffle, native gate, frame observer, oracle, the JIT, the two of snapshots)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
@@ -742,6 +755,7 @@ check-planted: ## All ten planted defects: each caught by its instrument, each c
 
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
+endif
 
 ####################################################################
 # Benchmarks (AD-26)
@@ -1246,11 +1260,21 @@ $(FUZZDIFF_TEST): $(OBJ_DIR)/fuzz/test_fuzzdiff.o $(TEST_HELPER_OBJ) $(APP_DIR)/
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ_DIR)/fuzz/test_fuzzdiff.o $(TEST_HELPER_OBJ) $(LDFLAGS) $(TEST_LDFLAGS) $(CORELIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
 
+# The differential runs ctang as a child with fork, poll and an address-space
+# limit (tests/oracle/oracle.h), and the runner is built against ctang, which a
+# Windows machine has only as the library; it is skipped there, by name. What
+# lang-tang does alone with the corpus (parse, run twice, refuse what the name
+# says) is in the unit tests and runs there.
+ifeq ($(OS_NAME), Windows)
+test-oracle: ## Skipped on Windows
+	@printf 'test-oracle: skipped on Windows (the differential drives ctang as a child process with fork and poll)\n'
+else
 test-oracle: oracle-present $(ORACLE_RUNNER) $(ORACLE_TEST) $(FUZZDIFF_TEST) ## Compare lang-tang with ctang over the corpus and a fixed batch of generated programs (fails, never skips, without ctang)
 	@printf '\n### Oracle differential ###\n\n'
 	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(ORACLE_TEST) --gtest_brief=1
 	@printf '\n### Differential fuzz run, fixed batch ###\n\n'
 	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1
+endif
 
 # A campaign: FUZZ_DIFF_COUNT programs from seed FUZZ_DIFF_SEED, both modes
 # alternating. A divergence prints its seed and the whole program.

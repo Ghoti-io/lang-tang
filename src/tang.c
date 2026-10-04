@@ -466,7 +466,11 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   }
   else {
     ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
+#ifdef SIGPIPE
+    // A client that went away is an error return from the write, not a signal
+    // that ends the process. Windows has no SIGPIPE (and no descriptor transport).
   }
+#endif
 #else
   ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
 #endif

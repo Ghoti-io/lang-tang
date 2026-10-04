@@ -63,6 +63,18 @@
  *                [--raise N] [--debug-wait-ms N] [--self-test]
  */
 
+#ifdef _WIN32
+/* The server is POSIX sockets, poll and signals, and the debug port hands an
+ * accepted descriptor to grdbg_transport_create_fd, which is a stub on Windows.
+ * Exit status 77 is "skipped": the Makefile counts it and does not fail. */
+#include <stdio.h>
+
+int main(void) {
+  printf("SKIP: the web server example is POSIX sockets and the descriptor transport\n");
+  return 77;
+}
+#else
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <ghoti.io/lang-tang/compile.h>
@@ -1372,3 +1384,5 @@ int main(int argc, char ** argv) {
   server_close(&server);
   return status;
 }
+
+#endif /* _WIN32 */
