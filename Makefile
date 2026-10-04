@@ -158,6 +158,12 @@ ifeq ($(JIT),no)
 override BUILD := $(BUILD)-nojit
 endif
 
+# So does the arm without the debugger, which is built to show that nothing in
+# the library or its tests needs runtime-debug or text (test-nodebug).
+ifeq ($(WITH_DEBUG),no)
+override BUILD := $(BUILD)-nodebug
+endif
+
 ifdef PREFIX
 INCLUDE_INSTALL_PATH := $(PREFIX)/include
 LIB_INSTALL_PATH := $(PREFIX)/lib
@@ -651,7 +657,7 @@ $(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
 	@exit 1
 endif
 
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
 .PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -748,9 +754,16 @@ check-labels: ## Fail if a public header has no (or the wrong) stable/free label
 # After the shared library is built, because the link line it reads is that
 # file's NEEDED list: the manifest and the #include lines can both be clean
 # while the .so, or the tang command that links it, links something forbidden.
+ifeq ($(WITH_DEBUG),yes)
 check-edges: $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES) ## Fail on a forbidden #include or NEEDED edge (AD-2)
 	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --includes .
 	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --links $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES)
+else
+# Without the debugger there are no hosts to link: the library alone.
+check-edges: $(APP_DIR)/$(TARGET) ## Fail on a forbidden #include or NEEDED edge (the library only: WITH_DEBUG=no)
+	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --includes .
+	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --links $(APP_DIR)/$(TARGET)
+endif
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
 	@env -u GLTANG_EDGES_JIT CC="$(CC)" tools/check-gates.sh
@@ -942,6 +955,37 @@ endif
 test-nojit: ## The JIT=no arm: build without the JIT in its own tree and run its suites and gates
 	@printf '\n### The interpreter-only arm (JIT=no) ###\n\n'
 	@$(MAKE) --no-print-directory test JIT=no GLTANG_NESTED_ARM=1 TEST_GATES="$(NOJIT_GATES)"
+
+# The arm without the debugger: the library and its unit suites built with
+# WITH_DEBUG=no in a tree of their own, against a prefix from which
+# runtime-debug and text are taken away (their .pc files are not in it), so an
+# include or a link that needs either fails here instead of passing because
+# they happen to be installed. The two hosts are not built, test_tang_dap is
+# left out, and the gates that remain are the ones that need no host. PREFIX is
+# required: it is the prefix that is copied, minus those two.
+NODEBUG_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates fuzz-replay
+test-nodebug: ## The WITH_DEBUG=no arm: build and test without runtime-debug and text visible
+ifndef PREFIX
+	@printf 'test-nodebug: PREFIX is needed (it names the prefix whose runtime-debug and text are hidden)\n' >&2; exit 1
+else
+	@printf '\n### The arm without the debugger (WITH_DEBUG=no) ###\n\n'
+	@shadow="$(CURDIR)/build/nodebug-prefix"; rm -rf "$$shadow"; \
+	mkdir -p "$$shadow/share/pkgconfig"; \
+	for d in lib include bin; do \
+		[ -e "$(abspath $(PREFIX))/$$d" ] && ln -s "$(abspath $(PREFIX))/$$d" "$$shadow/$$d"; \
+	done; \
+	for pc in "$(abspath $(PREFIX))"/share/pkgconfig/*.pc; do \
+		case "$$(basename "$$pc")" in \
+			ghoti.io-runtime-debug*|ghoti.io-text*) ;; \
+			*) ln -s "$$pc" "$$shadow/share/pkgconfig/" ;; \
+		esac; \
+	done; \
+	if PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$$shadow/share/pkgconfig" pkg-config --exists ghoti.io-runtime-debug-0 2>/dev/null; then \
+		printf 'test-nodebug: runtime-debug is still visible; the arm would prove nothing\n' >&2; exit 1; \
+	fi; \
+	env PKG_CONFIG_PATH= $(MAKE) --no-print-directory test WITH_DEBUG=no GLTANG_NESTED_ARM=1 \
+		PREFIX="$$shadow" TEST_GATES="$(NODEBUG_GATES)"
+endif
 
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) ## Run tests, one line per suite
 	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; any_failed=0; \
