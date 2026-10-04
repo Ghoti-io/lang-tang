@@ -78,9 +78,12 @@ with `--self-test`, which plays a client, including a scripted DAP session.
 found through pkg-config only. The `tang` command and the web-server example
 also need `runtime-debug` (and `text`, which it requires): they are the library's
 two hosts of the debugger, and the shared and static library link neither
-(`check-edges` enforces it). `make WITH_DEBUG=no` builds the library and its unit
-tests without them; the two programs then refuse to build, by name, rather than
-build without `--dap`. It also
+(`check-edges` enforces it). `make WITH_DEBUG=no` builds the shared and static
+library (`make all`) and any one unit-test binary (for example
+`make build/linux/release/apps/testEngine`) without them; the two programs then
+refuse to build, by name, rather than build without `--dap`. `make test` is not
+available that way: its gates (`check-edges`, `examples`, `cli-test`) need the two
+programs. It also
 needs `bison` (3.8.2 or later) and `flex` to generate the parser and scanner.
 Build the suite first from the workspace root (`./bootstrap.sh`), then:
 

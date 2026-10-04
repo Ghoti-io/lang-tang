@@ -388,17 +388,18 @@ statement `LINE` and then at its back-edge `POLL`, which is the same line and
 one `continue` away; stepping is not affected, because a step stops only at a
 poll whose (location, depth) differs from where it started.
 
-**Cost.** Measured with `make bench` (gcc -O2, best of five, same machine, the
-calibration case beside it, run-to-run noise about 3%). Statement polls off: the
-instruction is executed and does nothing, about 3 ns a statement executed (the
-dispatch, and the table lookup that adds its zero to the pending fuel), which
-shows up as about 4% to 5% on the 1,000-iteration loop (one statement an
-iteration), `fib(15)` and the template-call case (62.5 to 64.4 us before the
-opcode, 66.3 to 66.7 us after, for the loop). On with nothing pending, the poll's
-unarmed fast path (flush the fuel, save the frame, `grcore_stack_poll`) is
-about 16 ns a statement: the four-statement loop body of
-`run-statements-1000-polls-*` goes from about 64 us to about 128 us. Both
-numbers are in the table under "Benchmarks". No budget is asserted (AD-26).
+**Cost.** Measured with the benchmark harness (gcc -O2, best of five a case, two
+rounds alternating the tree before the opcode, commit 83c1fac, with this one, the
+calibration case beside them, round-to-round noise about 1%). Statement polls
+off: the instruction is executed and does nothing (the dispatch, and the table
+lookup that adds its zero to the pending fuel), which costs about 3% on the
+1,000-iteration loop (64.6 to 66.7 us), 6% on `fib(15)` (181 to 192 us), 3% on the
+template-call case (107.5 to 111.1 us) and 3% on the polling loop (67.6 to 69.8
+us). On with nothing pending, the poll's unarmed fast path (flush the fuel,
+save the frame, `grcore_stack_poll`) costs about 16 ns a statement: the
+four-statement loop body of `run-statements-1000-polls-*` goes from about 65 us
+to about 130 us, about 4,000 statements. Both numbers are in the table under
+"Benchmarks". No budget is asserted (AD-26).
 
 **Rejected alternatives.**
 
@@ -1284,11 +1285,13 @@ a DAP session is served, so these two, and nothing else, include
 `ghoti.io-runtime-debug` and `ghoti.io-text` by pkg-config for those two only
 (`WITH_DEBUG ?= yes`; a hard error naming the fix if missing). They are in
 neither `INCLUDE` nor `DEP_LIBS`, so the shared and static library are linked
-without them. `WITH_DEBUG=no` builds the library and its unit tests on a machine
-without them, and the two programs then refuse to build, by name, so that nobody
+without them. `WITH_DEBUG=no` builds the library (`make all`) and individual unit-test
+binaries on a machine without them, and the two programs then refuse to build, by name, so that nobody
 runs a `tang` that silently lacks `--dap`; `tests/unit/test_tang_dap.cpp`, which
 drives the real command, is the one suite left out in that case, and the build
-says so. The manifest (`suite/libraries.txt`) lists `runtime-debug` and `text` as
+says so. `make test` needs the hosts (`check-edges`, `examples` and `cli-test`
+are among its gates), so it fails under `WITH_DEBUG=no`; run the test binaries
+you want directly. The manifest (`suite/libraries.txt`) lists `runtime-debug` and `text` as
 dependencies of `lang-tang` for the same reason: a bootstrap must build them
 first, although only two programs use them.
 
@@ -1474,23 +1477,24 @@ reading future figures against the calibration beside them:
 | run: the loop paused and resumed every 500 fuel | about 69 us (the pauses add about 6%) |
 | run: `use math; s += math.pi` 200 times | about 35 us (about 180 ns for a `use`, a member access and an add) |
 | run: a native function called 1,000 times | about 59 us (about 59 ns a call, the loop included) |
-| run: a template call, 200 times (three prints each) | about 101 us (about 510 ns a call: the activation, the scope's open and close, the prints and the output string) |
+| run: a template call, 200 times (three prints each) | about 107 us (about 535 ns a call: the activation, the scope's open and close, the prints and the output string) |
 | run: 2,000 swallowed errors, the list full after 1,024 | about 208 us (about 100 ns an error; the 976 past the cap are only counted) |
 | run: `random.global.next_int % 7` 1,000 times | about 123 us (about 120 ns an iteration, a boxed integer or two included) |
-| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 64 us (the `LINE` instruction is executed and does nothing) |
-| run: the same, statement polls on with nothing pending | about 128 us (about 16 ns a poll on the unarmed fast path) |
+| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 65 us (the `LINE` instruction is executed and does nothing) |
+| run: the same, statement polls on with nothing pending | about 130 us (about 16 ns a poll on the unarmed fast path) |
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
 are where they were, within the noise of the machine.
 
 **The statement-boundary instruction (story 13).** `LINE` is executed even with
-statement polls off, and the other cases above moved by it: the loop, `fib(15)`
-and the template call are each about 4% to 5% slower than the figures in the
-table, which were taken before it existed (the loop 62.5 to 64.4 us before and
-66.3 to 66.7 us after; `fib(15)` 176 to 181 us before, 189 to 191 us after;
-the template call 106 to 108 us before, 108 to 120 us after). The calibration
-case moved by 3% between the same runs, so the figures are good to about that.
-That is the price of making a statement a place a host may ask to stop at without
+statement polls off, so the cases above that run statements are slower than they
+were before it existed: re-measured from the tree before it (83c1fac) and from
+this one, alternating, the loop is 64.6 us before and 66.7 us after (+3%),
+`fib(15)` 181 us and 192 us (+6%), the template call 107.5 us and 111.1 us (+3%)
+and the polling loop 67.6 us and 69.8 us (+3%). The calibration case moved by
+under 3% between the same runs, so the figures are good to about that. The
+table's rows are the figures before the opcode, re-taken on the machine of this
+measurement (the template call was about 101 us when first recorded). That is the price of making a statement a place a host may ask to stop at without
 patching a shared program; the alternatives are listed under "Statement polls".
 
 ## Fuzzing

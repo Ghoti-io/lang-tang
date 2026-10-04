@@ -341,7 +341,9 @@ TEST_PAIRS := $(shell find tests/unit -type f -name 'test_*.cpp' 2>/dev/null | s
 	echo "$$f|$$(basename "$$f" .cpp | sed 's/test_/test/; s/^test\([a-z]\)/test\U\1/')"; done)
 # test_tang_dap drives the real `tang` command, which exists only with
 # WITH_DEBUG=yes (it links the debugger). Without it the suite is left out and
-# the build says so; it is the one unit suite WITH_DEBUG=no drops.
+# the build says so; it is the one unit suite WITH_DEBUG=no drops. Under
+# WITH_DEBUG=no the library (`all`) and single test binaries build, but `make
+# test` does not: its gates (check-edges, examples, cli-test) need the two hosts.
 ifeq ($(WITH_DEBUG),no)
 $(info WITH_DEBUG=no: tests/unit/test_tang_dap.cpp is not built (it runs the tang command, which needs runtime-debug))
 TEST_PAIRS := $(filter-out tests/unit/test_tang_dap.cpp|%,$(TEST_PAIRS))

@@ -304,12 +304,13 @@ static GRCORE_Result run_debugged(DebugHost * host, GRCORE_Context * context, GL
     // A budget's pause is shown once; whatever the client answers, the run is
     // unwound after it, because nothing here raises a budget.
     bool unwind = pause_is_a_budget(context);
-    if (host->live && grdbg_dap_notify_stopped(host->dap) != GRDBG_OK) {
+    if (host->live && !host->detached && grdbg_dap_notify_stopped(host->dap) != GRDBG_OK) {
       grdbg_debugger_disarm(host->debugger);
       host->live = false;
       host->detached = true;
     }
-    if (debug_host_serve(host, name) == GRDBG_SERVE_TERMINATE) {
+    // A client that has disconnected is not told and not waited for.
+    if (host->live && !host->detached && debug_host_serve(host, name) == GRDBG_SERVE_TERMINATE) {
       unwind = true;
     }
     if (unwind) {
@@ -460,6 +461,11 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     // that is the same failure as running out of memory, and not a success.
     fflush(out);
     status = EXIT_MEMORY;
+#ifdef GLTANG_WITH_DEBUG
+    if (options->dap) {
+      debug_host_finish(&debug, name, status);
+    }
+#endif
     goto done;
   }
   fflush(out);

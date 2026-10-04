@@ -653,6 +653,7 @@ static void emit_store(Compiler * c, Fn * fn, Binding b) {
 
 static void compile_expression(Compiler * c, Fn * fn, GLTANG_Ast_Node * node);
 static void compile_statement(Compiler * c, Fn * fn, GLTANG_Ast_Node * node);
+static void compile_statement_body(Compiler * c, Fn * fn, GLTANG_Ast_Node * node);
 
 /** Whether an expression's value is a container nobody else holds. */
 static bool is_fresh(const GLTANG_Ast_Node * node) {
@@ -1102,9 +1103,6 @@ static void compile_statement(Compiler * c, Fn * fn, GLTANG_Ast_Node * node) {
   // The start of a statement (the opt-in statement poll, design.md). A block
   // is not one: it is the list of the statements inside it, and each of them
   // carries its own, so a brace on a line of its own is not a place to stop.
-  if (!GLTANG_AST_IS_BLOCK(node)) {
-    emit(c, fn, GLTANG_OP_LINE, 0);
-  }
   if (GLTANG_AST_IS_BLOCK(node)) {
     GLTANG_Ast_Node_Block * block = (GLTANG_Ast_Node_Block *)node;
     uint32_t count = (uint32_t)GLTANG_VECTORX_COUNT(block->statements);
@@ -1115,7 +1113,14 @@ static void compile_statement(Compiler * c, Fn * fn, GLTANG_Ast_Node * node) {
       compile_statement(c, fn, (GLTANG_Ast_Node *)GLTANG_TYPEX_P(block->statements->data[i]));
     }
   }
-  else if (GLTANG_AST_IS_IF_ELSE(node)) {
+  else {
+    emit(c, fn, GLTANG_OP_LINE, 0);
+    compile_statement_body(c, fn, node);
+  }
+}
+
+static void compile_statement_body(Compiler * c, Fn * fn, GLTANG_Ast_Node * node) {
+  if (GLTANG_AST_IS_IF_ELSE(node)) {
     GLTANG_Ast_Node_If_Else * branch = (GLTANG_Ast_Node_If_Else *)node;
     uint32_t to_else;
     compile_condition_jump(c, fn, branch->condition, GLTANG_OP_JMP_FALSE, &to_else);

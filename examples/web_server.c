@@ -101,6 +101,9 @@
 #define DEFAULT_FUEL 200000u
 #define DEFAULT_DEBUG_WAIT_MS 10000
 #define NESTED_SCOPE_FUEL 20000u
+/* GRCORE_UNLIMITED is the top of the range and means "no budget": a budget
+ * (and a raise) must stay below it, and sums and products saturate there. */
+#define FUEL_CEILING (UINT64_MAX - 1u)
 
 /** The templates the page calls by name, registered with budgets of their own. */
 static const char * const NESTED[] = {"sidebar", "layout"};
@@ -629,11 +632,12 @@ static void run_request(Server * server, const char * path, GLTANG_Program * pro
   while (ran == GRCORE_OK && outcome == GRCORE_OUTCOME_PAUSED) {
     bool budget = pause_is_a_budget(context);
     GRCORE_Location where = grcore_context_pause_location(context);
-    if (debug.live && grdbg_dap_notify_stopped(debug.dap) != GRDBG_OK) {
+    if (debug.live && !debug.detached && grdbg_dap_notify_stopped(debug.dap) != GRDBG_OK) {
       debug_lost(&debug);
     }
     bool terminate = false;
-    if (debugged && debug_serve(&debug) == GRDBG_SERVE_TERMINATE) {
+    /* A client that has disconnected is not told and not waited for. */
+    if (debug.live && !debug.detached && debug_serve(&debug) == GRDBG_SERVE_TERMINATE) {
       terminated_by_client = true;
       terminate = true;
     }
@@ -641,7 +645,8 @@ static void run_request(Server * server, const char * path, GLTANG_Program * pro
       if (!raised) {
         /* The policy of this host, not the library's: raise the budget once. */
         raised = true;
-        grcore_context_set_fuel(context, grcore_context_fuel_used(context) + server->config.raise);
+        uint64_t used = grcore_context_fuel_used(context);
+        grcore_context_set_fuel(context, server->config.raise > FUEL_CEILING - used ? FUEL_CEILING : used + server->config.raise);
       }
       else {
         /* A second pause is final: say where, and unwind the run. */
@@ -667,10 +672,14 @@ static void run_request(Server * server, const char * path, GLTANG_Program * pro
     char * text = NULL;
     size_t length = 0;
     if (gltang_execution_output_render(execution, &text, &length) == GLTANG_OK) {
-      response->status = 200;
       response->body.length = 0;
-      buf_append(&response->body, text, length);
-      response->errors = (long)gltang_execution_error_count(execution);
+      if (buf_append(&response->body, text, length)) {
+        response->status = 200;
+        response->errors = (long)gltang_execution_error_count(execution);
+      }
+      else {
+        response_say(response, 500, "out of memory\n");
+      }
       gltang_buffer_free(text);
     }
     else {
@@ -956,6 +965,7 @@ static char * dap_request(Dap * dap, const char * command, const char * argument
   char body[1024];
   int seq = ++dap->seq;
   int n = snprintf(body, sizeof(body), "{\"seq\":%d,\"type\":\"request\",\"command\":\"%s\",\"arguments\":%s}", seq, command, arguments);
+  CHECK(n > 0 && (size_t)n < sizeof(body)); /* a request that does not fit is a failed check, not a partial send */
   char header[64];
   int h = snprintf(header, sizeof(header), "Content-Length: %d\r\n\r\n", n);
   CHECK(send_all(dap->fd, header, (size_t)h) && send_all(dap->fd, body, (size_t)n));
@@ -1301,11 +1311,11 @@ int main(int argc, char ** argv) {
       config.has_debug = true;
       ++i;
     }
-    else if (!strcmp(argv[i], "--fuel") && has_value && parse_number(argv[i + 1], &number)) {
+    else if (!strcmp(argv[i], "--fuel") && has_value && parse_number(argv[i + 1], &number) && number < FUEL_CEILING) {
       config.fuel = number;
       ++i;
     }
-    else if (!strcmp(argv[i], "--raise") && has_value && parse_number(argv[i + 1], &number)) {
+    else if (!strcmp(argv[i], "--raise") && has_value && parse_number(argv[i + 1], &number) && number < FUEL_CEILING) {
       config.raise = number;
       config.has_raise = true;
       ++i;
@@ -1320,7 +1330,7 @@ int main(int argc, char ** argv) {
     }
   }
   if (!config.has_raise) {
-    config.raise = config.fuel * 10u;
+    config.raise = config.fuel > FUEL_CEILING / 10u ? FUEL_CEILING : config.fuel * 10u;
   }
   if (config.self_test) {
     config.has_debug = true;
