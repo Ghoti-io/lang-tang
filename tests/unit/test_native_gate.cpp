@@ -90,6 +90,10 @@ struct Row {
   uint64_t calls = 512;
   size_t host_string = 0;     // a library string of this many bytes named `big`
   uint64_t fuel_slack = 1500;
+  // Whether the operation must poll under `native`'s name. False for a row
+  // whose operation is refused before the native's first poll (the verdict
+  // then comes from the refused allocation's own poll).
+  bool attributed = true;
 };
 
 struct Measured {
@@ -99,6 +103,7 @@ struct Measured {
 };
 
 struct Result {
+  uint64_t native_polls = 0;  // polls made under the row's native name (0 for a limit row)
   unsigned outcome = 0;
   GLTANG_ErrorKind error = GLTANG_ERROR_KIND_COUNT;
   Measured m;
@@ -143,6 +148,10 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
       r.error = context.error_kind();
     }
   }
+  if (row.native[0] != '\0') {
+    EXPECT_EQ(gltang_execution_native_polls(context.execution, row.native, &r.native_polls), GLTANG_OK)
+        << row.native << " is not an id in natives.def";
+  }
   r.m.fuel = grcore_context_fuel_used(context.context);
   r.m.peak = context.tracker.peak_bytes;
   r.m.memory_peak = grcore_context_memory_peak(context.context);
@@ -175,6 +184,13 @@ void run_row(const Row & row) {
   }
   if (row.gc) {
     EXPECT_GT(r.collections, 0u) << "memory over budget runs a collection before the verdict";
+  }
+  if (row.native[0] != '\0' && row.attributed) {
+    // The operation polled for the native the row names: the poll that ended
+    // it (or paced it) is made under that native's name, not under another's.
+    // The build runs first and may poll the same native, so it is the
+    // difference that counts.
+    EXPECT_GT(r.native_polls, base.native_polls) << "the operation made no poll under the name " << row.native;
   }
   EXPECT_LT(r.seconds, 20.0) << "the wall clock is only a backstop, and this case needed it";
 }
@@ -253,10 +269,12 @@ std::vector<Row> rows() {
   t.push_back({"EQUALITY", "comparing two huge equal arrays", "a = [0] * " + kElements + "; b = [0] * " + kElements + ";", "a == b;", 300, 16 * kMiB, kStops, 4 * kMiB});
   t.push_back({"ARRAY_CONCAT", "joining two large arrays", kArr200k, "c = a + a;", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"ARRAY_REPEAT", "repeating an array into 40 MB", "a = [0] * 1000;", "c = a * 5000;", 300, 64 * kMiB, kStops, 48 * kMiB});
-  t.push_back({"ARRAY_REPEAT", "repeating an array into 8 GB under a small memory budget", "a = [0] * 1000;", "c = a * 1000000; c;", 300, 4 * kMiB, FINISHED_ERROR,
-      8 * kMiB, true, GLTANG_ERROR_OUT_OF_MEMORY});
+  Row refused_repeat = {"ARRAY_REPEAT", "repeating an array into 8 GB under a small memory budget", "a = [0] * 1000;", "c = a * 1000000; c;", 300, 4 * kMiB, FINISHED_ERROR,
+      8 * kMiB, true, GLTANG_ERROR_OUT_OF_MEMORY};
+  refused_repeat.attributed = false;  // the allocation is refused before the first paced poll
+  t.push_back(refused_repeat);
   t.push_back({"ARRAY_SLICE", "reversing a large array", kArr200k, "c = a[::-1];", 300, 16 * kMiB, kStops, 12 * kMiB});
-  t.push_back({"ARRAY_SLICE", "the endless loop that grows an array by slices", "a = [0] * 100;", "while (true) { a = a + a; }", 1000, 32 * kMiB, kStops, 2 * kMiB});
+  t.push_back({"ARRAY_CONCAT", "the endless loop that grows an array by joining it to itself", "a = [0] * 100;", "while (true) { a = a + a; }", 1000, 32 * kMiB, kStops, 2 * kMiB});
   return t;
 }
 

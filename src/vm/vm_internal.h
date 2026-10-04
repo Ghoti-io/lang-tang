@@ -332,6 +332,20 @@ typedef struct GLTANG_ProgramEntry {
 } GLTANG_ProgramEntry;
 
 /**
+ * The engine's natives, from natives.def: who is polling the runtime. The id
+ * is the name the native gate reads in the sources (see natives.def), and a
+ * name that is not in the list does not compile. Each poll is counted under
+ * its id, which is how the gate knows which native a poll was made for
+ * (gltang_execution_native_polls).
+ */
+typedef enum GLTANG_NativeId {
+#define GLTANG_NATIVE(id, unbounded, text) GLTANG_NATIVE_##id,
+#include "natives.def"
+#undef GLTANG_NATIVE
+  GLTANG_NATIVE_COUNT
+} GLTANG_NativeId;
+
+/**
  * @brief One running program: the main one, or a template call.
  *
  * Everything per call that is not on the guest stack lives here, in the
@@ -412,6 +426,7 @@ struct GLTANG_Execution {
   uint32_t current_offset;
   uint64_t pending_fuel;        ///< Charged to the context at the next poll.
   uint64_t frames_unwound;
+  uint64_t native_polls[GLTANG_NATIVE_COUNT]; ///< Polls made for each native.
 
 #ifdef GLTANG_WITH_JIT
   // The baseline JIT (src/jit/, story 15). Per-execution, so feedback lives
@@ -493,19 +508,6 @@ GLTANG_Execution * gltang_vm_execution_of(const GRCORE_Context * context);
  *   marked as unwinding).
  */
 GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work);
-
-/**
- * The engine's natives, from natives.def: who is polling the runtime. The id
- * changes nothing at run time; it is the name the native gate reads in the
- * sources (see natives.def), and a name that is not in the list does not
- * compile.
- */
-typedef enum GLTANG_NativeId {
-#define GLTANG_NATIVE(id, unbounded, text) GLTANG_NATIVE_##id,
-#include "natives.def"
-#undef GLTANG_NATIVE
-  GLTANG_NATIVE_COUNT
-} GLTANG_NativeId;
 
 /** Polls the runtime for `native`, charging `work` fuel (at least the poll). */
 GLTANG_Status gltang_vm_native_poll_as(GLTANG_Execution * exec, GLTANG_NativeId native, uint64_t work);

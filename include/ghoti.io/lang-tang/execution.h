@@ -340,6 +340,23 @@ GLTANG_API GLTANG_Result gltang_execution_jit_stats(
     const GLTANG_Execution * execution, GLTANG_JitStats * out_stats);
 
 /**
+ * @brief How many times the engine polled the runtime on behalf of one of its
+ *   natives (src/vm/natives.def), by the native's name.
+ *
+ * A diagnostic for the native budget gate, which uses it to show that the
+ * poll of a native is made under that native's name. The names are the ids in
+ * natives.def (`STRING_CONCAT`, `ARRAY_GROW`, ...).
+ *
+ * @param execution The execution.
+ * @param native The id.
+ * @param out_polls Receives the count. Written only on success.
+ * @return ::GLTANG_OK, or ::GLTANG_ERR_INVALID for a NULL argument or a name
+ *   that is not an id.
+ */
+GLTANG_API GLTANG_Result gltang_execution_native_polls(
+    const GLTANG_Execution * execution, const char * native, uint64_t * out_polls);
+
+/**
  * @brief Whether this build has the baseline JIT (`JIT=yes`).
  *
  * @return True for a build with it, false for the interpreter-only build.

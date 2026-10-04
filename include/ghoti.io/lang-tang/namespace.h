@@ -288,6 +288,7 @@
 #define gltang_ast_node_while_vtable GHOTIIO_LANG_TANG(gltang_ast_node_while_vtable)
 #define gltang_ast_node_while_walk GHOTIIO_LANG_TANG(gltang_ast_node_while_walk)
 #define gltang_execution_jit_stats GHOTIIO_LANG_TANG(gltang_execution_jit_stats)
+#define gltang_execution_native_polls GHOTIIO_LANG_TANG(gltang_execution_native_polls)
 #define gltang_execution_set_jit_threshold GHOTIIO_LANG_TANG(gltang_execution_set_jit_threshold)
 #define gltang_flex_set_state GHOTIIO_LANG_TANG(gltang_flex_set_state)
 #define gltang_jit_built GHOTIIO_LANG_TANG(gltang_jit_built)

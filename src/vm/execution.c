@@ -84,8 +84,26 @@ GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work) {
 }
 
 GLTANG_Status gltang_vm_native_poll_as(GLTANG_Execution * exec, GLTANG_NativeId native, uint64_t work) {
-  (void)native;
+  ++exec->native_polls[native];
   return gltang_vm_native_poll(exec, work);
+}
+
+GLTANG_Result gltang_execution_native_polls(const GLTANG_Execution * execution, const char * native, uint64_t * out_polls) {
+  if (!execution || !native || !out_polls) {
+    return GLTANG_ERR_INVALID;
+  }
+  static const char * const names[GLTANG_NATIVE_COUNT] = {
+#define GLTANG_NATIVE(id, unbounded, text) #id,
+#include "natives.def"
+#undef GLTANG_NATIVE
+  };
+  for (size_t i = 0; i < GLTANG_NATIVE_COUNT; ++i) {
+    if (strcmp(names[i], native) == 0) {
+      *out_polls = execution->native_polls[i];
+      return GLTANG_OK;
+    }
+  }
+  return GLTANG_ERR_INVALID;
 }
 
 GLTANG_Status gltang_vm_alloc(GLTANG_Execution * exec, const GRHEAP_Type * type, size_t bytes, void ** out) {
