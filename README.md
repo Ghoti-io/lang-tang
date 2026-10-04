@@ -36,7 +36,14 @@ operation it does not compile. The output, the errors, the fuel and the polls ar
 the interpreter's, which a frame differential (`tests/observer.h`, interpreter
 against JIT, at every poll), a fuel-parity test and a scripted debugger session
 with a breakpoint in compiled code each check; `JIT=no` builds the
-interpreter-only engine and links nothing of it. The library itself
+interpreter-only engine and links nothing of it. A paused or new execution can be
+frozen into a **snapshot** and restored into a fresh context on any thread to
+finish exactly as an uninterrupted run does
+([examples/snapshot_start.c](examples/snapshot_start.c)): the snapshot holds no
+address, so the library, native function and template values the program holds
+are found again by name, and starting a context from a snapshot that has run a
+heavy prologue is an order of magnitude cheaper than running the prologue
+(`documentation/design.md`, "Snapshots"). The library itself
 does not depend on the debugger; it only polls where a host may stop it.
 
 ## Example
@@ -121,7 +128,7 @@ this library:
 | `test-nojit` | the library built with `JIT=no` in its own tree, running the whole unit suite, the CLI test, the examples and the gates that apply, with the JIT-only tests compiled out |
 | `test-oracle` | parse and then run every file of `tests/corpus`, and 440 generated programs, with lang-tang and with ctang (in a child process, with a wall-clock kill and an address-space bound) and fail on any difference in the parse verdict, the rendered output or the final result that the ledger does not record; `ORACLE_PC` names the ctang package |
 | `fuzz-diff` | `make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S`: a campaign of N generated programs from seed S, both modes; a divergence prints its seed and the whole program |
-| `check-planted` | build a throwaway copy of the library, plant ten defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner, and the JIT's three: a wrong tag on a compiled `ADD`, a skipped fuel charge, a missed write-back at a poll) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
+| `check-planted` | build a throwaway copy of the library, plant twelve defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner, and the JIT's three: a wrong tag on a compiled `ADD`, a skipped fuel charge, a missed write-back at a poll, and the two of snapshots: a host pointer left in a type's payload with no hook, and a skipped output-buffer capture) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
 | `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one (and `runtime-jit` under `JIT=yes`, in `src/jit/` only; under `JIT=no` nothing of it at all) - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
@@ -146,7 +153,7 @@ stable ones.
 | `allocator.h` | stable | `GLTANG_Allocator`, `gltang_allocator_default`, `gltang_allocator` (the one the library allocates through) |
 | `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler reads them, so their shape may change |
 | `compile.h`, `program.h`, `bytecode.h` | free | `gltang_compile`, the immutable reference-counted `GLTANG_Program`, the opcode table |
-| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`), the baseline JIT's host API (`gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built`) and the error list (`gltang_execution_error*`) |
+| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`), the baseline JIT's host API (`gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built`) and the error list (`gltang_execution_error*`), and context snapshots (`gltang_snapshot_take`, `gltang_snapshot_restore`, `_retain`, `_release`, `_size`) |
 | `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
 | `seeds.h` | stable | `GLTANG_SeedSequence`: the master seed and atomic counter that every execution's `random.global` and `random.default` are seeded from |
 

@@ -10,7 +10,9 @@ error list, template calls under budget scopes, a generator per context), the
 `tang` command, the divergence ledger, the oracle that compares this
 library with frozen ctang, and a baseline JIT behind a build option
 (`JIT=yes|no`, "The baseline JIT") that is compared with the interpreter at every
-poll. What is still not here is listed at the end. The
+poll, and context snapshots ("Snapshots": a paused or new execution frozen
+and restored, into another context on any thread, to finish as an uninterrupted
+run does). What is still not here is listed at the end. The
 architecture it follows is the runtime stack's spine (AD-2, AD-3, AD-9, AD-13,
 AD-14, AD-16, AD-20, AD-21, AD-22, AD-23, AD-25, AD-26).
 
@@ -1183,11 +1185,13 @@ breaks nothing as not caught. Observed:
 | 08 jit-wrong-tag | a compiled `ADD` or `SUB` tags its result as a function value | the frame differential, interpreter against JIT (`testObserver`) | `generated/1-template: plain against jit threshold 1: poll 37, frame 0: scope program variable ...` |
 | 09 jit-skipped-fuel | a compiled `LOAD_LOCAL` is not charged | the fuel-parity test (`testJit`) | the two runs' fuel totals and pauses differ |
 | 10 jit-missed-write-back | the guest frame is not copied back into the compiled frame after a poll | the write-back test (`testJit`): a poll handler overwrites a local, as a moving collector would | the two runs print different sums |
+| 11 host-pointer-no-hook | the template type has no snapshot hook, so its payload keeps the address of the library member | the address scan of every blob of a snapshot (`testSnapshot`) | `an address is in the runtime-heap blob` |
+| 12 skipped-output-capture | the snapshot is written as if the output so far were empty | the output-so-far test and the corpus sweep (`testSnapshot`) | the restored output starts from nothing, and the sweep names the first program whose output differs |
 
-`make test` runs 03 to 10 (`check-planted-quick`, about two minutes with the
+`make test` runs 03 to 12 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all ten.
+runs all twelve.
 
 ### What runs where
 
@@ -1645,6 +1649,168 @@ The gain is where the supported set is: a hot loop over small integers and boole
   of 200 polls and the eight-deoptimization rule are the story's figures, taken as
   given; nothing was tuned (AD-26).
 
+## Snapshots
+
+A snapshot (story 16, CAP-11) freezes an execution that is paused, or has not
+started, into an immutable object, and `gltang_snapshot_restore` makes a fresh
+execution continue from it: the host creates a context, a heap and an execution
+as it would for a fresh run, attaches the libraries, restores, and calls
+`grcore_resume` (or `grcore_run` for a snapshot of a new execution). The point is
+a start-up that is paid for once: a template that builds a table before it serves
+anything is run to that point, frozen, and every later context starts from the
+frozen state. The golden flow is in `examples/snapshot_start.c`.
+
+### How it works
+
+Three libraries carry it, each behind the seam the spine names (AD-19: hooks on a
+key; AD-12: nothing is keyed by address).
+
+- **runtime-core** keeps a snapshot as one named blob per key that has hooks, and
+  restores atomically (CHECK, APPLY, PREPARE, COMMIT: see its `design.md`). The
+  guest stack's own key writes the frames, with every `VALUE` slot written as zero.
+- **runtime-heap** writes an image of the objects the context's roots reach, in
+  the order the collector walks them, every reference an index, every type a name
+  (its `design.md`, "Heap images"). It writes the *values* of the roots and of the
+  frames' slots, which is why this library writes none of them.
+- **lang-tang** (`src/vm/snapshot.c`) writes what only the engine knows, in the
+  key `lang-tang execution`: the state (`PAUSED` or `NEW`); the main program's
+  identity; the number of root slots; the pause location; the output buffer (its
+  bytes, its committed length and its typed segments); the error list (every
+  entry, its chain and its strings, and the count dropped); and the templates that
+  have already run, each named. It also gives three types per-object hooks.
+
+**What is captured, and what the host supplies again.** Captured: the guest
+stack's frames, the heap's live objects with their stable IDs, the execution's
+roots, temporaries and constants cache (as slots, in the image), the state and
+pause location, the output so far, the error list. Supplied again, as for a fresh
+run: the group, the options and budgets (fuel used starts at zero in the restored
+context and the limits are the destination's), the page provider and allocator,
+the port and requests, the program, the libraries, the seed sequence, the name,
+the halt and logging switches, the statement polls and the JIT threshold. A
+generator `random.global` that had been created continues from where it was (its
+state is in the image); one that had not is made, when first used, from the
+*destination's* sequence (a test makes the answer depend on the sequence to show
+which one it was).
+
+**The program is the destination's, and is checked.** The snapshot records the
+function, constant and global counts of the main program and a hash of its
+content (its file, code, line tables, names and constants: `gltang_program_identity`).
+A destination built for another program, even one differing in one constant, is
+refused before anything changes. The file name is in the hash: the error list
+holds it, and a restored list must name the file the destination's own later
+errors do.
+
+**Host values are names.** A library object holds a pointer to a library; a native
+function and a template hold one to a library member. None can be in a snapshot,
+so each type has a `snapshot` and a `restore` hook on its runtime-heap type. A
+library is named by *where it is*: the layer a `use` finds it in (the execution's
+libraries, the main program's, the built-ins) and the names of the library members
+that lead to it from that layer's root; a member by its library's path and its
+own name. A path rather than a library name because the root of a layer is
+usually unnamed (the host's own library of natives and templates), and because a
+path is unique where a name need not be. The take checks that the path leads
+back to the object and refuses if it does not; the restore resolves it in the
+destination's layers, requires the member to be the kind it was (a native, a
+template), and refuses a name that does not resolve. A template that has already
+run left a program in the execution (and the constants it made): it is named the
+same way and must have the same program identity. A name that does not resolve
+refuses the restore with the destination exactly as it was, and a test runs that
+destination's own program afterwards to show it.
+
+**When a snapshot may be taken** (AD-20): by the owning thread, with the execution
+paused, or new and parked outside `run`, with no template call in flight, no host
+or native frame and no budget scope. The heap must hold no C root, handle, pin or
+weak cell and no root source may report a conservative range (runtime-heap refuses,
+and the take is `GLTANG_ERR_INVALID` with a named reason in that library's
+design). Reading a running or at-poll execution is never allowed, a finished or
+unwound one has nothing to resume and is refused too.
+
+**Atomic.** A failure at any point leaves the destination a fresh, runnable
+execution: the partly built state is released and the execution is `NEW`. The
+engine's APPLY allocates everything into locals first and installs last; its
+ABANDON puts the execution back to what `gltang_execution_create` made. The same
+holds under allocation failure at every point of the restore (a test fails the
+Nth allocation for every N and then runs the destination's own program), for the
+destination's memory budget (`GLTANG_ERR_LIMIT`, every byte charged given back),
+and for its depth budget.
+
+**The tiers.** The JIT's code and feedback are not in a snapshot: a paused context
+is always interpreter frames (AD-8), and the destination's own
+`gltang_execution_create` attached its own JIT, which tiers up again from nothing.
+Fuel is charged the same on every tier, so the fuel used before the pause plus
+the fuel the destination uses equals what the uninterrupted run used, which the
+sweep checks for every program at every pause point, in every pair of arms
+(`JIT=yes` at threshold 1 into an interpreter-only destination and the reverse).
+
+### Tests
+
+`tests/unit/test_snapshot.cpp` pauses every executable program of the execution
+corpus at up to five fuel points, takes a snapshot, restores it into a fresh
+context (the first point of each program on another thread) and requires the
+output (raw and rendered), the result, the error list and the fuel to be those of
+the uninterrupted run. Then every row of the story's matrix: another thread,
+restoring twice and releasing the snapshot early, a new execution, output and
+errors so far, library, native and template values by name (and a missing name,
+and a name with another kind), stable IDs and the next ID, every refusal (running,
+at-poll, in a host call, a template call in flight, a C root, a handle, a pin, a
+conservative range, a finished execution, another thread), every mismatch (a
+program, an engine table, a set of keys, a heap codec, an execution that is not
+new), allocation failure at every point of take and of restore, the destination's
+memory, depth and fuel budgets, six threads restoring one snapshot, and the
+collector's torture, barrier-verify and a moving guest stack over a restored heap.
+A scan of every blob for every host address (the libraries and their members, the
+programs, the context, the heap, the execution and every root object) shows there
+is none. `make test-torture` and `make test-tsan` run the same suite under their
+instruments, and `make test` runs it with the JIT at threshold one as well.
+
+Two planted defects show the instruments are wired to the code (`tests/planted/`
+11 and 12, "Planted defects in the library"): a type that forgot its hook (the
+address scan finds the library member's address in the heap blob) and an output
+buffer that is not captured (the output-so-far test and the sweep fail).
+
+### Why this and not something else
+
+- **A snapshot of memory.** Copying the heap's pages and the context's structures
+  would need the same addresses at the destination, which the page provider does
+  not promise and which two contexts in one process could never both have; it
+  would also carry every function pointer and every host pointer into a "frozen"
+  object (rejected in runtime-heap's and runtime-core's `design.md`, which say why
+  at length).
+- **Snapshotting an execution in the middle of a template call.** A template call
+  is an activation with its own variables, output buffer and budget scope, and its
+  own program on the stack. It could be captured, and the guest stack's refusal
+  with an activation record is AD-20's rule, which this story is bound by: a
+  snapshot is of a context that is idle or paused with no host frame above `run`.
+  The templates that have *finished* before the pause are captured (their programs
+  and constants), since a later call needs them.
+- **A byte format or a file.** The snapshot is an in-memory object that holds no
+  address, which is what makes a file possible later; making it one now would
+  decide a format, a version and a loader that is a parser of untrusted bytes
+  (AD-24) before anything needs it. Recorded as not done.
+- **Sharing compiled code or feedback through a snapshot.** Compiled code is
+  per-execution and context-specialised here (AD-22), so there is nothing to share
+  yet, and feedback lives with the context; the destination's JIT starts cold and
+  is correct either way.
+- **Naming a host value by a single library name.** The root library of a layer
+  has none and names are not unique across layers; the path is.
+- **Restoring the output by replaying it.** The bytes and their encoding tags are
+  copied; replaying the prints would run guest code.
+
+### What is not done
+
+- No serialisation to bytes or to a file, and no snapshot that survives the process.
+- A snapshot is refused with a template call in flight, a finished execution, a
+  C root, a handle, a pin, a weak cell or a conservative range. (This engine has
+  no weak cell; a host that adds one to the heap cannot snapshot it.)
+- A template that has run must be reachable from the execution's layers (the
+  libraries, the main program's, the built-ins); one reachable only from another
+  template program's own libraries is refused. A native or a library the program
+  holds must be too.
+- A restored context reports no pause *keys* (which key caused the pause), only
+  the line; the first resume decides again, since fuel and requests are levels.
+- No sharing between a snapshot and a group; a restore touches only the context it
+  is given.
+
 ## Known defects, inherited and open
 
 **The parse is not charged to the context.** See "The memory-budget contract".
@@ -1720,6 +1886,8 @@ reading future figures against the calibration beside them:
 | run: `random.global.next_int % 7` 1,000 times | about 123 us (about 120 ns an iteration, a boxed integer or two included) |
 | run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 65 us (the `LINE` instruction is executed and does nothing) |
 | run: the same, statement polls on with nothing pending | about 130 us (about 16 ns a poll on the unarmed fast path) |
+| start from scratch: a context made and run until it pauses right after a heavy prologue | about 2.80 ms |
+| start from a snapshot: a context made and the snapshot of that pause restored into it | about 0.234 ms (see below) |
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
 are where they were, within the noise of the machine. (With the JIT built, the
@@ -1736,6 +1904,30 @@ under 3% between the same runs, so the figures are good to about that. The
 table's rows are the figures before the opcode, re-taken on the machine of this
 measurement (the template call was about 101 us when first recorded). That is the price of making a statement a place a host may ask to stop at without
 patching a shared program; the alternatives are listed under "Statement polls".
+
+**Snapshots (story 16, CAP-11).** The two `start-*` cases measure the same
+thing two ways: the time from creating a context (group, context, heap and
+execution) to its being paused at the ready point, where the ready point is
+right after a prologue that builds a 20,000-element array and a 2,000-entry map
+in loops (about 2.4 million units of fuel, which leave 7,127 live objects).
+*From scratch* runs the prologue, under a fuel budget that stops it just after
+it; *from a snapshot* restores a snapshot taken once at that pause (936,922
+bytes, from `gltang_snapshot_size`), outside the clock. First measurement, on an
+Intel Core 7 150U (12 threads), gcc 14.2.0, `-O2`, the JIT built, best of seven,
+the calibration case beside them at 1.11 ns:
+
+| Start | Best | Median |
+| --- | --- | --- |
+| from scratch | 2,804,352 ns | 2,810,547 ns |
+| from a snapshot | 234,018 ns | 234,932 ns |
+| saved | 2,570,334 ns (91.7% of the scratch start) | 12.0 times faster |
+
+The saving grows with the prologue (a restore costs the heap's size, the prologue
+its fuel) and shrinks to nothing for a prologue of a few statements, which a
+snapshot is not for. A restore of this heap is about 0.2 ms beyond making the
+context, which is about 30 ns for each of the 7,127 objects: a cell from the
+heap's own allocator, a copy, the patching of its slots and (with the instruments
+off) nothing else.
 
 ## Fuzzing
 
@@ -1772,7 +1964,9 @@ protocol (the frame walk, scopes and variables read from a paused context, which
 name the right program for every frame) and polls at statements when a host asks
 ("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the
 web-server example are its hosts. No conditional breakpoints, no expression
-evaluation. No `simplify`. No snapshots. The JIT is a baseline: it is described, with
+evaluation. No `simplify`. Snapshots are in-memory objects, taken of a paused or new
+execution with no template call in flight: no byte format, no file and no
+sharing of compiled code ("Snapshots", "What is not done"). The JIT is a baseline: it is described, with
 what it does not do, under "The baseline JIT". No
 parse-time charge to a context's memory (see "The memory-budget contract"). No
 CI.
