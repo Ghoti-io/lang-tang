@@ -49,9 +49,10 @@
 #include <stdio.h>
 #include <string.h>
 
-/* runtime-jit compiles for Linux x86-64 and Linux arm64 and for nothing else
- * (its backend.h), whatever the library was built with. */
-#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
+/* runtime-jit compiles for Linux x86-64, Linux arm64 and Windows x86-64 and
+ * for nothing else (its backend.h), whatever the library was built with. */
+#if ((defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)) || \
+    (defined(_WIN64) && defined(__x86_64__))
 #define JIT_BACKEND_EXISTS 1
 #else
 #define JIT_BACKEND_EXISTS 0

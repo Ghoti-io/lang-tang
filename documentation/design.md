@@ -1637,11 +1637,16 @@ The gain is where the supported set is: a hot loop over small integers and boole
   context-specialised and per execution, compiled synchronously in a poll; there
   is no cache on disk. (`a/code.h`'s count is atomic so that sharing can be added
   without changing who owns what.)
-- **Other architectures and Windows.** x86-64 and arm64 on Linux only (the arm64
-  backend is runtime-jit's, with the same frame layout, so nothing here changed
-  for it but this comment); `grjit_backend_available()`
-  is false elsewhere and the compile is then `GLTANG_ERR_UNSUPPORTED`, counted as a
-  failure. `JIT=no` is the arm for every other target.
+- **Other targets.** x86-64 and arm64 on Linux and x86-64 on Windows have a
+  backend (the arm64 and Windows ones are runtime-jit's, with the same frame
+  layout and the same saved-frame-pointer record at `[fp]` and `[fp + 8]`, so
+  nothing here changed for them but this comment: the poll helper finds the
+  compiled frame the same way under mingw GCC, which the JIT tests, the JIT arm
+  of the frame differential and `jit_hot_loop` show under wine, and have not
+  shown on a Windows machine). Windows arm64 and macOS have none:
+  `grjit_backend_available()` is false there and the compile is then
+  `GLTANG_ERR_UNSUPPORTED`, counted as a failure. `JIT=no` is the arm for every
+  other target.
 - **Inline caches**, **inlining of heap operations** (arrays, maps, strings, calls
   to natives), floating point, boxed integers and `DIV`/`MOD`: all of them are
   exits, and the interpreter does them.

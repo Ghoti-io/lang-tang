@@ -747,12 +747,14 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
 
-# The planted cases need `patch`, a full second build tree, the ctang oracle and
-# (08 to 10) a JIT backend, and Windows has none of the last two; they are
-# skipped there, by name, as check-symbols is.
+# The planted cases need `patch`, a full second build tree and the ctang
+# oracle, and Windows has neither `patch` nor the oracle; they are skipped
+# there, by name, as check-symbols is. (08 to 10 also need a JIT backend, which
+# Windows x86-64 has now: what they prove about the JIT on Windows is the
+# JIT tests running there, under wine, in tools/xwin/m1-run.sh.)
 ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
-	@printf '%s: skipped on Windows (the planted defects need patch, the ctang oracle and a JIT backend)\n' "$@"
+	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
 check-planted-quick: ## Planted defects 03 to 12 (phase shuffle, native gate, frame observer, oracle, the JIT, the two of snapshots)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick

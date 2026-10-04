@@ -67,8 +67,8 @@ bool available();
   } while (0)
 
 /// Whether compiled code can run in this process: the library has the JIT and
-/// the target has a native backend for it (runtime-jit has one for Linux x86-64
-/// and arm64). Where it cannot, the "JIT arm" of a test is the interpreter, a
+/// the target has a native backend for it (runtime-jit has one for Linux x86-64,
+/// Linux arm64 and Windows x86-64). Where it cannot, the "JIT arm" of a test is the interpreter, a
 /// test of tier-up has nothing to observe and skips, and the checks that the
 /// arm "is not vacuous" are not made.
 inline bool jit_backend_present() {
