@@ -26,11 +26,13 @@
  *
  * This file is built with frame pointers (the Makefile's JIT_MODULE_CFLAGS,
  * stamped), because `gltang_jit_poll` finds the compiled frame through its own
- * frame-pointer chain: `__builtin_frame_address(0)` is this function's `rbp`,
- * the word it points at is the saved `rbp` of the compiled function that called
+ * frame-pointer chain: `__builtin_frame_address(0)` is this function's frame
+ * pointer (`rbp` on x86-64, `x29` on arm64, where GCC and clang keep the same
+ * frame record: the caller's frame pointer, then the return address), the word
+ * it points at is the saved frame pointer of the compiled function that called
  * (its frame base, which `a/deopt.h` reads slots from), and the word after it is
  * the return address, which is the site's code offset after the code's base is
- * taken off. The read-back test of runtime-jit does the same.
+ * taken off. The read-back test of runtime-jit does the same, on both.
  */
 
 #include <ghoti.io/lang-tang/macros.h>
