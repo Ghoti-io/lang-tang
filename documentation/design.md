@@ -1091,9 +1091,10 @@ traces, the output, the result and the error list must be equal (2,290 recorded
 polls and 3,552 pauses per configuration), and all four instruments together are
 checked on the sites.
 
-**Interpreter against JIT (story 15).** The same 76 programs run five more ways:
+**Interpreter against JIT (story 15).** The same 76 programs run six more ways:
 every function compiled at its first poll (`jit threshold 1`), the same under
-torture and verify, the same on a moving stack, and with statement polls on
+torture and verify, the same on a moving stack, the same with the poll phases
+shuffled (tier-up is an ACT handler), and with statement polls on
 (where a compiled `LINE` polls too), alone and on a moving stack. Each trace must
 equal the interpreter's at every poll - the same polls, the same slots, the same
 header words, the same pauses - and so must the output, the result and the error
@@ -1511,8 +1512,10 @@ poll is an unconditional exit is not compiled at all.
 
 **Polls, and the frame at a GC point.** Compiled code never pushes or pops a
 frame, and calls no allocating, polling or guest-calling helper. Its only calls
-out are the two fuel helpers (no GC point) and the poll helper. A poll is a load
-of the request word and a branch; with nothing pending the helper is not called.
+out are the two fuel helpers (no GC point) and the poll helper. A compiled poll
+is one call of the fuel helper (every poll charges and flushes fuel, as the
+interpreter's does), then a load of the request word and a branch; the poll helper
+is called only when something is pending.
 The slow path calls `gltang_jit_poll`, which finds the compiled frame through its
 own frame-pointer chain (the JIT module is built with `-fno-omit-frame-pointer`, a
 stamped Makefile flag), reads the frame state of the site with
@@ -1582,7 +1585,7 @@ holds the count: the cache owns one reference and each entry takes one.
   count is added to an execution field, and the baseline keeps every register in a
   frame slot anyway. An inline add of the running count to `pending_fuel` would be
   a store the poll's fast path does not need, and the interpreter already charges
-  where it charges. The poll costs one call whether or not anything is pending.
+  where it charges. Every poll costs that one call whether or not anything is pending; the poll helper costs more and runs only when something is.
 - **The small supported set vs a wider one.** Every operation compiled inline is
   one with no GC point, no allocation and nothing to restore on a failure but its
   operands. A wider set (calls, globals, containers) needs a precise native walk,

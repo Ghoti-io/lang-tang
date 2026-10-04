@@ -289,7 +289,9 @@ TEST(Jit, ThresholdOneContinuesTheSameInvocationInCompiledCode) {
 TEST(Jit, AThresholdOfTwoHundredPollsCompilesAfterTwoHundredAndZeroMeansNever) {
   // With the library's default (the constant) a function compiles after 200
   // polls: a loop of 50 iterations does not reach it, one of 500 does.
-  static_assert(GLTANG_JIT_DEFAULT_THRESHOLD == 200u, "the default is 200 polls");
+  if (GLTANG_JIT_DEFAULT_THRESHOLD != 200u) {
+    GTEST_SKIP() << "a build that overrides GLTANG_JIT_DEFAULT_THRESHOLD has another default than the 200 this test assumes";
+  }
   auto source = [](int n) {
     return "function f(n) { s = 0; i = 0; while (i < n) { s = s + 1; i = i + 1; } return s; }\nprint(f(3)); print(f(" + std::to_string(n) + ")); print(f(3));";
   };
@@ -375,7 +377,7 @@ TEST(Jit, AnOperandThatIsNotASmallIntegerDeoptimizesAtTheOperation) {
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_GE(jit.stats.deopts, 10u);
-  EXPECT_FALSE(jit.errors.empty() && plain.errors != jit.errors);
+  EXPECT_EQ(plain.errors, jit.errors);
 }
 
 TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRunsInTheInterpreter) {
@@ -390,14 +392,24 @@ TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRun
   EXPECT_GE(jit.stats.deopts, 4u);
 }
 
-TEST(Jit, AFunctionWhoseFirstOperationAfterTheEntryPollLeavesCompiledCodeIsNotCompiled) {
-  Scenario sc;
-  sc.source = "function f(a) { return g(a); }\nfunction g(a) { return [a, a]; }\nprint(f(1) as string);\n";
-  Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
-  // f starts with LOAD of a function value (`FUNC`... an exit): not compiled at
-  // all, which is neither a failure nor an entry.
-  EXPECT_EQ(jit.stats.compile_failures, 0u);
+TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompiledBecauseALineComesFirst) {
+  // Every statement begins with LINE, which is inline, so the "first operation
+  // after the entry poll leaves compiled code" decline cannot be reached from
+  // source: both functions are compiled, and the difference is where they leave.
+  Scenario exits;
+  exits.source = "function f(a) { return [a, a]; }\nprint(f(1) as string);\n";
+  Scenario inlined;
+  inlined.source = "function f(a) { return a + 1; }\nprint(f(1) as string);\n";
+  Outcome e_plain, e_jit, i_plain, i_jit;
+  expect_same(exits, &e_plain, &e_jit);
+  expect_same(inlined, &i_plain, &i_jit);
+  EXPECT_EQ(e_jit.stats.functions_compiled, 2u) << "the top level and f";
+  EXPECT_EQ(e_jit.stats.entries, 2u);
+  EXPECT_EQ(e_jit.stats.returns, 0u) << "f leaves at the array";
+  EXPECT_EQ(i_jit.stats.functions_compiled, 2u);
+  EXPECT_EQ(i_jit.stats.entries, 2u);
+  EXPECT_EQ(i_jit.stats.returns, 1u) << "f returns from compiled code";
+  EXPECT_EQ(e_jit.stats.compile_failures + i_jit.stats.compile_failures, 0u);
 }
 
 TEST(Jit, AFunctionThatDeoptimizesEightTimesIsDiscardedAndNeverCompiledAgain) {
@@ -640,17 +652,37 @@ TEST(Jit, APageProviderThatCannotProtectRefusesTheCompileAndTheRunContinues) {
   EXPECT_EQ(jit.stats.entries, 0u);
 }
 
-TEST(Jit, ATallFunctionWithManyLocalsCompilesOrIsDeclinedWithoutHarm) {
+namespace {
+
+std::string function_with_locals(int locals) {
   std::string source = "function f(a) {\n";
-  for (int i = 0; i < 300; ++i) {
+  for (int i = 0; i < locals; ++i) {
     source += "  v" + std::to_string(i) + " = a + " + std::to_string(i) + ";\n";
   }
-  source += "  return v299 + v0;\n}\nprint(f(1)); print(f(2));";
-  Scenario sc;
-  sc.source = source;
+  source += "  return v" + std::to_string(locals - 1) + " + v0;\n}\nprint(f(1)); print(f(2));";
+  return source;
+}
+
+}  // namespace
+
+TEST(Jit, AFunctionWithManyLocalsIsCompiledAndOneWithTooManySlotsIsDeclinedWithoutHarm) {
+  // 300 locals fit the 1,024-slot limit: the top level and f are compiled.
+  Scenario tall;
+  tall.source = function_with_locals(300);
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same(tall, &plain, &jit);
+  EXPECT_EQ(jit.stats.functions_compiled, 2u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_GE(jit.stats.returns, 2u) << "both calls of f return from compiled code";
+
+  // 1,100 locals make more than 1,023 frame slots: f is declined (not a failure,
+  // not compiled), only the top level is, and the run is the interpreter's.
+  Scenario huge;
+  huge.source = function_with_locals(1100);
+  expect_same(huge, &plain, &jit);
+  EXPECT_EQ(jit.stats.functions_compiled, 1u) << "the top level only: f is over the slot limit";
+  EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_EQ(jit.stats.returns, 0u);
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +854,7 @@ TEST(Jit, GeneratedProgramsRunToTheSameVerdictWithEveryFunctionCompiledAtItsFirs
   EXPECT_GT(entries, 100u) << "compiled code ran: the comparison is not vacuous";
 }
 
-TEST(Jit, ThePollTableOfTheEnvironmentsThresholdIsTheSameRunAsTheInterpretersEverywhere) {
+TEST(Jit, AnExecutionThatTakesTheEnvironmentsThresholdGivesTheInterpretersRun) {
   // GLTANG_TEST_JIT_THRESHOLD=1 over the whole suite is the third differential;
   // this is its smallest instance: a harness-made execution with the default
   // (-1) takes the environment's choice, and either way is the same run.

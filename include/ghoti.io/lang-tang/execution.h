@@ -312,14 +312,17 @@ typedef struct GLTANG_JitStats {
  * tests are what say so). The default is ::GLTANG_JIT_DEFAULT_THRESHOLD; 0
  * turns tier-up off for this execution.
  *
- * Stability: this is the host API of the JIT and is meant to be stable; the
- * file's label is the gate's (tools/check-labels.sh keeps this header `free`).
+ * Stability: like the rest of this header, `free` (tools/check-labels.sh keeps
+ * `execution.h` with the engine's other headers). The story that added it asked
+ * for `stable`; the gate does not allow that for this file, so a consumer
+ * requires the exact version it was built against, as for every function here.
  *
  * @param execution The execution.
  * @param threshold The polls before tier-up, or 0 for never.
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for NULL, an execution that has
- *   started, or a call from inside a host function; ::GLTANG_ERR_UNSUPPORTED
- *   in a build without the JIT (`JIT=no`).
+ *   started, or a call from inside a host function; ::GLTANG_ERR_OOM when the
+ *   execution has no JIT state (its creation could not make it) and making it
+ *   now fails; ::GLTANG_ERR_UNSUPPORTED in a build without the JIT (`JIT=no`).
  */
 GLTANG_API GLTANG_Result gltang_execution_set_jit_threshold(
     GLTANG_Execution * execution, uint32_t threshold);

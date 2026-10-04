@@ -76,6 +76,8 @@ const RunConfig kLinesShuffled = {"statement polls, phase-shuffled", 0, 0, 0, tr
 const RunConfig kJit = {"jit threshold 1", 0, 0, 0, false, 0, false, 1};
 const RunConfig kJitTorture = {"jit, torture+verify", 1, 1, 0, false, 0, false, 1};
 const RunConfig kJitMoving = {"jit, moving stack", 0, 0, 1, false, 0, false, 1};
+// Tier-up is an ACT handler, and the phase shuffle reorders what it must commute with.
+const RunConfig kJitShuffled = {"jit, phase-shuffled", 0, 0, 0, true, 0x5eed, false, 1};
 const RunConfig kLinesJit = {"statement polls, jit", 0, 0, 0, false, 0, true, 1};
 const RunConfig kLinesJitMoving = {"statement polls, jit, moving stack", 0, 0, 1, false, 0, true, 1};
 
@@ -388,6 +390,7 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
     EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitTorture, nullptr, cap), kJitTorture.label));
     EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving, nullptr, cap), kJitMoving.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitShuffled, nullptr, cap), kJitShuffled.label));
     Observed lines_jit = observe(c, kLinesJit, nullptr, cap);
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, lines_jit, kLinesJit.label));
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesJitMoving, nullptr, cap), kLinesJitMoving.label));
@@ -410,7 +413,7 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
 #endif
   std::printf("  observer: %zu programs x %d configurations (%d with statement polls), %zu polls, %zu pauses\n", cases.size(),
 #ifdef GLTANG_WITH_JIT
-      13, 7,
+      14, 6,
 #else
       8, 4,
 #endif
