@@ -1206,7 +1206,13 @@ runs all twelve.
   torture and verify; the oracle differential (parse, execution, the fixed fuzz
   batch); the quick planted defects; and the interpreter-only arm (`make
   test-nojit`: `JIT=no` in a tree of its own, the whole unit suite, the CLI test,
-  the examples and the gates that apply).
+  the examples and the gates that apply). `make test-nodebug` is the same idea for
+  the debugger: the library and its unit suites built with `WITH_DEBUG=no` in a
+  tree of their own, against a copy of the prefix from which the `runtime-debug`
+  and `text` `.pc` files are removed (and it fails if the debugger is still
+  visible), so that nothing in the library or its tests can come to need either
+  without a gate saying so; it is not part of `make test` because it needs the
+  prefix named.
 - `make test-torture`: **every** unit suite (`TORTURE_SUITES`, no exclusions)
   under ASan+UBSan with torture, verify and a moving stack, then the two torture
   planted defects. The oracle differential is not run under torture: the child
