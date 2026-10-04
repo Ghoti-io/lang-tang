@@ -7,6 +7,8 @@
 #include "exec_harness.h"
 #include "test_helpers.h"
 
+#include <pthread.h>
+
 #include <cinttypes>
 #include <cstdint>
 #include <string>
@@ -1105,6 +1107,53 @@ TEST(Function, RedeclarationAndForwardCallsFailCompilation) {
 // took the value underneath, context->result was overwritten at the end by
 // whatever was then on top, and `f = 3; f();` came out as 3 - no error, while
 // the x86-64 engine said `Invalid function call` for the same source.
+// A container nested to the depth bound is rendered by a recursive function, one
+// frame a level. Its frame must be small enough for a host thread that was not
+// given a big stack: 2,000 levels on 512 KiB, which a 512-byte buffer in each
+// level's frame (a megabyte in all) did not fit.
+namespace {
+
+struct DeepPrint {
+  std::string output;
+  bool finished = false;
+  bool ok = false;
+};
+
+void * deep_print_main(void * arg) {
+  auto * job = static_cast<DeepPrint *>(arg);
+  tt::Compiled compiled("a = []; for (i = 0; i < 2000; i += 1) { a = [a]; } print(a);", tt::Mode::Script);
+  if (!compiled.ok()) {
+    return nullptr;
+  }
+  tt::Context context(compiled.program);
+  if (!context.ok()) {
+    return nullptr;
+  }
+  job->ok = true;
+  job->finished = context.execute();
+  job->output = context.raw();
+  return nullptr;
+}
+
+}  // namespace
+
+TEST(Print, ADeeplyNestedContainerIsPrintedOnAThreadWithASmallStack) {
+  DeepPrint job;
+  pthread_attr_t attr;
+  ASSERT_EQ(pthread_attr_init(&attr), 0);
+  ASSERT_EQ(pthread_attr_setstacksize(&attr, 512u * 1024u), 0);
+  pthread_t thread;
+  ASSERT_EQ(pthread_create(&thread, &attr, deep_print_main, &job), 0);
+  ASSERT_EQ(pthread_join(thread, nullptr), 0);
+  pthread_attr_destroy(&attr);
+  ASSERT_TRUE(job.ok);
+  EXPECT_TRUE(job.finished);
+  // 2,000 pairs of brackets around nothing.
+  EXPECT_EQ(job.output.size(), 4002u);  // 2,001 pairs: the empty array and 2,000 around it
+  EXPECT_EQ(job.output.substr(0, 3), "[[[");
+  EXPECT_EQ(job.output.substr(job.output.size() - 3), "]]]");
+}
+
 TEST(Function, CallingSomethingThatIsNotAFunctionIsAnError) {
   expect_error("f = 3; f();", "Error: Invalid function call");
   expect_error("(1)(2);", "Error: Invalid function call");

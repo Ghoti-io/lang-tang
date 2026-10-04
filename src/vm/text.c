@@ -366,21 +366,32 @@ static bool sink_full(const GLTANG_Sink * sink) {
   return sink->limit && sink->needed >= sink->limit;
 }
 
-GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, int depth, bool * too_deep) {
+// The digits of a number are formatted in a frame of their own. The renderer
+// recurses once per level of a container, up to GLTANG_MAX_VALUE_DEPTH, and a
+// 512-byte buffer in the recursive function's own frame was paid at every
+// level whether the level printed a number or not: value depth 2048 needed
+// about 1 MiB of C stack, which a host thread with a small stack does not have.
+// (noinline, so that the buffer cannot come back into the recursive frame.)
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static GLTANG_Status render_number(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_ValueKind kind) {
   char digits[512];
+  size_t n = kind == GLTANG_KIND_INTEGER ? gltang_vm_format_integer(gltang_vm_int(v), digits)
+                                         : gltang_vm_format_float(gltang_vm_float(v), digits, sizeof(digits));
+  return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+}
+
+GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, int depth, bool * too_deep) {
   switch (gltang_vm_kind(v)) {
     case GLTANG_KIND_NULL:
       return mode == GLTANG_RENDER_ELEMENT ? text(sink, "null") : GLTANG_ST_OK;
     case GLTANG_KIND_BOOL:
       return text(sink, v == GLTANG_V_TRUE ? "true" : "false");
-    case GLTANG_KIND_INTEGER: {
-      size_t n = gltang_vm_format_integer(gltang_vm_int(v), digits);
-      return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
-    }
-    case GLTANG_KIND_FLOAT: {
-      size_t n = gltang_vm_format_float(gltang_vm_float(v), digits, sizeof(digits));
-      return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
-    }
+    case GLTANG_KIND_INTEGER:
+      return render_number(sink, v, GLTANG_KIND_INTEGER);
+    case GLTANG_KIND_FLOAT:
+      return render_number(sink, v, GLTANG_KIND_FLOAT);
     case GLTANG_KIND_STRING:
       return gltang_sink_string(sink, v);
     case GLTANG_KIND_ARRAY: {
