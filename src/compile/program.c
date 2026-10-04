@@ -75,6 +75,70 @@ void gltang_program_free(GLTANG_Program * program) {
   gcu_free(program);
 }
 
+// FNV-1a over a stream of fields, each preceded by its length where it varies,
+// so that two programs cannot hash alike by shifting bytes between fields.
+static uint64_t mix_bytes(uint64_t hash, const void * data, size_t size) {
+  const unsigned char * bytes = data;
+  for (size_t i = 0; i < size; ++i) {
+    hash = (hash ^ bytes[i]) * UINT64_C(0x100000001b3);
+  }
+  return hash;
+}
+
+static uint64_t mix_u64(uint64_t hash, uint64_t value) {
+  for (int i = 0; i < 8; ++i) {
+    hash = (hash ^ ((value >> (8 * i)) & 0xFFu)) * UINT64_C(0x100000001b3);
+  }
+  return hash;
+}
+
+static uint64_t mix_string(uint64_t hash, const char * text) {
+  if (!text) {
+    return mix_u64(hash, UINT64_MAX);
+  }
+  size_t length = strlen(text);
+  return mix_bytes(mix_u64(hash, length), text, length);
+}
+
+uint64_t gltang_program_identity(const GLTANG_Program * program) {
+  uint64_t hash = UINT64_C(0xcbf29ce484222325);
+  hash = mix_string(hash, program->file);
+  hash = mix_u64(hash, program->function_count);
+  for (uint32_t f = 0; f < program->function_count; ++f) {
+    const GLTANG_Function * fn = &program->functions[f];
+    hash = mix_string(hash, fn->name);
+    hash = mix_u64(hash, fn->parameter_count);
+    hash = mix_u64(hash, fn->local_count);
+    hash = mix_u64(hash, fn->max_stack);
+    hash = mix_u64(hash, fn->frame_slots);
+    hash = mix_u64(hash, fn->code_count);
+    hash = mix_bytes(hash, fn->code, (size_t)fn->code_count * sizeof(uint32_t));
+    hash = mix_u64(hash, fn->line_count);
+    for (uint32_t i = 0; i < fn->line_count; ++i) {
+      hash = mix_u64(hash, ((uint64_t)fn->lines[i].pc << 32) | fn->lines[i].line);
+    }
+    for (uint32_t i = 0; fn->local_names && i < fn->local_count; ++i) {
+      hash = mix_string(hash, fn->local_names[i]);
+    }
+  }
+  hash = mix_u64(hash, program->constant_count);
+  for (uint32_t i = 0; i < program->constant_count; ++i) {
+    const GLTANG_Const * c = &program->constants[i];
+    hash = mix_u64(hash, (uint64_t)c->kind);
+    hash = mix_u64(hash, (uint64_t)c->integer);
+    uint64_t bits;
+    memcpy(&bits, &c->number, sizeof(bits));
+    hash = mix_u64(hash, bits);
+    hash = mix_u64(hash, c->block_size);
+    hash = mix_bytes(hash, c->block, c->block_size);
+  }
+  hash = mix_u64(hash, program->global_count);
+  for (uint32_t i = 0; program->global_names && i < program->global_count; ++i) {
+    hash = mix_string(hash, program->global_names[i]);
+  }
+  return hash;
+}
+
 void gltang_program_release(GLTANG_Program * program) {
   if (!program) {
     return;

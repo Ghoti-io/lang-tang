@@ -20,6 +20,8 @@
 #   08 a wrong tag on a compiled ADD   the frame differential, interpreter against JIT (testObserver)
 #   09 a skipped fuel charge in compiled code  the fuel-parity test (testJit)
 #   10 a missed write-back at a poll   the write-back test    (testJit)
+#   11 a host pointer left in a type's payload with no hook   the address scan of a snapshot (testSnapshot)
+#   12 a skipped output-buffer capture   the output-so-far test and the corpus sweep    (testSnapshot)
 #
 # The copy is of the working tree (sources, tests, corpus, documentation) and
 # nothing in the working tree is modified. Each patch is applied with `patch
@@ -28,7 +30,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 10); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 12); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --selftest  prove the script itself: a patch that applies to nothing fails
@@ -71,7 +73,7 @@ for arg in "$@"; do
   esac
 done
 
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back 11-host-pointer-no-hook 12-skipped-output-capture"
 SLOW="01-missing-root 02-missing-gc-store"
 
 cleanup() {
@@ -91,6 +93,7 @@ target_of() {
     01-*|02-*) echo "build/linux/release/apps/testExecute_complex" ;;
     03-*|05-*|08-*) echo "build/linux/release/apps/testObserver" ;;
     09-*|10-*) echo "build/linux/release/apps/testJit" ;;
+    11-*|12-*) echo "build/linux/release/apps/testSnapshot" ;;
     04-*) echo "build/linux/release/apps/testNative_gate" ;;
     06-*|07-*) echo "build/linux/release/apps/oracle/oracle_ctang build/linux/release/apps/testOracle" ;;
     selftest) echo "build/linux/release/apps/testObserver" ;;
@@ -109,6 +112,10 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
     10-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testJit --gtest_brief=1 --gtest_filter='Jit.AMissedWriteBack*') ;;
+    11-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
+    12-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.OutputSoFar*:SnapshotCorpus.EveryProgram*') ;;
     04-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/release/apps/testNative_gate --gtest_brief=1) ;;
     06-*|07-*)
@@ -124,6 +131,8 @@ name_of_test() {
     09-*) echo "testJit (the fuel-parity test)" ;;
     10-*) echo "testJit (the write-back test)" ;;
     04-*) echo "testNative_gate" ;;
+    11-*) echo "testSnapshot (the address scan)" ;;
+    12-*) echo "testSnapshot (the output-so-far test and the corpus sweep)" ;;
     06-*|07-*) echo "testOracle" ;;
   esac
 }

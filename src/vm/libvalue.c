@@ -47,10 +47,12 @@ static void native_trace(GRHEAP_Tracer * tracer, void * payload) {
   grheap_trace_word(tracer, &native->bound);
 }
 
-const GRHEAP_Type gltang_type_library = {"lang-tang library", sizeof(GLTANG_LibraryObject), NULL, NULL, NULL};
-const GRHEAP_Type gltang_type_native = {"lang-tang native function", sizeof(GLTANG_NativeObject), native_trace, NULL, NULL};
-const GRHEAP_Type gltang_type_template = {"lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL};
-const GRHEAP_Type gltang_type_rng = {"lang-tang generator", sizeof(GLTANG_RngObject), NULL, NULL, NULL};
+// A library, a native function and a template hold a pointer to a host object:
+// the hooks write its name and resolve it again (snapshot.c).
+const GRHEAP_Type gltang_type_library = {"lang-tang library", sizeof(GLTANG_LibraryObject), NULL, NULL, NULL, gltang_vm_library_snapshot, gltang_vm_library_restore};
+const GRHEAP_Type gltang_type_native = {"lang-tang native function", sizeof(GLTANG_NativeObject), native_trace, NULL, NULL, gltang_vm_native_snapshot, gltang_vm_native_restore};
+const GRHEAP_Type gltang_type_template = {"lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL, gltang_vm_template_snapshot, gltang_vm_template_restore};
+const GRHEAP_Type gltang_type_rng = {"lang-tang generator", sizeof(GLTANG_RngObject), NULL, NULL, NULL, NULL, NULL};
 
 static GLTANG_Value library_value(GLTANG_Execution * exec, const GLTANG_Library * library) {
   void * object;

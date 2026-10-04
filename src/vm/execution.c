@@ -438,6 +438,9 @@ const GRCORE_Key gltang_execution_key = {
   .phase = GRCORE_PHASE_NONE,
   .destroy = key_destroy,
   .poll = NULL,
+  .snapshot = gltang_vm_exec_snapshot,
+  .restore = gltang_vm_exec_restore,
+  .settle = gltang_vm_exec_settle,
 };
 
 static GLTANG_Result map_core_result(GRCORE_Result r) {

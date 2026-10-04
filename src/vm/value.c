@@ -61,14 +61,14 @@ static void map_store_trace(GRHEAP_Tracer * tracer, void * payload) {
   }
 }
 
-const GRHEAP_Type gltang_type_integer = {"lang-tang integer", sizeof(GLTANG_IntegerObject), NULL, NULL, NULL};
-const GRHEAP_Type gltang_type_float = {"lang-tang float", sizeof(GLTANG_FloatObject), NULL, NULL, NULL};
-const GRHEAP_Type gltang_type_string = {"lang-tang string", sizeof(GLTANG_StringBlock), NULL, NULL, NULL};
-const GRHEAP_Type gltang_type_array = {"lang-tang array", sizeof(GLTANG_ArrayObject), array_trace, NULL, NULL};
-const GRHEAP_Type gltang_type_array_store = {"lang-tang array storage", sizeof(GLTANG_ArrayStore), array_store_trace, NULL, NULL};
-const GRHEAP_Type gltang_type_map = {"lang-tang map", sizeof(GLTANG_MapObject), map_trace, NULL, NULL};
-const GRHEAP_Type gltang_type_map_store = {"lang-tang map storage", sizeof(GLTANG_MapStore), map_store_trace, NULL, NULL};
-const GRHEAP_Type gltang_type_error = {"lang-tang error", sizeof(GLTANG_ErrorObject), NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_integer = {"lang-tang integer", sizeof(GLTANG_IntegerObject), NULL, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_float = {"lang-tang float", sizeof(GLTANG_FloatObject), NULL, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_string = {"lang-tang string", sizeof(GLTANG_StringBlock), NULL, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_array = {"lang-tang array", sizeof(GLTANG_ArrayObject), array_trace, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_array_store = {"lang-tang array storage", sizeof(GLTANG_ArrayStore), array_store_trace, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_map = {"lang-tang map", sizeof(GLTANG_MapObject), map_trace, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_map_store = {"lang-tang map storage", sizeof(GLTANG_MapStore), map_store_trace, NULL, NULL, NULL, NULL};
+const GRHEAP_Type gltang_type_error = {"lang-tang error", sizeof(GLTANG_ErrorObject), NULL, NULL, NULL, NULL, NULL};
 
 // ---------------------------------------------------------------------------
 // The codec

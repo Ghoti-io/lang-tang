@@ -57,6 +57,7 @@
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/b/context.h>
 #include <ghoti.io/runtime-core/b/run.h>
+#include <ghoti.io/runtime-core/b/snapshot.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -590,6 +591,101 @@ GLTANG_API void gltang_buffer_free(void * buffer);
  */
 GLTANG_API uint64_t gltang_execution_unwound_frames(
     const GLTANG_Execution * execution);
+
+
+/**
+ * @brief A frozen image of an execution that is paused or has not started
+ *   (CAP-11): an immutable, reference-counted object that holds no host pointer
+ *   and may be restored any number of times, into executions on any thread,
+ *   concurrently, and may outlive the execution it came from.
+ *
+ * It is runtime-core's snapshot (the context's keys write their parts: the
+ * guest stack's frames, the heap's objects, and this engine's state), so
+ * `grcore_snapshot_retain` and the rest work on it too.
+ *
+ * *Captured:* the guest stack's frames, the heap's live objects with their
+ * stable IDs, the execution's state (`PAUSED` or `NEW`), its roots,
+ * temporaries and constants cache, where it paused, the output written so far
+ * and the error list (entries, chains and counts), and, by name, every
+ * library, native function and template the program holds. The JIT's code and
+ * feedback are not captured: the destination's own execution has its own, and a
+ * restored run is correct with or without it.
+ *
+ * *Not captured, supplied again by the host on the destination exactly as for
+ * a fresh run:* the group, the options and budgets (fuel used starts at zero in
+ * the restored context, and the limits are the destination's), the page
+ * provider and allocator, the port and requests, the program (the destination
+ * is created for the same program: a different one is refused, by a count of
+ * functions and a hash of the content), the libraries
+ * (::gltang_execution_set_libraries, before the restore: a library, native
+ * function or template the snapshot holds is found again by the library's name
+ * and the member's), the seed sequence, the name, the halt and logging
+ * switches, the statement polls and the JIT threshold. A generator
+ * `random.global` that had been created continues from where it was; one that
+ * had not is made from the destination's sequence when first used.
+ *
+ * *Not done:* a snapshot is an in-memory object. There is no byte format and
+ * no file.
+ */
+typedef GRCORE_Snapshot GLTANG_Snapshot;
+
+/**
+ * @brief Takes a snapshot of an execution.
+ *
+ * Allowed only when the execution is paused, or `NEW` and parked outside `run`,
+ * from the context's owning thread, with no host or native frame above `run`, no
+ * template call in flight and no open budget scope (AD-20); the heap must hold no
+ * C root (`grheap_root_add`), handle, pin or weak cell, and no root source may
+ * report a conservative range. A library, native function or template the
+ * program holds must be findable again by name: a library with no name, or a
+ * name that does not find that library, refuses the snapshot. A template that
+ * has already run must be a member of a library the execution can reach.
+ * Anything else is ::GLTANG_ERR_INVALID and nothing is changed or left
+ * allocated.
+ *
+ * @param execution The execution.
+ * @param out_snapshot Receives the snapshot, with a count of one. Written only
+ *   on success.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID as above or for a NULL argument;
+ *   ::GLTANG_ERR_LIMIT or ::GLTANG_ERR_OOM when an allocation failed.
+ */
+GLTANG_API GLTANG_Result gltang_snapshot_take(
+    GLTANG_Execution * execution, GLTANG_Snapshot ** out_snapshot);
+
+/**
+ * @brief Restores a snapshot into a `NEW` execution.
+ *
+ * The host creates the destination context, heap and execution as it would for
+ * a fresh run (the same program, the same engines registered in the same order, a
+ * heap with the same value codec), attaches the libraries, and calls this. If the
+ * snapshot was of a paused execution, the destination is then paused at the same
+ * place and `grcore_resume` carries on (give it fuel first if the destination's
+ * budget is smaller than what the run needs); if it was of a `NEW` one, the
+ * destination is `NEW` and `grcore_run` starts it.
+ *
+ * Instantiating charges the destination's memory budget like any allocation.
+ * Any failure, including a mismatch found part way, leaves the destination
+ * exactly as it was: a fresh, runnable execution.
+ *
+ * @param execution The destination, `NEW`.
+ * @param snapshot The snapshot.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, an execution
+ *   that is not `NEW`, a different program, engine table, set of keys or value
+ *   codec, a library, native function or template that does not resolve by name,
+ *   or a root layout that differs; ::GLTANG_ERR_LIMIT when the destination's
+ *   memory or depth budget was too small; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_snapshot_restore(
+    GLTANG_Execution * execution, const GLTANG_Snapshot * snapshot);
+
+/** @brief Adds a reference. Safe from any thread. NULL is a no-op. */
+GLTANG_API GLTANG_Snapshot * gltang_snapshot_retain(GLTANG_Snapshot * snapshot);
+
+/** @brief Drops a reference; at zero, frees the snapshot. Safe from any thread. */
+GLTANG_API void gltang_snapshot_release(GLTANG_Snapshot * snapshot);
+
+/** @brief The bytes the snapshot holds in all its parts; 0 for NULL. */
+GLTANG_API size_t gltang_snapshot_size(const GLTANG_Snapshot * snapshot);
 
 #ifdef __cplusplus
 }

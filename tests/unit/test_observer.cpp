@@ -653,10 +653,10 @@ void observe_reset(GRCORE_Context *, void * value, GRCORE_PollCall *) {
   ++f->polls;
 }
 
-const GRCORE_Key kKeyA = {"order A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_a};
-const GRCORE_Key kKeyBDependent = {"order B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_order_dependent};
-const GRCORE_Key kKeyBIndependent = {"independent B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_independent};
-const GRCORE_Key kKeyReset = {"reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, nullptr, observe_reset};
+const GRCORE_Key kKeyA = {"order A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_a, nullptr, nullptr, nullptr};
+const GRCORE_Key kKeyBDependent = {"order B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_order_dependent, nullptr, nullptr, nullptr};
+const GRCORE_Key kKeyBIndependent = {"independent B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, nullptr, decide_b_independent, nullptr, nullptr, nullptr};
+const GRCORE_Key kKeyReset = {"reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, nullptr, observe_reset, nullptr, nullptr, nullptr};
 
 Case shuffle_case() {
   Case c;
@@ -713,7 +713,7 @@ TEST(PhaseShuffle, TheShuffleReallyReordersTheHandlers) {
       [](GRCORE_Context *, void * value, GRCORE_PollCall *) {
         Probe * p = static_cast<Probe *>(value);
         p->order->push_back(p->id);
-      }};
+      }, nullptr, nullptr, nullptr};
   Case c = shuffle_case();
   auto run = [&](const RunConfig & rc) {
     std::vector<int> order;

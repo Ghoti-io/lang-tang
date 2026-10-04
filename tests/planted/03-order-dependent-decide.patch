@@ -32,9 +32,9 @@
 +  planted_a_ran = 0;
 +}
 +
-+static const GRCORE_Key planted_key_a = {"planted A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_a};
-+static const GRCORE_Key planted_key_b = {"planted B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_b};
-+static const GRCORE_Key planted_key_reset = {"planted reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, NULL, planted_reset};
++static const GRCORE_Key planted_key_a = {"planted A", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_a, NULL, NULL, NULL};
++static const GRCORE_Key planted_key_b = {"planted B", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_DECIDE, NULL, planted_b, NULL, NULL, NULL};
++static const GRCORE_Key planted_key_reset = {"planted reset", GRCORE_CARDINALITY_MANY, GRCORE_PHASE_ACT, NULL, planted_reset, NULL, NULL, NULL};
 +
  GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program * program, GLTANG_Execution ** out_execution) {
    if (!context || !program || !out_execution || !grcore_context_is_owner(context)) {

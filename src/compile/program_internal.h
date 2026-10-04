@@ -90,6 +90,14 @@ struct GLTANG_Program {
   GLTANG_Library * libraries;   ///< Retained; the second layer of a `use`. Set only while the program is unshared.
 };
 
+/**
+ * @brief A hash of everything that makes a program this program: its file, its
+ *   functions (code, lines, names, frame sizes), its constants and its global
+ *   names. Equal programs have equal hashes, so a snapshot can say which
+ *   program it was taken for; it is not a cryptographic digest.
+ */
+uint64_t gltang_program_identity(const GLTANG_Program * program);
+
 /** @brief Frees every part of a program and the program. */
 void gltang_program_free(GLTANG_Program * program);
 

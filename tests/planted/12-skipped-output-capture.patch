@@ -1,0 +1,18 @@
+# 12 a skipped output-buffer capture
+# defect: the snapshot is written as if the output so far were empty
+# caught by: the output-so-far test and the corpus sweep (testSnapshot)
+#
+--- a/src/vm/snapshot.c	2026-10-03 23:52:41.189936409 -0500
++++ b/src/vm/snapshot.c	2026-10-03 23:52:41.205936409 -0500
+@@ -491,7 +491,10 @@
+     }
+   }
+   // The output so far.
+-  const GLTANG_OutBuf * out = &exec->main_act.out;
++  /* planted: the output written so far is not captured, as if the buffer were
++     empty, so a restored run starts its output from nothing */
++  static const GLTANG_OutBuf planted_empty;
++  const GLTANG_OutBuf * out = &planted_empty;
+   uint64_t out_head[] = {out->length, out->committed, out->segment_count};
+   for (size_t i = 0; r == GRCORE_OK && i < 3; ++i) {
+     r = grcore_snapshot_writer_u64(w, out_head[i]);

@@ -242,6 +242,7 @@ void gltang_vm_set_result(GLTANG_Execution * exec, GLTANG_Value v, bool listed) 
 void gltang_vm_errors_free(GLTANG_Execution * exec) {
   for (size_t i = 0; i < exec->error_count; ++i) {
     gcu_allocator_free(exec->allocator, exec->errors[i].chain);
+    gcu_allocator_free(exec->allocator, exec->errors[i].text);
   }
   gcu_allocator_free(exec->allocator, exec->errors);
   exec->errors = NULL;

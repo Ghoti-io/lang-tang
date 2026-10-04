@@ -69,7 +69,9 @@
 #include <ghoti.io/runtime-core/b/request.h>
 #include <ghoti.io/runtime-core/b/roots.h>
 #include <ghoti.io/runtime-core/b/run.h>
+#include <ghoti.io/runtime-core/b/snapshot.h>
 #include <ghoti.io/runtime-heap/heap.h>
+#include <ghoti.io/runtime-heap/image.h>
 #include <ghoti.io/runtime-heap/roots.h>
 #include <ghoti.io/runtime-heap/store.h>
 #include <ghoti.io/runtime-heap/type.h>
@@ -309,6 +311,7 @@ struct GLTANG_NativeCall {
 typedef struct GLTANG_ErrorRecord {
   GLTANG_ErrorEntry entry;
   GLTANG_ErrorLink * chain;     ///< Owned; entry.chain_count links, outermost first.
+  char * text;                  ///< Owned, or NULL: the strings of a record a snapshot restored (the entry and the chain point into it).
 } GLTANG_ErrorRecord;
 
 /** @brief An output: bytes, and the typed segments that cover them. */
@@ -448,6 +451,18 @@ extern const uint32_t gltang_opcode_cost_table[GLTANG_OP_COUNT];
 #define GLTANG_F_PC 1u
 #define GLTANG_F_SP 2u
 #define GLTANG_F_FLAGS 3u
+
+// Snapshots (snapshot.c): the per-object hooks of the three host-pointer types,
+// and the execution key's hooks.
+GRHEAP_Result gltang_vm_library_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
+GRHEAP_Result gltang_vm_library_restore(GRCORE_Context * context, void * payload, GRHEAP_ImageReader * reader, void * user);
+GRHEAP_Result gltang_vm_native_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
+GRHEAP_Result gltang_vm_native_restore(GRCORE_Context * context, void * payload, GRHEAP_ImageReader * reader, void * user);
+GRHEAP_Result gltang_vm_template_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
+GRHEAP_Result gltang_vm_template_restore(GRCORE_Context * context, void * payload, GRHEAP_ImageReader * reader, void * user);
+GRCORE_Result gltang_vm_exec_snapshot(GRCORE_Context * context, void * value, GRCORE_SnapshotWriter * writer);
+GRCORE_Result gltang_vm_exec_restore(GRCORE_Context * context, void * value, GRCORE_SnapshotReader * reader, void * env, GRCORE_RestoreMode mode);
+GRCORE_Result gltang_vm_exec_settle(GRCORE_Context * context, void * value, void * env, GRCORE_SettleMode mode);
 
 /** @brief The engine's key: the execution is the context's keyed state. */
 extern const GRCORE_Key gltang_execution_key;
