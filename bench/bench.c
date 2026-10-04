@@ -37,7 +37,7 @@
  * that the cost of a poll can be read from the difference, and a small function
  * run once interpreted and once with a threshold of one, the difference being
  * the compile; the cases exist only when the library has the JIT), and of the opt-in statement poll (a loop of four statements
- * an iteration with statement polls off, and on with nothing pending). An engine case's unit is one run of a fixed program; the
+ * an iteration with statement polls off, and on with nothing pending), and of snapshots (the time from creating a context to its being paused right after a heavy prologue, started from scratch and started by restoring a snapshot taken there; CAP-11). An engine case's unit is one run of a fixed program; the
  * clock covers the run and not the building or the tearing down of the context.
  *
  * The calibration case is a fixed amount of integer work that touches no
@@ -513,6 +513,107 @@ static uint64_t small_function_compiled_run(uint64_t iterations, double * elapse
 }
 #endif
 
+/* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
+
+/* A program with a heavy prologue: a table of 20,000 integers and a map of
+ * 2,000 entries, built by loops, and then a long loop that reads the table.
+ * The host's ready state is "the prologue has run": the context is paused right
+ * after it, which is what a snapshot is for. A fuel budget that lands just
+ * after the prologue is the cost of a copy of the program that stops after it. */
+static const char snapshot_prologue[] =
+  "table = [];\n"
+  "index = {:};\n"
+  "for (i = 0; i < 20000; i += 1) { table[i] = i * 7; }\n"
+  "for (j = 0; j < 2000; j += 1) { index[\"k\" + (j as string)] = [j, j * j]; }\n"
+  "total = 0;\n";
+static const char snapshot_tail[] = "for (k = 0; k < 1000000; k += 1) { total += table[k % 20000]; }\ntotal;";
+static const char snapshot_short_tail[] = "for (k = 0; k < 1; k += 1) { total += table[k]; }\ntotal;";
+
+static uint64_t prologue_fuel(void) {
+  char source[1024];
+  snprintf(source, sizeof(source), "%s%s", snapshot_prologue, snapshot_short_tail);
+  GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
+  Engine e;
+  engine_open(&e, program, GRCORE_UNLIMITED);
+  GRCORE_Outcome outcome;
+  if (grcore_run(e.context, gltang_execution_entry, e.execution, &outcome) != GRCORE_OK || outcome != GRCORE_OUTCOME_FINISHED) {
+    setup_failed("the prologue calibration");
+  }
+  uint64_t fuel = grcore_context_fuel_used(e.context);
+  engine_close(&e);
+  gltang_program_release(program);
+  return fuel;
+}
+
+/* One start from scratch: a context, a heap and an execution are made, and the
+ * program is run until it pauses right after the prologue. An iteration is one
+ * start, from creating the context to being paused at the ready point. */
+static uint64_t start_scratch_run(uint64_t iterations, double * elapsed) {
+  char source[1024];
+  snprintf(source, sizeof(source), "%s%s", snapshot_prologue, snapshot_tail);
+  GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
+  uint64_t fuel = prologue_fuel();
+  uint64_t sink = 0;
+  double total = 0.0;
+  for (uint64_t i = 0; i < iterations; i++) {
+    double start = now_ns();
+    Engine e;
+    engine_open(&e, program, fuel);
+    GRCORE_Outcome outcome;
+    if (grcore_run(e.context, gltang_execution_entry, e.execution, &outcome) != GRCORE_OK || outcome != GRCORE_OUTCOME_PAUSED) {
+      setup_failed("the start from scratch");
+    }
+    total += now_ns() - start;
+    sink += grcore_context_fuel_used(e.context);
+    engine_close(&e);
+  }
+  *elapsed = total;
+  gltang_program_release(program);
+  return sink;
+}
+
+/* One start from a snapshot taken at that ready point (once, outside the
+ * clock): a context, a heap and an execution are made and the snapshot restored
+ * into them. The same iteration, from creating the context to being paused at
+ * the ready point. */
+static uint64_t start_snapshot_run(uint64_t iterations, double * elapsed) {
+  char source[1024];
+  snprintf(source, sizeof(source), "%s%s", snapshot_prologue, snapshot_tail);
+  GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
+  uint64_t fuel = prologue_fuel();
+  Engine origin;
+  engine_open(&origin, program, fuel);
+  GRCORE_Outcome outcome;
+  if (grcore_run(origin.context, gltang_execution_entry, origin.execution, &outcome) != GRCORE_OK || outcome != GRCORE_OUTCOME_PAUSED) {
+    setup_failed("the origin of the snapshot");
+  }
+  GLTANG_Snapshot * snapshot = NULL;
+  if (gltang_snapshot_take(origin.execution, &snapshot) != GLTANG_OK) {
+    setup_failed("the snapshot");
+  }
+  uint64_t sink = gltang_snapshot_size(snapshot);
+  double total = 0.0;
+  for (uint64_t i = 0; i < iterations; i++) {
+    double start = now_ns();
+    Engine e;
+    engine_open(&e, program, GRCORE_UNLIMITED);
+    if (gltang_snapshot_restore(e.execution, snapshot) != GLTANG_OK) {
+      setup_failed("the start from the snapshot");
+    }
+    total += now_ns() - start;
+    if (grcore_context_state(e.context) != GRCORE_CONTEXT_PAUSED) {
+      setup_failed("the restored context is not paused");
+    }
+    sink += (uint64_t)i;
+    engine_close(&e);
+  }
+  *elapsed = total;
+  gltang_snapshot_release(snapshot);
+  engine_close(&origin);
+  gltang_program_release(program);
+  return sink;
+}
+
 static const Case cases[] = {
     {"calibration", calibration_run, 200u * 1000u * 1000u, 1000u * 1000u},
     {"parse-small-script", parse_small_script_run, 100000u, 100u},
@@ -532,6 +633,8 @@ static const Case cases[] = {
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},
     {"run-statements-1000-polls-on", statements_on_run, 5000u, 5u},
+    {"start-scratch", start_scratch_run, 100u, 2u},
+    {"start-snapshot", start_snapshot_run, 2000u, 2u},
 #ifdef GLTANG_WITH_JIT
     {"jit-loop-10M-interpreted", jit_loop_interpreted_run, 3u, 1u},
     {"jit-loop-10M-compiled", jit_loop_compiled_run, 10u, 1u},
