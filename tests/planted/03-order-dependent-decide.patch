@@ -4,7 +4,7 @@
 #
 --- a/src/vm/execution.c
 +++ b/src/vm/execution.c
-@@ -437,6 +437,34 @@
+@@ -449,6 +449,34 @@
    }
  }
  
@@ -39,11 +39,10 @@
  GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program * program, GLTANG_Execution ** out_execution) {
    if (!context || !program || !out_execution || !grcore_context_is_owner(context)) {
      return GLTANG_ERR_INVALID;
-@@ -522,6 +550,15 @@
-     gltang_program_release(exec->program);
+@@ -535,6 +563,15 @@
      gcu_allocator_free(allocator, exec);
      return result;
-+  }
+   }
 +  /* planted: two DECIDE handlers whose combined vote depends on the order
 +     they run in. B pauses unless A has already run in this poll, so in
 +     registration order nothing happens and under the phase shuffle B
@@ -52,6 +51,7 @@
 +      grcore_context_register(context, &planted_key_b, exec) != GRCORE_OK ||
 +      grcore_context_register(context, &planted_key_reset, exec) != GRCORE_OK) {
 +    /* the context is destroyed by the caller; nothing to undo here */
-   }
-   *out_execution = exec;
-   return GLTANG_OK;
++  }
+ #ifdef GLTANG_WITH_JIT
+   // Last, and never a reason to refuse the execution: without the JIT's state
+   // and its registration the threshold stays 0 and the interpreter runs alone.

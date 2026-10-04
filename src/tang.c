@@ -44,6 +44,14 @@
  * run, one `template:file:line: message` an entry, with the chain of template
  * calls above it indented under it.
  *
+ * `--jit-threshold N` (story 15) sets how many polls a function makes before the
+ * baseline JIT compiles it (0 turns the JIT off for the run; the default is the
+ * library's). The command refuses it when the library was built without the JIT.
+ * Nothing observable changes with it: the output, the errors and the fuel a
+ * program is charged are the interpreter's. `--jit-stats` writes the counters of
+ * what the JIT did to stderr after the run, the way `--errors` writes the error
+ * list; a scripted debug session reads it to show that compiled code ran.
+ *
  * `--dap` makes the command a host of the debugger (story 13): the Debug Adapter
  * Protocol is spoken on stdin and stdout, so the rendered output of the run goes
  * to stderr instead, and the source must come from a file or `--evaluate`. The
@@ -122,6 +130,12 @@ static void print_help_text(void) {
     "                                or --evaluate, and not --tree. A --fuel pause is\n"
     "                                shown to the client once; the next continue ends the\n"
     "                                run (exit status 6)\n"
+    "  --jit-threshold N             Compile a function to machine code after N polls\n"
+    "                                (0: never; default %u). Only in a tang built with\n"
+    "                                the JIT; the output, the errors and the fuel are\n"
+    "                                the same either way\n"
+    "  --jit-stats                   After the run, write what the JIT did to stderr\n"
+    "                                (one line of counters; all zero without the JIT)\n"
     "  --cleanup, -c                 Accepted for ctang compatibility; this\n"
     "                                command always releases what it allocates\n"
     "  --help, -h                    Display this help message\n"
@@ -131,7 +145,7 @@ static void print_help_text(void) {
     "5 paused at a poll (reported on stderr); 6 unwound by a limit;\n"
     "7 the runtime could not be set up for a reason other than memory;\n"
     "8 ended by --halt-on-error.\n",
-    DEFAULT_CALL_DEPTH);
+    DEFAULT_CALL_DEPTH, (unsigned)GLTANG_JIT_DEFAULT_THRESHOLD);
 }
 
 
@@ -194,6 +208,9 @@ typedef struct Options {
   bool halt_on_error;
   bool show_errors;
   bool dap;
+  bool has_jit_threshold;
+  uint64_t jit_threshold;
+  bool show_jit_stats;
 } Options;
 
 /** Writes the error list to stderr: `template:file:line: message`, then the chain, indented. */
@@ -418,6 +435,9 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   if (configured == GLTANG_OK) {
     configured = gltang_execution_set_halt_on_error(execution, options->halt_on_error);
   }
+  if (configured == GLTANG_OK && options->has_jit_threshold) {
+    configured = gltang_execution_set_jit_threshold(execution, (uint32_t)options->jit_threshold);
+  }
   if (configured == GLTANG_OK && options->dap) {
     // A line breakpoint and a step can only stop where the engine polls.
     configured = gltang_execution_set_statement_polls(execution, true);
@@ -493,6 +513,15 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   if (options->show_errors) {
     write_errors(execution);
   }
+  if (options->show_jit_stats) {
+    GLTANG_JitStats stats;
+    if (gltang_execution_jit_stats(execution, &stats) == GLTANG_OK) {
+      fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu\n",
+        (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
+        (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
+        (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls);
+    }
+  }
 #ifdef GLTANG_WITH_DEBUG
   if (options->dap) {
     debug_host_finish(&debug, name, status);
@@ -566,6 +595,17 @@ int main(int argc, const char * argv[]) {
       options.has_seed = options.has_seed || is_seed;
       ++i;
     }
+    else if (!strcmp(argv[i], "--jit-threshold")) {
+      if (i + 1 >= argc || !parse_count(argv[i + 1], &options.jit_threshold) || options.jit_threshold > UINT32_MAX) {
+        fprintf(stderr, "tang: %s needs a number\n", argv[i]);
+        return EXIT_USAGE;
+      }
+      options.has_jit_threshold = true;
+      ++i;
+    }
+    else if (!strcmp(argv[i], "--jit-stats")) {
+      options.show_jit_stats = true;
+    }
     else if (!strcmp(argv[i], "--halt-on-error")) {
       options.halt_on_error = true;
     }
@@ -596,6 +636,10 @@ int main(int argc, const char * argv[]) {
   }
   if (is_script && is_template) {
     fprintf(stderr, "tang: give either --script or --template, not both\n");
+    return EXIT_USAGE;
+  }
+  if (options.has_jit_threshold && !gltang_jit_built()) {
+    fprintf(stderr, "tang: --jit-threshold is not available: this tang was built without the JIT (JIT=no)\n");
     return EXIT_USAGE;
   }
   if (options.dap) {

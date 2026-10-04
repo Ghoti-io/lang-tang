@@ -59,13 +59,14 @@ struct Tracker {
   long calls = 0;
   long fail_at = 0;     ///< 0: never.
   bool fired = false;
+  bool fail_protect = false;  ///< Refuse to change a page's protection (compiled code cannot be made executable).
   // The bytes the group holds from the allocator and from the page provider,
   // now and at the most. The native gate reads the peak as the work a run did
   // with memory, a counter the test owns.
   size_t live_bytes = 0;
   size_t peak_bytes = 0;
   GRCORE_Allocator allocator;
-  GRCORE_PageProvider pages;
+  GRCORE_PageProvider pages = {};
   const GRCORE_PageProvider * base_pages = grcore_page_provider_default();
 
   Tracker() {
@@ -78,6 +79,9 @@ struct Tracker {
     pages.page_size = base_pages->page_size;
     pages.map = &Tracker::do_map;
     pages.unmap = &Tracker::do_unmap;
+    // Compiled code is made executable through the provider (the baseline JIT),
+    // so a provider that cannot change protection would refuse every compile.
+    pages.protect = base_pages->protect ? &Tracker::do_protect : nullptr;
   }
 
   bool should_fail() {
@@ -160,6 +164,14 @@ struct Tracker {
       t->grew(size);
     }
     return p;
+  }
+
+  static bool do_protect(void * ctx, void * p, size_t size, GRCORE_PageAccess access) {
+    Tracker * t = static_cast<Tracker *>(ctx);
+    if (t->fail_protect) {
+      return false;
+    }
+    return t->base_pages->protect(t->base_pages->ctx, p, size, access);
   }
 
   static void do_unmap(void * ctx, void * p, size_t size) {
@@ -253,11 +265,67 @@ struct Config {
   int torture = -1;
   int verify = -1;
   int moving_stack = -1;
+  /// The baseline JIT's threshold (polls before a function tiers up), three-way
+  /// as the instruments are: -1 takes GLTANG_TEST_JIT_THRESHOLD from the
+  /// environment (and the library's default when that is unset), 0 forces
+  /// tier-up off and a positive number sets it. A build without the JIT
+  /// ignores all three: the setter says so and the run is the interpreter's.
+  long jit_threshold = -1;
+  uint64_t native_depth = GRCORE_UNLIMITED;  ///< The native-depth budget (a compiled call is one native activation).
 };
 
 inline bool moving_stack_requested() {
   const char * v = std::getenv("GLTANG_TEST_MOVING_STACK");
   return v && *v && std::strcmp(v, "0") != 0;
+}
+
+/// GLTANG_TEST_JIT_THRESHOLD=<n>: every harness-made execution gets this
+/// threshold, which is how a whole suite is run with every function tiering up
+/// at its first poll (n = 1). Returns -1 when it is unset or empty.
+inline long jit_threshold_requested() {
+  const char * v = std::getenv("GLTANG_TEST_JIT_THRESHOLD");
+  if (!v || !*v) {
+    return -1;
+  }
+  char * end = nullptr;
+  long n = std::strtol(v, &end, 10);
+  return end && !*end && n >= 0 ? n : -1;
+}
+
+/// Totals of what the JIT did across every harness-made execution of this
+/// process, printed at exit when GLTANG_TEST_JIT_REPORT is set: the way to see
+/// that a suite run with GLTANG_TEST_JIT_THRESHOLD=1 was not vacuous.
+struct JitTotals {
+  GLTANG_JitStats sum = {};
+  uint64_t executions = 0;
+  void add(const GLTANG_JitStats & st) {
+    ++executions;
+    sum.functions_compiled += st.functions_compiled;
+    sum.compile_failures += st.compile_failures;
+    sum.functions_discarded += st.functions_discarded;
+    sum.entries += st.entries;
+    sum.returns += st.returns;
+    sum.deopts += st.deopts;
+    sum.refused_pauses += st.refused_pauses;
+    sum.refused_unwinds += st.refused_unwinds;
+    sum.slow_polls += st.slow_polls;
+  }
+  ~JitTotals() {
+    if (std::getenv("GLTANG_TEST_JIT_REPORT")) {
+      std::fprintf(stderr, "jit report: %llu executions, %llu compiled, %llu failures, %llu discarded, %llu entries, %llu returns, %llu deopts, %llu refused pauses, %llu refused unwinds, %llu slow polls\n",
+        (unsigned long long)executions, (unsigned long long)sum.functions_compiled, (unsigned long long)sum.compile_failures,
+        (unsigned long long)sum.functions_discarded, (unsigned long long)sum.entries, (unsigned long long)sum.returns,
+        (unsigned long long)sum.deopts, (unsigned long long)sum.refused_pauses, (unsigned long long)sum.refused_unwinds,
+        (unsigned long long)sum.slow_polls);
+    }
+  }
+};
+inline JitTotals & jit_totals() {
+  static JitTotals totals;
+  return totals;
+}
+inline bool jit_report_requested() {
+  return std::getenv("GLTANG_TEST_JIT_REPORT") != nullptr;
 }
 
 inline bool torture_requested() {
@@ -326,6 +394,7 @@ class Context {
       grcore_options_set_memory_bytes(options, config.memory_bytes);
       grcore_options_set_memory_reserve(options, config.memory_reserve);
       grcore_options_set_guest_depth(options, config.calls == GRCORE_UNLIMITED ? config.calls : config.calls + 1u);
+      grcore_options_set_native_depth(options, config.native_depth);
       if (grcore_context_create(group, options, &context) != GRCORE_OK) {
         created = GLTANG_ERR_OOM;
         break;
@@ -357,6 +426,14 @@ class Context {
       if (config.moving_stack > 0 || (config.moving_stack < 0 && moving_stack_requested())) {
         grcore_stack_set_always_move(grcore_context_stack(context), true);
       }
+      {
+        long threshold = config.jit_threshold >= 0 ? config.jit_threshold : jit_threshold_requested();
+        if (threshold >= 0) {
+          // UNSUPPORTED in a build without the JIT, which is the right answer
+          // for a suite that asks for it there: the run is the interpreter's.
+          (void)gltang_execution_set_jit_threshold(execution, static_cast<uint32_t>(threshold));
+        }
+      }
     } while (false);
     grheap_options_destroy(heap_options);
     grcore_options_destroy(options);
@@ -371,6 +448,10 @@ class Context {
 
   /// Destroys the context and the group, and checks that nothing is left.
   void destroy() {
+    if (execution && jit_report_requested()) {
+      GLTANG_JitStats st = jit_stats();
+      jit_totals().add(st);
+    }
     gltang_library_release(root);
     root = nullptr;
     if (context && heap) {
@@ -397,6 +478,16 @@ class Context {
   }
 
   bool ok() const { return created == GLTANG_OK && execution != nullptr; }
+
+  /// What the baseline JIT did for this execution (all zero without it).
+  GLTANG_JitStats jit_stats() const {
+    GLTANG_JitStats stats;
+    std::memset(&stats, 0, sizeof stats);
+    if (execution) {
+      (void)gltang_execution_jit_stats(execution, &stats);
+    }
+    return stats;
+  }
 
   /// The execution's unnamed library, made on first use and attached by the
   /// first run. A test adds natives, templates and sub-libraries to it.

@@ -409,6 +409,16 @@ struct GLTANG_Execution {
   uint32_t current_offset;
   uint64_t pending_fuel;        ///< Charged to the context at the next poll.
   uint64_t frames_unwound;
+
+#ifdef GLTANG_WITH_JIT
+  // The baseline JIT (src/jit/, story 15). Per-execution, so feedback lives
+  // with the context (AD-22). `jit_threshold` is 0 when tier-up is off, which
+  // is also what a failed attach leaves: the JIT is an optimisation, never a
+  // reason for an execution not to exist.
+  struct GLTANG_Jit * jit;
+  uint32_t jit_threshold;
+  GLTANG_JitStats jit_stats;
+#endif
 };
 
 /**
@@ -456,6 +466,9 @@ typedef enum {
 
 /** @brief Charges the pending fuel to the context. */
 void gltang_vm_flush_fuel(GLTANG_Execution * exec);
+
+/** @brief The execution registered in a context, or NULL. */
+GLTANG_Execution * gltang_vm_execution_of(const GRCORE_Context * context);
 
 /**
  * @brief The runtime poll for a native (AD-21): flushes fuel, charges `work`,

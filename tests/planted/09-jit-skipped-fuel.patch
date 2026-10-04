@@ -1,0 +1,16 @@
+# 09 a skipped fuel charge in compiled code
+# defect: a compiled LOAD_LOCAL is not charged its fuel, so a budget runs out at
+# another poll than the interpreter's and the totals differ
+# caught by: the fuel-parity test (testJit)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -460,7 +460,7 @@
+       break;
+     case GLTANG_OP_LOAD_LOCAL:
+       B(grjit_builder_move(c->b, T[d], V(c->local[a])));
+-      add_fuel(c, cost);
++      /* planted: no add_fuel(c, cost) */
+       break;
+     case GLTANG_OP_STORE_LOCAL:
+       B(grjit_builder_move(c->b, c->local[a], V(T[d - 1u])));

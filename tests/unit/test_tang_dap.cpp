@@ -654,6 +654,108 @@ TEST(TangDap, MisuseIsAUsageError) {
   EXPECT_EQ(with_tree.out, "");
 }
 
+#ifdef GLTANG_WITH_JIT
+
+namespace {
+
+// A function that is hot and called twice, with a stop between the calls where
+// the client sets a breakpoint inside it.
+const char * const kHot =
+    "function f(n) {\n"            // 1
+    "  s = 0;\n"                   // 2
+    "  i = 0;\n"                   // 3
+    "  while (i < n) {\n"          // 4
+    "    s = s + i;\n"             // 5
+    "    i = i + 1;\n"             // 6
+    "  }\n"                        // 7
+    "  return s;\n"                // 8
+    "}\n"                          // 9
+    "print(f(3));\n"               // 10
+    "print(\"mid\");\n"            // 11
+    "print(f(4));\n"               // 12
+    "print(\"end\");\n";           // 13
+
+struct Played {
+  std::string transcript;  // what the client saw, stop by stop
+  std::string err;         // the run's output and the jit line
+  int status = -1;
+};
+
+// One scripted session: stop at line 11 (between the calls, f already compiled
+// when the JIT is on), set a breakpoint on line 5 inside f, continue into the
+// second call, step over twice, step out, and continue until the end.
+Played play_hot(const std::string & file, long jit_threshold) {
+  Tang tang({"--script", "--dap", "--jit-threshold", std::to_string(jit_threshold), "--jit-stats", file});
+  tang.configure(file, {11});
+  Played out;
+  auto stop = [&](const char * what) {
+    std::string event = tang.event("stopped");
+    EXPECT_FALSE(event.empty()) << what;
+    Tang::Where at = tang.where();
+    out.transcript += std::string(what) + ": " + (event.find("\"reason\":\"breakpoint\"") != std::string::npos ? "breakpoint" : "step") + " line " +
+        std::to_string(at.line) + " frames " + std::to_string(at.frames) + " " + tang.locals(at.id) + "\n";
+  };
+  stop("first stop");
+  std::string reply = tang.request("setBreakpoints", "{\"source\":{\"path\":\"" + file + "\"},\"breakpoints\":[{\"line\":5}]}");
+  EXPECT_NE(reply.find("\"success\":true"), std::string::npos) << reply;
+  EXPECT_NE(tang.request("continue", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
+  stop("inside f");
+  for (const char * step : {"next", "next", "stepOut"}) {
+    EXPECT_NE(tang.request(step, "{\"threadId\":1}").find("\"success\":true"), std::string::npos) << step;
+    stop(step);
+  }
+  EXPECT_NE(tang.request("continue", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
+  std::string next = tang.next_stop_or_end();
+  out.transcript += "after stepping out, continue: " + next + "\n";
+  if (next == "stopped") {
+    Tang::Where at = tang.where();
+    out.transcript += "  line " + std::to_string(at.line) + " frames " + std::to_string(at.frames) + "\n";
+    reply = tang.request("setBreakpoints", "{\"source\":{\"path\":\"" + file + "\"},\"breakpoints\":[]}");
+    EXPECT_NE(reply.find("\"success\":true"), std::string::npos) << reply;
+    tang.request("continue", "{\"threadId\":1}");
+    next = tang.next_stop_or_end();
+    out.transcript += "then: " + next + "\n";
+  }
+  tang.request("disconnect");
+  Result result = tang.finish();
+  out.err = result.err;
+  out.status = result.status;
+  return out;
+}
+
+}  // namespace
+
+TEST(TangDap, ABreakpointInCompiledCodeStopsAtTheRightLineWithTheRightLocalsAndStepsLikeTheInterpreter) {
+  TempDir dir;
+  std::string file = dir.write("hot.tang", kHot);
+  Played interpreter = play_hot(file, 0);
+  Played compiled = play_hot(file, 1);
+  EXPECT_EQ(interpreter.status, 0);
+  EXPECT_EQ(compiled.status, 0);
+  // The same session, stop for stop: the lines, the frame counts and the locals.
+  EXPECT_EQ(compiled.transcript, interpreter.transcript);
+  // And it is the session it should be: the stop inside f is on line 5 with the
+  // second call's arguments, and a step over goes to line 6.
+  if (std::getenv("GLTANG_DAP_VERBOSE")) {
+    std::printf("%s", compiled.transcript.c_str());
+  }
+  EXPECT_NE(compiled.transcript.find("first stop: breakpoint line 11 frames 1"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("inside f: breakpoint line 5 frames 2"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("\"name\":\"n\",\"value\":\"4\""), std::string::npos) << compiled.transcript;
+  // The output is the plain run's, on stderr with the JIT line after it.
+  EXPECT_EQ(compiled.err.substr(0, compiled.err.find("jit:")), interpreter.err.substr(0, interpreter.err.find("jit:")));
+  EXPECT_EQ(interpreter.err.substr(0, interpreter.err.find("jit:")), "3mid6end");
+  // The stats show compiled entries, and show them where the stops were: f was
+  // entered in compiled code, and a poll inside it paused the run.
+  size_t at = compiled.err.find("jit: compiled ");
+  ASSERT_NE(at, std::string::npos) << compiled.err;
+  EXPECT_EQ(compiled.err.find("entries 0,"), std::string::npos) << compiled.err;
+  EXPECT_EQ(compiled.err.find("pauses 0,"), std::string::npos) << "a stop inside compiled code paused the run there: " << compiled.err;
+  EXPECT_NE(interpreter.err.find("compiled 0, failed 0, discarded 0, entries 0,"), std::string::npos) << interpreter.err;
+}
+
+#endif  // GLTANG_WITH_JIT
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

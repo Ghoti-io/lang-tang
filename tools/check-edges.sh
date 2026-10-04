@@ -4,9 +4,10 @@
 #
 # AD-2: lang-tang depends on cutil and unicode (what the ported parser uses),
 # and may depend on runtime-core and runtime-heap when execution arrives. It
-# never reaches codegen (runtime-jit), the debugger (runtime-debug), or ctang:
-# "any engine library -> ctang, except under test/". It also includes nothing
-# of ctang's bytecode machinery: nothing is built on `binary.h` (AD-9).
+# reaches codegen (runtime-jit) only in the JIT arm, below, and never the
+# debugger (runtime-debug) or ctang: "any engine library -> ctang, except under
+# test/". It also includes nothing of ctang's bytecode machinery: nothing is
+# built on `binary.h` (AD-9).
 #
 # The one exception is the hosts. The library (the shared and the static
 # object, everything under src/ and include/ but the `tang` command) never
@@ -21,6 +22,19 @@
 # scanned at all (it is where the oracle may include ctang), so a test runner
 # may link runtime-debug for its framing helpers; that is a host too, and no
 # test binary is named to this gate.
+#
+# The baseline JIT (story 15) is the one conditional edge. With JIT=yes the
+# library depends on runtime-jit, and only the files under src/jit/ may include
+# it, and the shared object (and a program linking it) may have it in NEEDED;
+# with JIT=no no include and no NEEDED entry of runtime-jit is allowed in
+# anything the arm builds, so the interpreter-only arm is shown not to reach the
+# code generator (AD-2). The files under src/jit/ are in the tree but not in
+# that arm (the Makefile does not compile them), so that arm's include scan
+# does not read them; every other file, the public headers and the link lines
+# are read, and one of them naming runtime-jit is an edge. Which arm is being checked comes from GLTANG_EDGES_JIT (yes or no,
+# default no: the stricter reading), which the Makefile sets from JIT. Nothing
+# else changes: the JIT build still may not include runtime-debug outside the
+# two hosts, and the engine never reaches runtime-debug.
 #
 # The rule is checked twice because the two checks see different things: a
 # manifest and a clean #include list can both be right while the shared object
@@ -56,6 +70,19 @@ mode="${1:?$usage}"
 shift
 
 ALLOWED='cutil|unicode|runtime-core|runtime-heap|lang-tang'
+JIT_MODE="${GLTANG_EDGES_JIT:-no}"
+case "$JIT_MODE" in
+  yes | no) ;;
+  *) printf 'check-edges: GLTANG_EDGES_JIT must be yes or no, not %s\n' "$JIT_MODE" >&2; exit 2 ;;
+esac
+# runtime-jit: a JIT=yes edge, from src/jit/ alone (an include) or from any
+# object (a NEEDED entry: the shared library and the programs that link it).
+is_jit_source() {
+  case "$1" in
+    src/jit/*) return 0 ;;
+  esac
+  return 1
+}
 # What a host may include or link as well. The link set is the include set and
 # what text requires (its own NEEDED entries are chron and regex).
 HOST_INCLUDES='runtime-debug|text'
@@ -95,7 +122,12 @@ $found"
       exit 1
     fi
     count=0
+    skipped=0
     for f in $files; do
+      if [ "$JIT_MODE" = no ] && is_jit_source "${f#"$target"/}"; then
+        skipped=$((skipped + 1))
+        continue
+      fi
       count=$((count + 1))
       # Nothing is built on ctang's binary.h, however it is spelled.
       binary="$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"][^>"]*binary\.h[>"]' "$f" || true)"
@@ -116,6 +148,9 @@ $found"
         if is_host_source "${f#"$target"/}" && printf '%s\n' "$lib" | grep -qE "^($HOST_INCLUDES)\$"; then
           continue
         fi
+        if [ "$JIT_MODE" = yes ] && [ "$lib" = runtime-jit ] && is_jit_source "${f#"$target"/}"; then
+          continue
+        fi
         printf 'check-edges: forbidden edge lang-tang -> %s: %s:%s: %s\n' \
           "$lib" "$f" "$n" "${line#*:}" >&2
         status=1
@@ -126,8 +161,8 @@ HITS
     if [ "$status" -ne 0 ]; then
       exit 1
     fi
-    printf 'check-edges: %d source files, every #include of another Ghoti library is cutil, unicode, runtime-core, runtime-heap or this library (the hosts src/tang.c and examples/web_server.c may also include runtime-debug and text), and none is binary.h\n' \
-      "$count"
+    printf 'check-edges: %d source files, every #include of another Ghoti library is cutil, unicode, runtime-core, runtime-heap or this library (the hosts src/tang.c and examples/web_server.c may also include runtime-debug and text; with JIT=yes src/jit/ may include runtime-jit, with JIT=no nothing does and the %d files of src/jit/ are not in the arm; this run: JIT=%s), and none is binary.h\n' \
+      "$count" "$skipped" "$JIT_MODE"
     ;;
 
   --links)
@@ -194,6 +229,9 @@ $t"
             if is_host_program "$so" && printf '%s\n' "$lib" | grep -qE "^($HOST_LINKS)(-.*)?\$"; then
               continue
             fi
+            if [ "$JIT_MODE" = yes ] && printf '%s\n' "$lib" | grep -qE "^runtime-jit(-.*)?\$"; then
+              continue
+            fi
             printf 'check-edges: forbidden edge lang-tang -> %s: %s has NEEDED %s\n' \
               "$lib" "$so" "$dep" >&2
             status=1
@@ -204,8 +242,8 @@ $t"
     if [ "$status" -ne 0 ]; then
       exit 1
     fi
-    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library (the tang and web_server programs may also link runtime-debug and text)\n' \
-      "$count"
+    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library (the tang and web_server programs may also link runtime-debug and text; runtime-jit only with JIT=yes; this run: JIT=%s)\n' \
+      "$count" "$JIT_MODE"
     ;;
 
   *)

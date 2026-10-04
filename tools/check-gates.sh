@@ -23,6 +23,10 @@
 
 set -u
 
+# The gates are shown in both of the JIT arms below, by setting the variable
+# per check; the ambient value must not decide a check that does not set it.
+unset GLTANG_EDGES_JIT
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
 FIX="$ROOT/tests/gates"
@@ -95,6 +99,27 @@ expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"
 
+printf 'check-stamps\n'
+# The real Makefile with `JIT=$(JIT)` taken out of its stamps: the gate must
+# name JIT. The unmodified Makefile is the control.
+expect_pass 'stamps/control (the Makefile as it is)' python3 "$HERE/check-stamps.py" "$ROOT/Makefile"
+sed 's/ JIT=\$(JIT)//g' "$ROOT/Makefile" > "$work/Makefile.nojit-stamp"
+expect_fail 'stamps/planted (no stamp records JIT)' 'does not record $(JIT)' python3 "$HERE/check-stamps.py" "$work/Makefile.nojit-stamp"
+
+printf 'make options\n'
+# The JIT option (story 15): an invalid value, and a missing runtime-jit, are
+# hard errors that name themselves, and JIT=no needs no runtime-jit. The other
+# dependencies are stubs, so that the one under test is the first one missing.
+pcdir="$work/pc"
+mkdir -p "$pcdir"
+for m in cutil unicode runtime-core runtime-heap; do
+  printf 'Name: %s\nDescription: stub\nVersion: 0\nCflags: -I/nonexistent\nLibs: -lnone\n' "$m" > "$pcdir/ghoti.io-$m-0.pc"
+done
+mk() { env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL -u PREFIX -u JIT PKG_CONFIG_PATH="$pcdir" make -C "$ROOT" -n all WITH_DEBUG=no PC_INSTALL_PATH="$pcdir" "$@"; }
+expect_fail 'make/JIT=maybe is refused' 'JIT must be yes or no' mk JIT=maybe
+expect_fail 'make/the default build without runtime-jit is refused, naming the fix' 'runtime-jit was not found' mk
+expect_pass 'make/JIT=no needs no runtime-jit' mk JIT=no
+
 printf 'check-edges --includes\n'
 E="$HERE/check-edges.sh"
 expect_pass 'edges/control (clean, with a ctang include under tests/)' "$E" --includes "$FIX/edges/control"
@@ -125,6 +150,19 @@ expect_fail 'edges/planted-host-name (a host name in the wrong directory)' 'plan
 expect_fail 'edges/planted-debug-header (a public header includes the debugger)' 'z.h' \
   "$E" --includes "$FIX/edges/planted-debug-header"
 expect_fail 'edges/planted-jit' 'lang-tang -> runtime-jit' "$E" --includes "$FIX/edges/planted-jit"
+# The JIT arm (story 15): with JIT=yes only src/jit/ may include runtime-jit;
+# with JIT=no nothing may, which is how the interpreter-only arm is shown not to
+# reach the code generator. The same tree is a control in one arm and a defect
+# in the other.
+expect_pass 'edges/control-jit with JIT=yes (src/jit/ includes runtime-jit)' env GLTANG_EDGES_JIT=yes "$E" --includes "$FIX/edges/control-jit"
+expect_pass 'edges/control-jit with JIT=no (src/jit/ is not in the arm, so its include is not read)' env GLTANG_EDGES_JIT=no "$E" --includes "$FIX/edges/control-jit"
+expect_fail 'edges/planted-jit-elsewhere with JIT=no (outside src/jit/ nothing may name runtime-jit)' 'planted-jit-elsewhere/src/vm/x.c' \
+  env GLTANG_EDGES_JIT=no "$E" --includes "$FIX/edges/planted-jit-elsewhere"
+expect_fail 'edges/planted-jit-elsewhere with JIT=yes (a runtime-jit include outside src/jit/)' 'planted-jit-elsewhere/src/vm/x.c' \
+  env GLTANG_EDGES_JIT=yes "$E" --includes "$FIX/edges/planted-jit-elsewhere"
+expect_fail 'edges/planted-jit with JIT=yes (an include outside src/jit/)' 'planted-jit/src/x.c' \
+  env GLTANG_EDGES_JIT=yes "$E" --includes "$FIX/edges/planted-jit"
+expect_fail 'edges/an invalid mode' 'must be yes or no' env GLTANG_EDGES_JIT=maybe "$E" --includes "$FIX/edges/control"
 expect_fail 'edges/planted-engine' 'lang-tang -> lang-wasm' "$E" --includes "$FIX/edges/planted-engine"
 expect_fail 'edges/planted-binary-h' 'binary.h' "$E" --includes "$FIX/edges/planted-binary-h"
 expect_fail 'edges/planted-binary-h-quoted' 'binary.h' "$E" --includes "$FIX/edges/planted-binary-h-quoted"
@@ -226,6 +264,8 @@ else
     "$E" --links "$work/planted-tang"
   expect_fail 'links/planted-debug' 'lang-tang -> runtime-debug' "$E" --links "$work/planted-debug"
   expect_fail 'links/planted-jit' 'lang-tang -> runtime-jit' "$E" --links "$work/planted-jit"
+  expect_pass 'links/planted-jit with JIT=yes (the shared object may link runtime-jit)' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-jit"
+  expect_fail 'links/planted-tang with JIT=yes (only runtime-jit is added)' 'lang-tang -> tang' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-tang"
   expect_pass 'links/host tang (runtime-debug, text and what text needs are allowed in the tang command)' \
     "$E" --links "$work/host-ok/tang"
   expect_pass 'links/host web_server (the same, in the web-server example)' "$E" --links "$work/host-ok/web_server"

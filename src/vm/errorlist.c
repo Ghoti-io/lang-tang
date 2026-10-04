@@ -322,6 +322,17 @@ GLTANG_Result gltang_execution_set_statement_polls(GLTANG_Execution * execution,
   return GLTANG_OK;
 }
 
+/*
+ * For the tests of the baseline JIT only: sets the statement-poll switch while a
+ * run is going, which the public setter refuses, so that a test can show that
+ * compiled code reads the switch at every `LINE` and not when it was compiled.
+ * Not declared in any header; a test declares it itself.
+ */
+void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled);
+void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled) {
+  execution->statement_polls = enabled;
+}
+
 GLTANG_Result gltang_execution_set_error_limit(GLTANG_Execution * execution, size_t limit) {
   if (!settable(execution)) {
     return GLTANG_ERR_INVALID;

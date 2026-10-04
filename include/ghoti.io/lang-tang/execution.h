@@ -272,6 +272,77 @@ GLTANG_API GLTANG_Result gltang_execution_set_statement_polls(
     GLTANG_Execution * execution, bool enabled);
 
 /**
+ * @brief The default threshold of ::gltang_execution_set_jit_threshold: the
+ *   number of polls a function makes before it tiers up.
+ *
+ * A compile-time constant; a build that wants another value defines it first.
+ */
+#ifndef GLTANG_JIT_DEFAULT_THRESHOLD
+#define GLTANG_JIT_DEFAULT_THRESHOLD 200u
+#endif
+
+/**
+ * @brief What the baseline JIT has done for one execution, as plain counters.
+ *
+ * All zero in a build without the JIT (::gltang_jit_built is false), and for
+ * an execution that has not tiered anything up.
+ */
+typedef struct GLTANG_JitStats {
+  uint64_t functions_compiled;  ///< Functions compiled to machine code.
+  uint64_t compile_failures;    ///< Compiles that failed (memory, a limit, an unsupported shape); each marks the function never-compile.
+  uint64_t functions_discarded; ///< Compiled functions thrown away after eight deoptimizations, never compiled again.
+  uint64_t entries;             ///< Entries into compiled code.
+  uint64_t returns;             ///< Compiled calls that returned to the interpreter's caller frame.
+  uint64_t deopts;              ///< Exits from compiled code to the interpreter at an operation (a failed guard or an operation compiled code leaves to the interpreter).
+  uint64_t refused_pauses;      ///< Polls inside compiled code that paused the run.
+  uint64_t refused_unwinds;     ///< Polls inside compiled code that unwound the run.
+  uint64_t slow_polls;          ///< Polls inside compiled code that took the slow path (a request was pending).
+} GLTANG_JitStats;
+
+/**
+ * @brief Sets how many polls a function makes before it tiers up (the baseline
+ *   JIT, AD-9).
+ *
+ * Every execution counts the polls each function makes. When a function's
+ * count reaches `threshold`, the next poll that continues compiles it, and the
+ * interpreter enters the compiled code at the next function entry, or at once
+ * if the function was just entered. Compiled code is context-specialised,
+ * owned by this execution, and gives the same results, output, errors, fuel
+ * and polls as the interpreter (the frame differential and the fuel-parity
+ * tests are what say so). The default is ::GLTANG_JIT_DEFAULT_THRESHOLD; 0
+ * turns tier-up off for this execution.
+ *
+ * Stability: this is the host API of the JIT and is meant to be stable; the
+ * file's label is the gate's (tools/check-labels.sh keeps this header `free`).
+ *
+ * @param execution The execution.
+ * @param threshold The polls before tier-up, or 0 for never.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for NULL, an execution that has
+ *   started, or a call from inside a host function; ::GLTANG_ERR_UNSUPPORTED
+ *   in a build without the JIT (`JIT=no`).
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_jit_threshold(
+    GLTANG_Execution * execution, uint32_t threshold);
+
+/**
+ * @brief Reads the execution's JIT counters.
+ *
+ * @param execution The execution.
+ * @param out_stats Receives the counters. Written only on success; all zeros
+ *   in a build without the JIT.
+ * @return ::GLTANG_OK, or ::GLTANG_ERR_INVALID for a NULL argument.
+ */
+GLTANG_API GLTANG_Result gltang_execution_jit_stats(
+    const GLTANG_Execution * execution, GLTANG_JitStats * out_stats);
+
+/**
+ * @brief Whether this build has the baseline JIT (`JIT=yes`).
+ *
+ * @return True for a build with it, false for the interpreter-only build.
+ */
+GLTANG_API bool gltang_jit_built(void);
+
+/**
  * @brief Caps the error list (default 1,024 entries).
  *
  * Entries past the cap are counted in ::gltang_execution_errors_dropped and not

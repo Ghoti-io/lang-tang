@@ -57,6 +57,7 @@ struct RunConfig {
   bool shuffle = false;
   uint64_t seed = 0;
   bool statement_polls = false;  ///< The execution polls at every statement (the debugger's setting).
+  long jit = 0;                  ///< The baseline JIT's threshold: 0 is the interpreter alone, 1 compiles every function at its first poll.
 };
 
 const RunConfig kPlain = {"plain", 0, 0, 0, false, 0};
@@ -68,11 +69,21 @@ const RunConfig kLinesPlain = {"statement polls, plain", 0, 0, 0, false, 0, true
 const RunConfig kLinesTorture = {"statement polls, torture+verify", 1, 1, 0, false, 0, true};
 const RunConfig kLinesMoving = {"statement polls, moving stack", 0, 0, 1, false, 0, true};
 const RunConfig kLinesShuffled = {"statement polls, phase-shuffled", 0, 0, 0, true, 0x5eed, true};
+// The same program with every function tiering up at its first poll (story
+// 15). The reference for each is the interpreter's trace, and the instruments
+// are the ones above: a JIT frame is an interpreter frame, written at the poll,
+// so the traces are equal poll for poll.
+const RunConfig kJit = {"jit threshold 1", 0, 0, 0, false, 0, false, 1};
+const RunConfig kJitTorture = {"jit, torture+verify", 1, 1, 0, false, 0, false, 1};
+const RunConfig kJitMoving = {"jit, moving stack", 0, 0, 1, false, 0, false, 1};
+const RunConfig kLinesJit = {"statement polls, jit", 0, 0, 0, false, 0, true, 1};
+const RunConfig kLinesJitMoving = {"statement polls, jit, moving stack", 0, 0, 1, false, 0, true, 1};
 
 struct Observed {
   observer::Trace trace;
   std::string raw, rendered, result_kind, result_text, errors;
   size_t pauses = 0;
+  GLTANG_JitStats jit = {};
   bool finished = false;
   GRCORE_Result ran = GRCORE_OK;
   std::string describe() const { return raw + "|" + rendered + "|" + result_kind + ":" + result_text + "|" + errors; }
@@ -96,6 +107,7 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
   config.torture = rc.torture;
   config.verify = rc.verify;
   config.moving_stack = rc.moving;
+  config.jit_threshold = rc.jit;
   tt::Context context(page.program, config);
   EXPECT_TRUE(context.ok());
   if (!context.ok()) {
@@ -150,6 +162,7 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
     out.errors += e.template_name() + ":" + std::to_string(e.e.line) + "[" + e.chain_text() + "]" + std::to_string((int)e.e.how) + ":" + e.message() + ";";
   }
   out.trace = std::move(obs.trace);
+  out.jit = context.jit_stats();
   return out;
 }
 
@@ -317,6 +330,9 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
   std::vector<Case> cases = all_cases();
   ASSERT_GE(cases.size(), 40u);
   size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0, polls_with_statements = 0;
+#ifdef GLTANG_WITH_JIT
+  uint64_t jit_entries = 0, jit_slow_polls = 0, jit_refused_pauses = 0;
+#endif
   // Under Valgrind a poll costs fifty milliseconds to record: each program
   // records its first few polls and compares the count of the rest. The other
   // modes record up to the case's limit.
@@ -362,13 +378,43 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesTorture, nullptr, cap), kLinesTorture.label));
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesMoving, nullptr, cap), kLinesMoving.label));
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesShuffled, nullptr, cap), kLinesShuffled.label));
+#ifdef GLTANG_WITH_JIT
+    // The frame differential of the baseline JIT: the same program, interpreter
+    // against compiled code, at every poll, with and without statement polls
+    // (where a compiled LINE polls too), and under the collector's torture and
+    // a stack that moves at every push. Same polls, same slots, same header
+    // words, same pauses; the output, the result and the error list too.
+    Observed jit = observe(c, kJit, nullptr, cap);
+    EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitTorture, nullptr, cap), kJitTorture.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving, nullptr, cap), kJitMoving.label));
+    Observed lines_jit = observe(c, kLinesJit, nullptr, cap);
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, lines_jit, kLinesJit.label));
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, observe(c, kLinesJitMoving, nullptr, cap), kLinesJitMoving.label));
+    jit_entries += jit.jit.entries + lines_jit.jit.entries;
+    jit_slow_polls += jit.jit.slow_polls + lines_jit.jit.slow_polls;
+    jit_refused_pauses += jit.jit.refused_pauses + lines_jit.jit.refused_pauses;
+#endif
   }
   EXPECT_GT(polls, RUNNING_ON_VALGRIND ? 200u : 1800u);
   EXPECT_GT(pauses, 50u) << "the set includes runs that pause and resume";
   EXPECT_GT(deep, 20u) << "the set includes polls inside nested calls";
   EXPECT_GT(scopes_with_variables, 100u) << "scopes and their variables are recorded";
   EXPECT_GT(polls_with_statements, polls) << "the statement-poll runs have polls the plain ones lack";
-  std::printf("  observer: %zu programs x 8 configurations (4 with statement polls), %zu polls, %zu pauses\n", cases.size(), polls, pauses);
+#ifdef GLTANG_WITH_JIT
+  // The differential is not vacuous: compiled code ran, its polls took the slow
+  // path where the observer was watching, and some of them paused the run.
+  EXPECT_GT(jit_entries, 100u) << "the JIT runs entered compiled code";
+  EXPECT_GT(jit_slow_polls, 100u) << "polls inside compiled code took the slow path";
+  EXPECT_GT(jit_refused_pauses, 5u) << "a pause at a poll inside compiled code is in the set";
+#endif
+  std::printf("  observer: %zu programs x %d configurations (%d with statement polls), %zu polls, %zu pauses\n", cases.size(),
+#ifdef GLTANG_WITH_JIT
+      13, 7,
+#else
+      8, 4,
+#endif
+      polls, pauses);
 }
 
 TEST(Observer, AllInstrumentsTogetherAlsoGiveTheSameTrace) {

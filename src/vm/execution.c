@@ -37,6 +37,9 @@
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include "vm_internal.h"
+#ifdef GLTANG_WITH_JIT
+#include "../jit/jit.h"
+#endif
 
 // ---------------------------------------------------------------------------
 // Where the execution is
@@ -44,6 +47,10 @@
 
 static GLTANG_Execution * execution_of(const GRCORE_Context * context) {
   return context ? grcore_context_slot(context, &gltang_execution_key) : NULL;
+}
+
+GLTANG_Execution * gltang_vm_execution_of(const GRCORE_Context * context) {
+  return execution_of(context);
 }
 
 void gltang_vm_flush_fuel(GLTANG_Execution * exec) {
@@ -387,6 +394,11 @@ static void release_parts(GLTANG_Execution * exec) {
   gltang_vm_errors_free(exec);
   grcore_port_release(exec->port);
   exec->port = NULL;
+#ifdef GLTANG_WITH_JIT
+  // The compiled code goes first: it was made against the programs below, and
+  // its pages are returned to the context's meter while the context is valid.
+  gltang_jit_release(exec);
+#endif
   for (size_t p = 1; p < exec->program_count; ++p) {
     gcu_allocator_free(exec->allocator, exec->programs[p].constants);
     gltang_program_release(exec->programs[p].program);
@@ -523,6 +535,11 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
     gcu_allocator_free(allocator, exec);
     return result;
   }
+#ifdef GLTANG_WITH_JIT
+  // Last, and never a reason to refuse the execution: without the JIT's state
+  // and its registration the threshold stays 0 and the interpreter runs alone.
+  gltang_jit_attach(exec);
+#endif
   *out_execution = exec;
   return GLTANG_OK;
 }
@@ -571,6 +588,48 @@ GLTANG_Result gltang_execution_set_name(GLTANG_Execution * execution, const char
   gcu_allocator_free(execution->allocator, execution->name_storage);
   execution->name_storage = copy;
   execution->name = copy;
+  return GLTANG_OK;
+}
+
+bool gltang_jit_built(void) {
+#ifdef GLTANG_WITH_JIT
+  return true;
+#else
+  return false;
+#endif
+}
+
+GLTANG_Result gltang_execution_set_jit_threshold(GLTANG_Execution * execution, uint32_t threshold) {
+#ifdef GLTANG_WITH_JIT
+  if (!settable(execution)) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (threshold != 0 && !execution->jit) {
+    // The attach at creation failed (memory, or a budget): try again, and say
+    // so if it still cannot be done.
+    gltang_jit_attach(execution);
+    if (!execution->jit) {
+      return GLTANG_ERR_OOM;
+    }
+  }
+  execution->jit_threshold = threshold;
+  return GLTANG_OK;
+#else
+  (void)execution;
+  (void)threshold;
+  return GLTANG_ERR_UNSUPPORTED;
+#endif
+}
+
+GLTANG_Result gltang_execution_jit_stats(const GLTANG_Execution * execution, GLTANG_JitStats * out_stats) {
+  if (!execution || !out_stats) {
+    return GLTANG_ERR_INVALID;
+  }
+#ifdef GLTANG_WITH_JIT
+  *out_stats = execution->jit_stats;
+#else
+  memset(out_stats, 0, sizeof(*out_stats));
+#endif
   return GLTANG_OK;
 }
 

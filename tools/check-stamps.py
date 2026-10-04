@@ -57,6 +57,18 @@ if not stamp_recipes:
     fail("found no flag stamps at all; the pattern must have rotted")
 recorded_anywhere = set().union(*stamp_recipes.values())
 
+# JIT=yes and JIT=no build different objects from the same sources (src/jit/ is
+# compiled or not, and GLTANG_WITH_JIT is defined or not), so every stamp must
+# record it, or a tree built for one arm would be called current by the other.
+# The two arms have trees of their own, so this is the second line of defence,
+# for a build directory that was given on the command line.
+for name, recorded in sorted(stamp_recipes.items()):
+    if "JIT" not in recorded:
+        problems.append(
+            "%s does not record $(JIT), so an object built with the JIT is "
+            "called current by a build without it, and the other way round"
+            % name)
+
 # Find the compile rules by what their recipes DO, not by how their targets
 # are spelled: a compiler variable plus any sign of a source, `-c` or not.
 # A pure link names its inputs with $^ or an object list and stays out.

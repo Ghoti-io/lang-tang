@@ -1,0 +1,20 @@
+# 10 a missed write-back at a poll
+# defect: after a poll that continues, the guest frame's slots are not copied
+# back into the compiled frame, so a reference a collector updated in place is
+# lost to the code that continues
+# caught by: the write-back test (testJit)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -106,8 +106,8 @@
+   for (size_t k = H; k < fn->frame_slots; ++k) {
+     slots[k] = S[k];
+   }
+-  if (grcore_deopt_write_back(site, (void *)frame_base, slots, n) != GRCORE_OK) {
+-    return 2u;
+-  }
++  /* planted: the write-back is not done */
++  (void)slots;
++  (void)n;
+   return 0u;
+ }

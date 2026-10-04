@@ -41,6 +41,9 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include "vm_internal.h"
+#ifdef GLTANG_WITH_JIT
+#include "../jit/jit.h"
+#endif
 
 #define H GLTANG_FRAME_HEADER
 
@@ -150,6 +153,14 @@ resume_loop:
         gltang_vm_flush_fuel(exec);
         SAVE();
         SYNC();
+#ifdef GLTANG_WITH_JIT
+        // Hotness: one counter per function, per execution. Crossing the
+        // threshold posts a request of the engine's own kind, so that this very
+        // poll runs the tier-up handler (ACT, and only if the poll continues).
+        if (exec->jit_threshold) {
+          gltang_jit_note_poll(exec, fword, pc == 1u);
+        }
+#endif
         GRCORE_Verdict verdict = grcore_stack_poll(context, fword, pc - 1u);
         RELOAD();
         if (verdict == GRCORE_VERDICT_PAUSE) {
@@ -159,6 +170,36 @@ resume_loop:
         if (verdict == GRCORE_VERDICT_UNWIND) {
           goto unwound;
         }
+#ifdef GLTANG_WITH_JIT
+        // Compiled code is entered right after a function's entry poll, with
+        // the guest frame the interpreter pushed already in place: the
+        // compiled function starts "after the entry poll, pc 1". Everything
+        // else about the call is the interpreter's.
+        if (pc == 1u && exec->jit_threshold) {
+          GLTANG_Value returned = 0;
+          switch (gltang_jit_enter(exec, context, fword, &returned)) {
+            case GLTANG_JIT_NOT_ENTERED:
+              break;
+            case GLTANG_JIT_RETURNED:
+              grcore_stack_pop(stack);
+              frame = grcore_stack_top(stack);
+              LOAD_FRAME();
+              PUSH(returned);
+              break;
+            case GLTANG_JIT_DEOPTED:
+              // The deoptimizer wrote pc, sp and the slots into the guest
+              // frame, and the fuel the compiled code had not yet charged
+              // into the execution; the interpreter resumes there.
+              LOAD_FRAME();
+              break;
+            case GLTANG_JIT_PAUSED:
+              exec->state = GLTANG_EXECUTION_PAUSED;
+              return GRCORE_STEP_PAUSED;
+            case GLTANG_JIT_UNWOUND:
+              goto unwound;
+          }
+        }
+#endif
         break;
       }
 
@@ -783,6 +824,9 @@ unwound:
     // The halt request has been carried out; leave nothing pending.
     (void)grcore_context_clear_request(context, exec->halt_kind);
   }
+#ifdef GLTANG_WITH_JIT
+  gltang_jit_unwound(exec);
+#endif
   exec->state = GLTANG_EXECUTION_UNWOUND;
   return GRCORE_STEP_UNWOUND;
 

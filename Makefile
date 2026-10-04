@@ -23,6 +23,17 @@ SUITE := ghoti.io
 PROJECT := lang-tang
 
 BUILD ?= release
+
+# The baseline JIT (story 15) is an option: JIT=yes (the default) builds it and
+# makes ghoti.io-runtime-jit a hard dependency; JIT=no compiles none of
+# src/jit/, links nothing of runtime-jit, and builds in a tree of its own
+# (build/<os>/<build>-nojit) so that the two arms never share an object. Any
+# other value is an error, named here and not later (AD-2: the interpreter-only
+# engine is a supported arm, not a degraded one).
+JIT ?= yes
+ifeq ($(filter yes no,$(JIT)),)
+$(error JIT must be yes or no, not '$(JIT)')
+endif
 MAJOR_VERSION := 0
 MINOR_VERSION := 0.0
 VERSION_MINOR_ONLY := $(word 1,$(subst ., ,$(MINOR_VERSION)))
@@ -140,6 +151,11 @@ else
     $(error Unsupported OS: $(UNAME_S))
 endif
 
+# The interpreter-only arm builds in its own tree.
+ifeq ($(JIT),no)
+override BUILD := $(BUILD)-nojit
+endif
+
 ifdef PREFIX
 INCLUDE_INSTALL_PATH := $(PREFIX)/include
 LIB_INSTALL_PATH := $(PREFIX)/lib
@@ -244,6 +260,33 @@ endif
 endif
 INCLUDE += $(RHEAP_CFLAGS)
 
+# runtime-jit: the baseline JIT's code generator (story 15), a hard dependency
+# of JIT=yes and nothing at all of JIT=no. It is in INCLUDE and DEP_LIBS only
+# for JIT=yes, so a JIT=no library neither includes nor links it, and
+# tools/check-edges.sh checks that by file and by NEEDED entry for both arms.
+ifeq ($(JIT),yes)
+RJIT_PC ?= ghoti.io-runtime-jit$(BRANCH)
+RJIT_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RJIT_PC) 2>/dev/null)
+RJIT_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RJIT_PC) 2>/dev/null)
+ifeq ($(strip $(RJIT_CFLAGS)),)
+ifndef SKIP_DEP_CHECK
+$(error ghoti.io-runtime-jit was not found by pkg-config. The baseline JIT needs it. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file - or pass JIT=no to build the interpreter-only engine. There is deliberately no sibling-checkout fallback.)
+endif
+endif
+JIT_CFLAGS := -DGLTANG_WITH_JIT $(RJIT_CFLAGS)
+else
+RJIT_PC :=
+RJIT_CFLAGS :=
+RJIT_LIBS :=
+JIT_CFLAGS :=
+endif
+INCLUDE += $(JIT_CFLAGS)
+
+# The JIT module holds the poll helper, which finds the compiled frame through
+# its own frame-pointer chain (src/jit/helpers.c), so it is built with frame
+# pointers whatever the optimiser would do. The sanitizer trees already are.
+JIT_MODULE_CFLAGS := -fno-omit-frame-pointer
+
 # runtime-debug and text: for the two hosts, the `tang` command (src/tang.c)
 # and the web-server example (examples/web_server.c), and for nothing else
 # (AD-2, story 13). They are not in INCLUDE or DEP_LIBS, so the shared and the
@@ -283,7 +326,7 @@ endif
 
 # Everything a link needs, in dependency order: the collector, the core, then
 # the libraries the ported front end uses.
-DEP_LIBS := $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS)
+DEP_LIBS := $(RJIT_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS)
 
 # bison and flex generate the parser and the scanner. A generator that cannot
 # run stops the build and names what is missing; nothing is written in its
@@ -307,6 +350,9 @@ ORACLE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --li
 
 # src/tang.c is a host, not part of the library: it has a main().
 SOURCES := $(filter-out src/tang.c,$(shell find src -type f -name '*.c'))
+ifeq ($(JIT),no)
+SOURCES := $(filter-out src/jit/%,$(SOURCES))
+endif
 GENERATED_OBJECTS := $(OBJ_DIR)/tangParser.o $(OBJ_DIR)/tangScanner.o
 LIBOBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SOURCES)) $(GENERATED_OBJECTS)
 
@@ -466,6 +512,11 @@ $(OBJ_DIR)/compile/compile.o: src/compile/compile.c $(FLAGS_STAMP) | $(GEN_HEADE
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
+# The baseline JIT's module, with frame pointers (see JIT_MODULE_CFLAGS).
+$(OBJ_DIR)/jit/%.o: src/jit/%.c $(FLAGS_STAMP) | $(GEN_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(LIB_CFLAGS) $(JIT_MODULE_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+
 # Explicit rules replace the pattern rule's prerequisites rather than adding to
 # them, so these name the flags stamp and the generated headers themselves. The
 # stamp goes after the source so that $< is still the source.
@@ -562,7 +613,7 @@ $(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
 	@exit 1
 endif
 
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
 .PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -656,11 +707,11 @@ check-labels: ## Fail if a public header has no (or the wrong) stable/free label
 # file's NEEDED list: the manifest and the #include lines can both be clean
 # while the .so, or the tang command that links it, links something forbidden.
 check-edges: $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES) ## Fail on a forbidden #include or NEEDED edge (AD-2)
-	@tools/check-edges.sh --includes .
-	@tools/check-edges.sh --links $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES)
+	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --includes .
+	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --links $(APP_DIR)/$(TARGET) $(APP_DIR)/tang$(EXE_EXTENSION) $(EXAMPLES)
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
-	@CC="$(CC)" tools/check-gates.sh
+	@env -u GLTANG_EDGES_JIT CC="$(CC)" tools/check-gates.sh
 
 ####################################################################
 # Planted defects in the library itself (CAP-7)
@@ -669,19 +720,19 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs all seven.
+# part of `make test-torture`; `make check-planted` runs all ten.
 ####################################################################
 
 PLANTED_ENV = PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
 
-check-planted-quick: ## Planted defects 03 to 07 (phase shuffle, native gate, frame observer, oracle)
+check-planted-quick: ## Planted defects 03 to 10 (phase shuffle, native gate, frame observer, oracle, the three of the JIT)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
 	@$(PLANTED_ENV) tools/check-planted.sh --slow
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted: ## All seven planted defects: each caught by its instrument, each control passing
+check-planted: ## All ten planted defects: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all
 
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
@@ -787,18 +838,39 @@ TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
 TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus
 
+# With the JIT built, `make test` is two arms. The JIT arm is everything below,
+# and then the same unit suites once more with every execution tiering up at
+# its first poll (GLTANG_TEST_JIT_THRESHOLD=1), which is how the suites that
+# were written for the interpreter become a differential against the JIT. The
+# interpreter-only arm (test-nojit) is the library built with JIT=no in a tree
+# of its own, running the whole unit suite, the command's test, the examples and
+# the gates that apply; it does not repeat the torture modes, which exercise
+# the loop it shares with the JIT arm.
+NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates examples cli-test fuzz-replay
+JIT_THRESHOLD_ENV := GLTANG_TEST_JIT_THRESHOLD=1
+
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf '\n### Running %s ###\n\n' "$$test_name"; \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
 	done
+ifndef GLTANG_NESTED_ARM
 	@for mode in "GRHEAP_TORTURE=1 GRHEAP_VERIFY=1" "GLTANG_TEST_MOVING_STACK=1"; do \
 		for t in $(TORTURE_BOUNDED); do \
 			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
 			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
 		done; \
 	done
+ifeq ($(JIT),yes)
+	@for mode in "$(JIT_THRESHOLD_ENV)" "$(JIT_THRESHOLD_ENV) GLTANG_TEST_MOVING_STACK=1" "$(JIT_THRESHOLD_ENV) GRHEAP_TORTURE=1 GRHEAP_VERIFY=1"; do \
+		for t in $(TORTURE_BOUNDED); do \
+			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+		done; \
+	done
+endif
+endif
 	@if [ -z "$(strip $(BENCH_EXECUTABLES))" ]; then \
 		printf 'test: no benchmark harness under bench/ (AD-26 requires one)\n' >&2; exit 1; \
 	fi
@@ -806,6 +878,18 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES
 		printf '\n### Benchmark smoke %s ###\n\n' "$$(basename $$b $(EXE_EXTENSION))"; \
 		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$b --smoke || exit 1; \
 	done
+ifeq ($(JIT),yes)
+ifndef GLTANG_NESTED_ARM
+	@$(MAKE) --no-print-directory test-nojit
+endif
+endif
+
+# The interpreter-only arm: the library built with JIT=no, in its own tree, and
+# its suites (AD-2). It is a nested make, so every variable given on this
+# command line (PREFIX, EXTRA_CFLAGS, CC) reaches it.
+test-nojit: ## The JIT=no arm: build without the JIT in its own tree and run its suites and gates
+	@printf '\n### The interpreter-only arm (JIT=no) ###\n\n'
+	@$(MAKE) --no-print-directory test JIT=no GLTANG_NESTED_ARM=1 TEST_GATES="$(NOJIT_GATES)"
 
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) ## Run tests, one line per suite
 	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; any_failed=0; \
@@ -1279,7 +1363,7 @@ fuzz-clean:
 ####################################################################
 
 LDCONF_INSTALL_PATH ?= /etc/ld.so.conf.d
-PC_REQUIRES := $(CUTIL_PC) $(UNICODE_PC) $(RCORE_PC) $(RHEAP_PC)
+PC_REQUIRES := $(CUTIL_PC) $(UNICODE_PC) $(RCORE_PC) $(RHEAP_PC) $(RJIT_PC)
 PKGCONFIG_INSTALL_PATH ?= $(PC_INSTALL_PATH)
 
 install: all ## Install the library
@@ -1388,20 +1472,20 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS) $(JIT_MODULE_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(TSAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(TSAN_CFLAGS) $(TSAN_CXXFLAGS) $(TSAN_LDFLAGS) $(INCLUDE) $(TSAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(TSAN_CFLAGS) $(TSAN_CXXFLAGS) $(TSAN_LDFLAGS) $(INCLUDE) $(TSAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(ASAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(ASAN_CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(AST_CFLAGS) $(GENERATED_CFLAGS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(FUZZ_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_LIB_CFLAGS) $(FUZZ_BIN_CFLAGS) $(INCLUDE) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(FUZZ_RPATH) $(FUZZ_APP_DIR)' > $@.new
+	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_LIB_CFLAGS) $(FUZZ_BIN_CFLAGS) $(INCLUDE) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(FUZZ_RPATH) $(FUZZ_APP_DIR) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
