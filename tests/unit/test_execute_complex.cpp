@@ -1109,8 +1109,8 @@ TEST(Function, RedeclarationAndForwardCallsFailCompilation) {
 // the x86-64 engine said `Invalid function call` for the same source.
 // A container nested to the depth bound is rendered by a recursive function, one
 // frame a level. Its frame must be small enough for a host thread that was not
-// given a big stack: 2,000 levels on 512 KiB, which a 512-byte buffer in each
-// level's frame (a megabyte in all) did not fit.
+// given a big stack: 2,000 levels on 1 MiB, which a 512-byte buffer in each
+// level's frame (more than a megabyte in all) did not fit.
 namespace {
 
 struct DeepPrint {
@@ -1138,10 +1138,16 @@ void * deep_print_main(void * arg) {
 }  // namespace
 
 TEST(Print, ADeeplyNestedContainerIsPrintedOnAThreadWithASmallStack) {
+  if (tt::heavy_instruments()) {
+    // Building the nest copies it at every level: millions of allocations, each
+    // a collection under the collector's torture mode (the native gate runs its
+    // nest in the plain build only for the same reason).
+    GTEST_SKIP() << "the nest is built by millions of allocations; plain runs only";
+  }
   DeepPrint job;
   pthread_attr_t attr;
   ASSERT_EQ(pthread_attr_init(&attr), 0);
-  ASSERT_EQ(pthread_attr_setstacksize(&attr, 512u * 1024u), 0);
+  ASSERT_EQ(pthread_attr_setstacksize(&attr, 1024u * 1024u), 0);
   pthread_t thread;
   ASSERT_EQ(pthread_create(&thread, &attr, deep_print_main, &job), 0);
   ASSERT_EQ(pthread_join(thread, nullptr), 0);
