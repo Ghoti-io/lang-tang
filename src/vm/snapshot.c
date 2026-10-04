@@ -417,6 +417,19 @@ GRHEAP_Result gltang_vm_template_snapshot(GRCORE_Context * context, void * paylo
     return GRHEAP_ERR_INVALID;
   }
   GRHEAP_Result r = image_put_member(exec, object->member, w);
+  // What identifies the program, as the table of templates that have run
+  // records it: a member of that name that holds other code would run it.
+  const GLTANG_Program * program = object->member->program;
+  uint64_t facts[4] = {0, 0, 0, 0};
+  if (program) {
+    facts[0] = gltang_program_identity(program);
+    facts[1] = program->function_count;
+    facts[2] = program->constant_count;
+    facts[3] = program->global_count;
+  }
+  for (size_t i = 0; r == GRHEAP_OK && i < 4; ++i) {
+    r = grheap_image_writer_write(w, &facts[i], sizeof facts[i]);
+  }
   object->member = NULL;
   return r;
 }
@@ -430,7 +443,17 @@ GRHEAP_Result gltang_vm_template_restore(GRCORE_Context * context, void * payloa
     return GRHEAP_ERR_INVALID;
   }
   GRHEAP_Result res = image_get_member(exec, r, GLTANG_MEMBER_TEMPLATE, false, &member);
+  uint64_t facts[4];
+  for (size_t i = 0; res == GRHEAP_OK && i < 4; ++i) {
+    res = grheap_image_reader_read(r, &facts[i], sizeof facts[i]);
+  }
   if (res == GRHEAP_OK) {
+    // The same program, not merely a template of the same name.
+    const GLTANG_Program * program = member->program;
+    if (!program || gltang_program_identity(program) != facts[0] || program->function_count != facts[1] ||
+        program->constant_count != facts[2] || program->global_count != facts[3]) {
+      return GRHEAP_ERR_INVALID;
+    }
     object->member = member;
   }
   return res;

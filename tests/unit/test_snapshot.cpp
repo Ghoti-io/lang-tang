@@ -610,6 +610,41 @@ TEST(SnapshotHost, ALibraryWithADifferentShapeUnderTheSameNameIsRefusedByKind) {
   EXPECT_EQ(gltang_execution_state(dst.execution), GLTANG_EXECUTION_NEW);
 }
 
+TEST(SnapshotHost, ATemplateObjectInTheHeapIsRefusedWhenTheDestinationsTemplateOfThatNameIsOtherCode) {
+  // `t = sidebar` leaves a template object in the heap that has not run. The
+  // destination has a template of the same name that prints something else;
+  // restoring would run its code on the source's frames.
+  auto c = compile(
+      "use sidebar; t = sidebar;\n"
+      "for (i = 0; i < 60; i += 1) { }\n"
+      "print(t()); print(\"|\");");
+  Host h;
+  Source src(*c, 100, Config(), h.setup());
+  ASSERT_TRUE(src.paused());
+  Snap snap;
+  ASSERT_EQ(gltang_snapshot_take(src.ctx->execution, &snap.s), GLTANG_OK);
+
+  // The same code under the same name restores and finishes with the source's.
+  Host same;
+  Reference ref = run_reference(*c, Config(), same.setup());
+  ASSERT_TRUE(ref.finished) << ref.seen.str();
+  Host twin;
+  Finished f = restore_and_finish(*c, snap.s, Config(), twin.setup());
+  EXPECT_TRUE(same_as(ref, f, src.fuel_at_pause));
+
+  // Other code under the name is refused, and the destination stays fresh.
+  Host other;
+  other.sidebar = compile("print(\"<other>\");");
+  Context dst(c->program, Config());
+  ASSERT_TRUE(dst.ok());
+  other.install(dst);
+  dst.attach();
+  EXPECT_EQ(gltang_snapshot_restore(dst.execution, snap.s), GLTANG_ERR_INVALID);
+  EXPECT_EQ(gltang_execution_state(dst.execution), GLTANG_EXECUTION_NEW);
+  EXPECT_EQ(grcore_context_state(dst.context), GRCORE_CONTEXT_PARKED);
+  EXPECT_EQ(dst.raw().find("<other>"), std::string::npos);
+}
+
 TEST(SnapshotHost, ATemplateThatHasAlreadyRunComesBackWithItsProgramAndItsConstants) {
   // A template called before the pause leaves a program entry (and its
   // constants cache) in the execution; a later call must still work, and its
