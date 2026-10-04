@@ -159,9 +159,13 @@ override BUILD := $(BUILD)-nojit
 endif
 
 # So does the arm without the debugger, which is built to show that nothing in
-# the library or its tests needs runtime-debug or text (test-nodebug).
+# the library or its tests needs runtime-debug or text (test-nodebug, which sets
+# GLTANG_NODEBUG_ARM). A plain WITH_DEBUG=no build, which is what a machine
+# without the debugger runs, keeps the ordinary tree.
 ifeq ($(WITH_DEBUG),no)
+ifdef GLTANG_NODEBUG_ARM
 override BUILD := $(BUILD)-nodebug
+endif
 endif
 
 ifdef PREFIX
@@ -983,7 +987,7 @@ else
 	if PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$$shadow/share/pkgconfig" pkg-config --exists ghoti.io-runtime-debug-0 2>/dev/null; then \
 		printf 'test-nodebug: runtime-debug is still visible; the arm would prove nothing\n' >&2; exit 1; \
 	fi; \
-	env PKG_CONFIG_PATH= $(MAKE) --no-print-directory test WITH_DEBUG=no GLTANG_NESTED_ARM=1 \
+	env PKG_CONFIG_PATH= $(MAKE) --no-print-directory test WITH_DEBUG=no GLTANG_NESTED_ARM=1 GLTANG_NODEBUG_ARM=1 \
 		PREFIX="$$shadow" TEST_GATES="$(NODEBUG_GATES)"
 endif
 
