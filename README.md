@@ -43,7 +43,13 @@ finish exactly as an uninterrupted run does
 address, so the library, native function and template values the program holds
 are found again by name, and starting a context from a snapshot that has run a
 heavy prologue is an order of magnitude cheaper than running the prologue
-(`documentation/design.md`, "Snapshots"). The library itself
+(`documentation/design.md`, "Snapshots"). Two questions a developer asks of a
+running program are answered by services of the runtime stack: where the time
+goes (`runtime-core`'s sampling profiler, [examples/profile_hot_loop.c](examples/profile_hot_loop.c))
+and why a value is still alive (`runtime-heap`'s retention query,
+[examples/retention_leak.c](examples/retention_leak.c)); the engine needed
+nothing for either, since a poll identity is the same on every tier and its
+values are described to the collector. The library itself
 does not depend on the debugger; it only polls where a host may stop it.
 
 ## Example

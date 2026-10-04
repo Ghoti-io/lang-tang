@@ -12,7 +12,9 @@ library with frozen ctang, and a baseline JIT behind a build option
 (`JIT=yes|no`, "The baseline JIT") that is compared with the interpreter at every
 poll, and context snapshots ("Snapshots": a paused or new execution frozen
 and restored, into another context on any thread, to finish as an uninterrupted
-run does). What is still not here is listed at the end. The
+run does), and the two services a developer asks of a running program: a
+sampling profiler and a retention query ("Profiling and retention"). What is
+still not here is listed at the end. The
 architecture it follows is the runtime stack's spine (AD-2, AD-3, AD-9, AD-13,
 AD-14, AD-16, AD-20, AD-21, AD-22, AD-23, AD-25, AD-26).
 
@@ -1635,7 +1637,9 @@ The gain is where the supported set is: a hot loop over small integers and boole
   context-specialised and per execution, compiled synchronously in a poll; there
   is no cache on disk. (`a/code.h`'s count is atomic so that sharing can be added
   without changing who owns what.)
-- **Other architectures and Windows.** x86-64 on Linux only; `grjit_backend_available()`
+- **Other architectures and Windows.** x86-64 and arm64 on Linux only (the arm64
+  backend is runtime-jit's, with the same frame layout, so nothing here changed
+  for it but this comment); `grjit_backend_available()`
   is false elsewhere and the compile is then `GLTANG_ERR_UNSUPPORTED`, counted as a
   failure. `JIT=no` is the arm for every other target.
 - **Inline caches**, **inlining of heap operations** (arrays, maps, strings, calls
@@ -1811,6 +1815,72 @@ buffer that is not captured (the output-so-far test and the sweep fail).
 - No sharing between a snapshot and a group; a restore touches only the context it
   is given.
 
+## Profiling and retention
+
+Two questions a developer asks of a running program, answered by services of the
+runtime stack and not by this engine: *where does the time go* (CAP-12, a
+sampling profiler) and *why is this value still alive* (CAP-13, a retention
+query). The engine's part is only what it already does: it polls, it pushes
+frames with a poll identity and a locator, and its values are heap objects
+described to the collector. Neither needed a change to `src/` (one comment).
+
+**Profiling.** `runtime-core`'s `b/profile.h` is a keyed OBSERVE service. A host
+attaches it to the engine's context (`grcore_profiler_attach`), starts its timer
+(`grcore_profiler_timer_start`, a thread that posts a request) or posts requests
+itself, and reads a report of `(file, line, self, inclusive)` after or during a
+pause. The next poll after a request walks the frames through the abstract frame
+and counts them, which is the engine's `locate`: `gltang_vm_location` gives each
+frame's file and line, and the file string is the program's own (the profiler
+keeps the pointer, so a profile that outlives the program copies the names; the
+example does). Because a poll identity is the same on every tier (AD-18), the
+interpreter's profile and the JIT's are the same, and `tests/unit/test_profile.cpp`
+checks that: it asks for a sample at every poll, counts what each sample must hold
+with a frame walk of its own, and compares, location by location, with the
+profile, with the JIT off and with every function tiering up at its first poll,
+for a program with calls, a recursion and a template call, and then compares the
+two profiles with each other. Two loops run four to one are seen four to one. The
+timer is tested statistically (the hot loop of a program with a short prologue
+gets most of the samples), on both tiers, and extends the run until a floor of
+samples was taken instead of asserting on a handful.
+
+**What is and is not done.** The profile is biased to polls: a sample is taken at
+the first poll after the request, so time between polls is charged to the poll
+that ends it, and in a loop that is the loop's back-edge, which the report names
+by the loop's own line (the `while`). That is the price of reading a guest stack
+only where it is consistent (AD-4). There is **no `tang` flag** for it: a host
+registers the profiler (`examples/profile_hot_loop.c` shows how), because the
+command is a host of the debugger and of nothing else. There is no flame-graph
+output and no call-tree: a profile is flat counts by location. A sample costs
+about 100 ns at depth one and about 30 ns for each further frame, and at a
+millisecond the timer's cost does not show beside a ten-million-iteration loop
+(`profile-loop-10M-off` and `-1ms` in `bench/`, 353 and 352 ms).
+
+**Retention.** `runtime-heap`'s `grheap_retention_path` finds the shortest chain
+of references from a root to an object. `tests/unit/test_retention.cpp` pauses a
+program by fuel with a string held by a local variable and by an array, reads the
+string's address through the frame's scope interface (the way a debugger lists
+locals), runs on until the program has cleared the variable, and asks: the answer
+is the guest stack's root source (`runtime-core.guest`), then the array, its
+storage and the string, with the byte offset of the slot that holds the next in
+each. The same with every function tiering up at its first poll: a pause at a
+compiled poll leaves a frame the interpreter can read, because the frame is
+written back before the poll (AD-17), so the retention query reads the same
+guest stack either way. An object nothing reaches is "not retained", and a
+collection then frees it, which the test shows.
+
+One thing the test found about the language: an array stored in an array is a
+*copy*, so the inner array is not the object the outer one holds (the first
+version of the test leaked an array into an array and the query rightly said the
+original was not retained). The leaked object in the test is a string, which is
+immutable and shared by reference.
+
+**What is not done.** The chain stops at the guest stack's *root source*, with the
+slot's ordinal in that source's enumeration, and does not say which Tang variable
+the slot is (a host that wants the name walks the frame as `find_local` does). The
+query cannot say how much an object *retains* (the set of everything it keeps
+alive is a heap-dump tool with another design), and runs only while the context is
+paused, parked or in a poll handler.
+
 ## Known defects, inherited and open
 
 **The parse is not charged to the context.** See "The memory-budget contract".
@@ -1904,6 +1974,8 @@ under 3% between the same runs, so the figures are good to about that. The
 table's rows are the figures before the opcode, re-taken on the machine of this
 measurement (the template call was about 101 us when first recorded). That is the price of making a statement a place a host may ask to stop at without
 patching a shared program; the alternatives are listed under "Statement polls".
+
+**Profiling (story 17, CAP-12).** `profile-loop-10M-off` and `profile-loop-10M-1ms` run the same interpreted ten-million-iteration loop without a profiler and with one whose timer posts every millisecond: 353 ms and 352 ms, the difference being inside the run-to-run noise. A sample is a frame walk (about 100 ns at depth one and 30 ns for each frame more, measured in `runtime-core`'s `profile-sample-*` cases), so a 1 kHz timer takes on the order of a ten-thousandth of the run.
 
 **Snapshots (story 16, CAP-11).** The two `start-*` cases measure the same
 thing two ways: the time from creating a context (group, context, heap and
