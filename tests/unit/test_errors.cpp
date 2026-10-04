@@ -342,6 +342,98 @@ TEST(Halt, AnErrorInsideANativeOperationEndsTheRunToo) {
   EXPECT_EQ(run.context.raw(), "a");
 }
 
+// ---------------------------------------------------------------------------
+// Halt on an error that no built-in operation made
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool host_refuses(GLTANG_NativeCall *, void *) { return false; }
+
+bool host_errors(GLTANG_NativeCall * call, void *) {
+  gltang_call_return_error(call, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+  return true;
+}
+
+bool host_works(GLTANG_NativeCall * call, void *) {
+  gltang_call_return_integer(call, 5);
+  return true;
+}
+
+/// Runs `source` with the natives `refuses`, `errors` and `works` and the
+/// template `sidebar` (`print("<aside>")`) in the context's library, halting
+/// on the first error.
+struct HaltHost {
+  Compiled compiled;
+  Compiled sidebar;
+  Context context;
+  HaltHost(const std::string & source, bool halt, long jit_threshold = 0)
+    : compiled(source, tt::Mode::Script), sidebar("print(\"<aside>\");", tt::Mode::Script),
+      context(compiled.program, [&] { Config c; c.jit_threshold = jit_threshold; return c; }()) {
+    EXPECT_TRUE(compiled.ok()) << compiled.error.message;
+    EXPECT_TRUE(sidebar.ok());
+    EXPECT_TRUE(context.ok());
+    EXPECT_EQ(gltang_library_add_native(context.library(), "refuses", host_refuses, nullptr), GLTANG_OK);
+    EXPECT_EQ(gltang_library_add_native(context.library(), "errors", host_errors, nullptr), GLTANG_OK);
+    EXPECT_EQ(gltang_library_add_native(context.library(), "works", host_works, nullptr), GLTANG_OK);
+    EXPECT_EQ(gltang_library_add_template(context.library(), "sidebar", sidebar.program, 100000, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+    if (halt) {
+      EXPECT_EQ(gltang_execution_set_halt_on_error(context.execution, true), GLTANG_OK);
+    }
+  }
+};
+
+void expect_halted(HaltHost & host, GLTANG_ErrorKind kind, const char * printed_before) {
+  EXPECT_FALSE(host.context.execute());
+  EXPECT_EQ(host.context.ran, GRCORE_ERR_GUEST);
+  EXPECT_EQ(gltang_execution_state(host.context.execution), GLTANG_EXECUTION_UNWOUND);
+  EXPECT_EQ(host.context.raw(), printed_before);
+  ASSERT_EQ(host.context.error_count(), 1u);
+  EXPECT_EQ(host.context.error(0).e.kind, kind);
+  EXPECT_EQ(host.context.error(0).e.how, GLTANG_ERROR_HOW_CREATED);
+  EXPECT_EQ(grcore_stack_frame_count(grcore_context_stack(host.context.context)), 0u);
+}
+
+}  // namespace
+
+TEST(Halt, AHostFunctionThatFailsEndsTheRun) {
+  HaltHost host("use refuses; print(\"a\"); x = refuses(1); print(\"b\");", true);
+  expect_halted(host, GLTANG_ERROR_HOST_FAILED, "a");
+}
+
+TEST(Halt, AHostFunctionThatAnswersWithAnErrorEndsTheRun) {
+  HaltHost host("use errors; print(\"a\"); x = errors(); print(\"b\");", true);
+  expect_halted(host, GLTANG_ERROR_INVALID_FUNCTION_CALL, "a");
+}
+
+TEST(Halt, ATemplateCalledWithAnArgumentEndsTheRun) {
+  HaltHost host("use sidebar; print(\"a\"); x = sidebar(1); print(\"b\");", true);
+  expect_halted(host, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH, "a");
+}
+
+TEST(Halt, TheSameCallsWithHaltOffAreErrorValuesAndTheRunFinishes) {
+  // The control: the three errors above are made without the option and the
+  // run goes on, so it is the option that ends the others.
+  HaltHost host(
+      "use refuses; use errors; use sidebar; use works;\n"
+      "a = refuses(1); b = errors(); c = sidebar(1); print(\"done\"); works();",
+      false);
+  EXPECT_TRUE(host.context.execute());
+  EXPECT_EQ(host.context.raw(), "done");
+}
+
+TEST(Halt, TheHostAndTemplateErrorsEndARunInCompiledCodeToo) {
+  for (const char * source : {"use refuses; function f(n) { return refuses(n); } print(\"a\"); f(1); print(\"b\");",
+           "use sidebar; function f(n) { return sidebar(n); } print(\"a\"); f(1); print(\"b\");"}) {
+    HaltHost host(source, true, 1);
+    EXPECT_FALSE(host.context.execute());
+    EXPECT_EQ(host.context.ran, GRCORE_ERR_GUEST);
+    EXPECT_EQ(host.context.raw(), "a");
+    EXPECT_EQ(host.context.error_count(), 1u);
+  }
+}
+
+
 TEST(Halt, WithBothSwitchesTheErrorIsEnteredOnce) {
   Named run("print(\"a\"); x = 1 / 0; print(\"b\");", "page", true, true);
   EXPECT_FALSE(run.context.execute());
