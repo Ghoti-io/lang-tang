@@ -32,7 +32,9 @@
  * it points at is the saved frame pointer of the compiled function that called
  * (its frame base, which `a/deopt.h` reads slots from), and the word after it is
  * the return address, which is the site's code offset after the code's base is
- * taken off. The read-back test of runtime-jit does the same, on both.
+ * taken off. The read-back test of runtime-jit does the same, on both. On arm64 this assumes the saved link register is a plain return address: a build that
+ * signs it (pac-ret) or enforces BTI is unsupported and untested (runtime-jit's
+ * design.md, "Pointer authentication and BTI").
  */
 
 #include <ghoti.io/lang-tang/macros.h>
