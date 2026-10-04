@@ -70,6 +70,15 @@ mode="${1:?$usage}"
 shift
 
 ALLOWED='cutil|unicode|runtime-core|runtime-heap|lang-tang'
+# What may follow an allowed name in a NEEDED entry: the BRANCH suffix of a
+# build that named one (cutil-dev). A different library whose name merely
+# begins with an allowed one (cutil-extra) is an edge, and is no longer
+# accepted as that library. GHOTI_BRANCH (for example -nightly) adds the
+# suffix of a build with a branch of its own.
+SUFFIXES='-dev'
+if [ -n "${GHOTI_BRANCH:-}" ]; then
+  SUFFIXES="$SUFFIXES|$(printf '%s' "${GHOTI_BRANCH}" | sed 's/[][\.^$*+?(){}|\/]/\\&/g')"
+fi
 JIT_MODE="${GLTANG_EDGES_JIT:-no}"
 case "$JIT_MODE" in
   yes | no) ;;
@@ -136,12 +145,12 @@ $found"
           "$f" "$binary" >&2
         status=1
       fi
-      hits="$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]ghoti\.io/[^/>"]+/' "$f" || true)"
+      hits="$(grep -nE '^[[:space:]]*#[[:space:]]*include[^"<]*[<"][^>"]*ghoti\.io/[^/>"]+/' "$f" || true)"
       [ -n "$hits" ] || continue
       while IFS= read -r line; do
         n="${line%%:*}"
         lib="$(printf '%s\n' "$line" \
-          | sed -E 's/.*[<"]ghoti\.io\/([^\/>"]+)\/.*/\1/')"
+          | sed -E 's/.*ghoti\.io\/([^\/>"]+)\/.*/\1/')"
         if printf '%s\n' "$lib" | grep -qE "^($ALLOWED)\$"; then
           continue
         fi
@@ -223,13 +232,13 @@ $t"
             # Exactly an allowed name, or one followed by a BRANCH suffix
             # (cutil-dev, cutil-0-debug); never a different library that
             # merely starts with one.
-            if printf '%s\n' "$lib" | grep -qE "^($ALLOWED)(-.*)?\$"; then
+            if printf '%s\n' "$lib" | grep -qE "^($ALLOWED)($SUFFIXES)?\$"; then
               continue
             fi
-            if is_host_program "$so" && printf '%s\n' "$lib" | grep -qE "^($HOST_LINKS)(-.*)?\$"; then
+            if is_host_program "$so" && printf '%s\n' "$lib" | grep -qE "^($HOST_LINKS)($SUFFIXES)?\$"; then
               continue
             fi
-            if [ "$JIT_MODE" = yes ] && printf '%s\n' "$lib" | grep -qE "^runtime-jit(-.*)?\$"; then
+            if [ "$JIT_MODE" = yes ] && printf '%s\n' "$lib" | grep -qE "^runtime-jit($SUFFIXES)?\$"; then
               continue
             fi
             printf 'check-edges: forbidden edge lang-tang -> %s: %s has NEEDED %s\n' \
