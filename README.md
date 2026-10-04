@@ -27,7 +27,16 @@ debugger is [runtime-debug](../runtime-debug)'s, and two programs here are its
 hosts: `tang --dap` speaks the Debug Adapter Protocol on stdin and stdout, and
 [examples/web_server.c](examples/web_server.c) serves templates one context per
 request, answers a runaway template with `503` and the file and line it was
-stopped on, and lets the same template be stepped over DAP. The library itself
+stopped on, and lets the same template be stepped over DAP. The engine also has
+a **baseline JIT** behind a build option (`JIT=yes`, the default): a function that
+is hot is compiled, through [runtime-jit](../runtime-jit), to machine code for
+small-integer and boolean work, entered right after its entry poll, and left for
+the interpreter, in the same frame, at the first guard that fails or the first
+operation it does not compile. The output, the errors, the fuel and the polls are
+the interpreter's, which a frame differential (`tests/observer.h`, interpreter
+against JIT, at every poll), a fuel-parity test and a scripted debugger session
+with a breakpoint in compiled code each check; `JIT=no` builds the
+interpreter-only engine and links nothing of it. The library itself
 does not depend on the debugger; it only polls where a host may stop it.
 
 ## Example
@@ -75,7 +84,14 @@ with `--self-test`, which plays a client, including a scripted DAP session.
 ## Building
 
 `lang-tang` depends on `cutil`, `unicode`, `runtime-core` and `runtime-heap`,
-found through pkg-config only. The `tang` command and the web-server example
+and, unless built with `JIT=no`, on `runtime-jit` (a hard error naming the fix if
+it cannot be found: `JIT=yes` is the default), found through pkg-config only.
+`make JIT=no` builds the interpreter-only engine in a tree of its own
+(`build/<os>/release-nojit`), compiles none of `src/jit/`, includes and links
+nothing of `runtime-jit` (`check-edges` proves it for both arms), and reports the
+JIT as absent (`gltang_jit_built()` is false, `gltang_execution_set_jit_threshold`
+is `GLTANG_ERR_UNSUPPORTED`); `make test` runs that arm as well. Any other value
+of `JIT` is a hard error. The `tang` command and the web-server example
 also need `runtime-debug` (and `text`, which it requires): they are the library's
 two hosts of the debugger, and the shared and static library link neither
 (`check-edges` enforces it). `make WITH_DEBUG=no` builds the shared and static
@@ -101,12 +117,13 @@ this library:
 
 | Target | Does |
 | --- | --- |
-| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests (the engine suites, the frame observer and the native gate again under the heap's torture mode and with a moving guest stack), the CLI test, the fuzz replay, the oracle differential and its fixed batch of generated programs, the quick planted defects, and one smoke run of the benchmark |
+| `test` | build, `check-symbols`, `check-aliasing` (gcc only), `check-stamps`, the gates below, the examples, the unit tests (the engine suites, the frame observer and the native gate again under the heap's torture mode and with a moving guest stack, and, with the JIT built, again with every function compiled at its first poll), the CLI test, the fuzz replay, the oracle differential and its fixed batch of generated programs, the quick planted defects, one smoke run of the benchmark, and the `JIT=no` arm (`test-nojit`) |
+| `test-nojit` | the library built with `JIT=no` in its own tree, running the whole unit suite, the CLI test, the examples and the gates that apply, with the JIT-only tests compiled out |
 | `test-oracle` | parse and then run every file of `tests/corpus`, and 440 generated programs, with lang-tang and with ctang (in a child process, with a wall-clock kill and an address-space bound) and fail on any difference in the parse verdict, the rendered output or the final result that the ledger does not record; `ORACLE_PC` names the ctang package |
 | `fuzz-diff` | `make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S`: a campaign of N generated programs from seed S, both modes; a divergence prints its seed and the whole program |
-| `check-planted` | build a throwaway copy of the library, plant seven defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
+| `check-planted` | build a throwaway copy of the library, plant ten defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner, and the JIT's three: a wrong tag on a compiled `ADD`, a skipped fuel charge, a missed write-back at a poll) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
-| `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
+| `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one (and `runtime-jit` under `JIT=yes`, in `src/jit/` only; under `JIT=no` nothing of it at all) - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
 | `cli-test` | run the `tang` command over its documented cases and exit statuses, `--dap` included |
 | `examples` | build and run every example; the web server with `--self-test` |
@@ -129,7 +146,7 @@ stable ones.
 | `allocator.h` | stable | `GLTANG_Allocator`, `gltang_allocator_default`, `gltang_allocator` (the one the library allocates through) |
 | `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler reads them, so their shape may change |
 | `compile.h`, `program.h`, `bytecode.h` | free | `gltang_compile`, the immutable reference-counted `GLTANG_Program`, the opcode table |
-| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`) and the error list (`gltang_execution_error*`) |
+| `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`), the baseline JIT's host API (`gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built`) and the error list (`gltang_execution_error*`) |
 | `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
 | `seeds.h` | stable | `GLTANG_SeedSequence`: the master seed and atomic counter that every execution's `random.global` and `random.default` are seeded from |
 
@@ -161,6 +178,7 @@ tang --fuel 10000 -e 'while (true) {}'   # a budget; the pause names file and li
 tang --seed 5 -e 'use random; print(random.global.next_int);'  # a fixed master seed
 tang --errors -e 'print(1 / 0);'         # the error list, to stderr: main:<evaluate>:1: Divide by zero
 tang --halt-on-error -e 'print("a"); print(1 / 0); print("b");'   # prints a, exit status 8
+tang --jit-threshold 1 --jit-stats -s hot.tang   # compile every function at its first poll; the JIT's counters go to stderr
 ```
 
 A syntax or compile error is `name:line:column: message` on stderr and exit

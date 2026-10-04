@@ -7,8 +7,10 @@ bytecode, the switch-dispatched interpreter that runs it on a runtime-core
 context and a runtime-heap heap, the interface that parses, compiles and runs a
 template or a script, the host API over it (libraries, native functions, the
 error list, template calls under budget scopes, a generator per context), the
-`tang` command, the divergence ledger, and the oracle that compares this
-library with frozen ctang. What is still not here is listed at the end. The
+`tang` command, the divergence ledger, the oracle that compares this
+library with frozen ctang, and a baseline JIT behind a build option
+(`JIT=yes|no`, "The baseline JIT") that is compared with the interpreter at every
+poll. What is still not here is listed at the end. The
 architecture it follows is the runtime stack's spine (AD-2, AD-3, AD-9, AD-13,
 AD-14, AD-16, AD-20, AD-21, AD-22, AD-23, AD-25, AD-26).
 
@@ -1076,8 +1078,9 @@ inspected text. It compares two traces poll by poll and reports the first
 divergence with its poll index and frame. Heap addresses are never compared:
 only the inspected text of a value slot, and the header words (function, pc, sp,
 depth) as the numbers the inspector prints, which are the same in every
-configuration. It reads no engine structure, so story 15 can use it for
-interpreter against JIT and story 12 for a debugger attached against absent.
+configuration. It reads no engine structure, so story 15 used it unchanged for
+interpreter against JIT (below) and story 12 can use it for a debugger attached
+against absent.
 
 `tests/unit/test_observer.cpp` runs 76 programs - forty script and twelve
 template corpus files, twelve generated programs (six seeds, both modes), twelve sites (pauses inside calls, three-deep template
@@ -1086,7 +1089,18 @@ a boundary, 40 children), all pausing and resuming - four ways: plain,
 torture+verify, a stack that moves at every push, and phase-shuffled (AD-5). The
 traces, the output, the result and the error list must be equal (2,290 recorded
 polls and 3,552 pauses per configuration), and all four instruments together are
-checked on the sites. A poll costs about a millisecond to record (the globals of
+checked on the sites.
+
+**Interpreter against JIT (story 15).** The same 76 programs run five more ways:
+every function compiled at its first poll (`jit threshold 1`), the same under
+torture and verify, the same on a moving stack, and with statement polls on
+(where a compiled `LINE` polls too), alone and on a moving stack. Each trace must
+equal the interpreter's at every poll - the same polls, the same slots, the same
+header words, the same pauses - and so must the output, the result and the error
+list. A pause at a compiled poll is the interpreter's pause, because the poll
+helper wrote the frame first. The run is not vacuous, which the test checks:
+compiled code was entered over a hundred times, took the slow path over a hundred
+times where the observer was watching, and paused the run. A poll costs about a millisecond to record (the globals of
 every frame are read), so a generated program records its first 150 polls and
 compares the count of the rest.
 
@@ -1165,19 +1179,27 @@ breaks nothing as not caught. Observed:
 | 05 frame-slot-mismatch | a value slot's text gains a character under torture | `testObserver` | `script/arithmetic.tang: plain against torture+verify: poll 0, frame 0: slot 4 text: null against null!` |
 | 06 wrong-operator | integer `*` answers one too many | `testOracle` | `unrecorded divergence: script/array-built-in-a-loop.tang` |
 | 07 silent-runner | the oracle runner exits 0 and prints nothing | `testOracle` | `the oracle runner printed something unreadable for .../arithmetic.tang` |
+| 08 jit-wrong-tag | a compiled `ADD` or `SUB` tags its result as a function value | the frame differential, interpreter against JIT (`testObserver`) | `generated/1-template: plain against jit threshold 1: poll 37, frame 0: scope program variable ...` |
+| 09 jit-skipped-fuel | a compiled `LOAD_LOCAL` is not charged | the fuel-parity test (`testJit`) | the two runs' fuel totals and pauses differ |
+| 10 jit-missed-write-back | the guest frame is not copied back into the compiled frame after a poll | the write-back test (`testJit`): a poll handler overwrites a local, as a moving collector would | the two runs print different sums |
 
-`make test` runs 03 to 07 (`check-planted-quick`, about 80 seconds with the
+`make test` runs 03 to 10 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all seven.
+runs all ten.
 
 ### What runs where
 
 - `make test`: every unit suite; the engine suites, the generated batch, the
   frame observer, the native gate and the corpus run of lang-tang alone again
   under `GRHEAP_TORTURE=1 GRHEAP_VERIFY=1` and again with
-  `GLTANG_TEST_MOVING_STACK=1` (`TORTURE_BOUNDED`); the oracle differential
-  (parse, execution, the fixed fuzz batch); and the quick planted defects.
+  `GLTANG_TEST_MOVING_STACK=1` (`TORTURE_BOUNDED`); with the JIT built, those
+  suites once more with `GLTANG_TEST_JIT_THRESHOLD=1` (every harness-made
+  execution tiers up at its first poll), alone, on a moving stack and under
+  torture and verify; the oracle differential (parse, execution, the fixed fuzz
+  batch); the quick planted defects; and the interpreter-only arm (`make
+  test-nojit`: `JIT=no` in a tree of its own, the whole unit suite, the CLI test,
+  the examples and the gates that apply).
 - `make test-torture`: **every** unit suite (`TORTURE_SUITES`, no exclusions)
   under ASan+UBSan with torture, verify and a moving stack, then the two torture
   planted defects. The oracle differential is not run under torture: the child
@@ -1196,9 +1218,13 @@ runs all seven.
   times) and the wall-clock test with a real timer thread is skipped, because
   Valgrind does not wake a sleeping thread while another spins; the same test
   with the request posted from inside the run, which needs no scheduler, runs
-  everywhere. Observed: `make test-valgrind-quiet` about four minutes,
+  everywhere. Observed before story 15: `make test-valgrind-quiet` about four minutes,
   `make test-torture` about a minute and a half, `make test -j8` from an empty tree
-  2 minutes 27 seconds (3 minutes 54 seconds serial).
+  2 minutes 27 seconds (3 minutes 54 seconds serial). With the JIT (the observer
+  runs 13 configurations of each program now, and the suites run again with
+  `GLTANG_TEST_JIT_THRESHOLD=1`, and the second arm is built and run): `make test
+  -j8` from an empty tree 5 minutes 27 seconds and serial 8 minutes 10 seconds,
+  both arms; `make test-valgrind-quiet` 11 minutes (507 tests).
 
 ### The ledger, final
 
@@ -1211,9 +1237,9 @@ oracle is a later decision (AD-16 retirement).
 
 No clang run: the libFuzzer harnesses were not built or run here (no clang
 campaign), and the 12,000-program differential is a measurement, not a long
-campaign. No outside test suite (Test262 and the like). No interpreter-against-JIT
-differential and no debugger-attached comparison: the observer is built for them
-and they are stories 15 and 12. The execution corpus does not compare the order
+campaign. No outside test suite (Test262 and the like). No debugger-attached
+comparison: the observer is built for it and it is story 12. (The
+interpreter-against-JIT differential is story 15's, above.) The execution corpus does not compare the order
 of a map's keys or the error list, which have no ctang equivalent.
 
 ## Allocation failure
@@ -1272,10 +1298,13 @@ clang the flag is empty.
 
 ## Packaging and edges
 
-The library links `cutil`, `unicode`, `runtime-core` and `runtime-heap` and
-nothing else; the `.pc` requires all four, and the manifest lists them, so a
-bootstrap builds them first. `readelf -d` on the shared object shows exactly
-those, never ctang and never the debugger.
+The library links `cutil`, `unicode`, `runtime-core` and `runtime-heap`, and,
+built with the JIT (`JIT=yes`, the default), `runtime-jit`, and nothing else; the
+`.pc` requires them (the last only for `JIT=yes`), and the manifest lists them, so
+a bootstrap builds them first. `readelf -d` on the shared object shows exactly
+those, never ctang and never the debugger. Built with `JIT=no` the library
+includes and links nothing of `runtime-jit`, `src/jit/` is not compiled, and the
+tree is `build/<os>/release-nojit`, so the two arms never share an object.
 
 Two programs are **hosts of the debugger** (story 13): `src/tang.c`, the `tang`
 command, and `examples/web_server.c`. A host is where a debugger is attached and
@@ -1300,14 +1329,20 @@ inputs, `bench/` and `examples/`, and over the NEEDED list of the shared library
 the `tang` command and every example. The rule is an allowlist: `cutil`,
 `unicode`, `runtime-core`, `runtime-heap`, `lang-tang`, and, for the two host
 files by path (includes) and the two host programs by name (NEEDED),
-`runtime-debug`, `text`, `chron` and `regex`. Anything else - ctang, the JIT,
-another engine, or the debugger anywhere but those two hosts - is an edge, and so
-is any include of `binary.h`. The allowance is by file, not by directory: a host
+`runtime-debug`, `text`, `chron` and `regex`. `runtime-jit` is the one
+conditional edge (`GLTANG_EDGES_JIT`, set by the Makefile from `JIT`): with
+`JIT=yes` only the files under `src/jit/` may include it and the shared object and
+the programs that link it may have it in NEEDED; with `JIT=no` no include and no
+NEEDED entry of it is allowed anywhere. Anything else - ctang, another engine, or
+the debugger anywhere but those two hosts - is an edge, and so is any include of
+`binary.h`. The allowance is by file, not by directory: a host
 name in the wrong directory (`examples/tang.c`), a second example, a library
 source or a public header including the debugger fails the gate, and
 `tools/check-gates.sh` shows each of them failing and the two hosts passing
 (planted fixtures under `tests/gates/edges/`, and stub programs for the NEEDED
-check). `tests/` is not scanned: it is the one place ctang may be included, and
+check), and shows the JIT edge allowed in `src/jit/` under `JIT=yes`, refused
+anywhere else under it, and refused everywhere under `JIT=no`, and that a Makefile
+whose stamps omit `$(JIT)` fails `check-stamps`. `tests/` is not scanned: it is the one place ctang may be included, and
 a test runner is a host too - `test_tang_dap.cpp` links nothing of the debugger
 but could - so no test binary is named to this gate.
 
@@ -1355,8 +1390,11 @@ a client that closes the stream, disarms the debugger and the run finishes free
 (the exit status is the plain run's). A pause that is not the debugger's, a
 `--fuel` budget, is shown to the client once (`stopped`, reason `pause`,
 description `paused by fuel`), and the next `continue` unwinds the run with status
-6: the command has no policy for raising a budget. A scripted session against the
-real binary is `tests/unit/test_tang_dap.cpp`; it also shows that a debugged run
+6: the command has no policy for raising a budget. `--jit-threshold N` (story 15) sets the polls a function makes before the
+baseline JIT compiles it (0 is never; a command built without the JIT refuses the
+option as a usage error), and `--jit-stats` writes one line of the JIT's counters
+to stderr after the run, the way `--errors` writes the error list. A scripted
+session against the real binary is `tests/unit/test_tang_dap.cpp`; it also shows that a debugged run
 with every stop continued, or with breakpoints never reached, prints on stderr
 exactly what the plain command prints on stdout, with the same status.
 
@@ -1406,6 +1444,203 @@ a scripted session against `/page?debug=1` that stops at the breakpoint on
 bounded, with an `alarm` as the backstop. It runs from `make examples` and is not
 part of the sanitizer trees, which build the unit tests only; under Valgrind it
 is clean.
+
+## The baseline JIT
+
+A small baseline JIT (story 15, CAP-10, AD-9) behind a build option, `JIT=yes|no`.
+It tiers up a function that is hot, compiles the part of it that is cheap and
+exact to machine code through `runtime-jit`, and leaves compiled code for the
+interpreter, in the same guest frame, whenever it meets anything else. It is the
+first client of `runtime-jit` and of the two things `runtime-core` gained for it
+(`a/code.h`, reference-counted compiled code, and `a/deopt.h`, a reader and writer
+of a native frame by its metadata). `lang-tang`'s observable behaviour is the
+same on both tiers, by construction and by test: no divergence-ledger row exists
+for the JIT, and none may be added.
+
+### How it works
+
+**Hotness.** `POLL` bumps one counter per function in a per-execution table
+(AD-22: feedback lives with the context). The main program's top level is counted at its entry poll only: it is entered once, so a crossing in one of its loops would compile code nothing can enter. At the threshold (default
+`GLTANG_JIT_DEFAULT_THRESHOLD`, 200 polls; `gltang_execution_set_jit_threshold`,
+`tang --jit-threshold N`; 0 is never) the function is queued and a request of the
+engine's own kind is posted, so that the poll being made runs the **tier-up
+handler**, registered by key (AD-19) in phase ACT (AD-5). The handler acts only
+when the verdict is continue; on a pause or an unwind it does nothing and the
+request stays pending. It compiles every queued function synchronously, allocates
+nothing in the GC heap, and clears the request. The registration is made when the
+execution is created (a registration is refused while the context runs), and a
+failure to make it is not a failure to create the execution: the threshold is then
+0 and the interpreter runs alone.
+
+**Entry.** Compiled code is entered only right after a function's entry `POLL`
+(bytecode offset 0) has returned continue in the interpreter: the compiled
+function starts "after the entry poll", at index 1 with an empty operand stack and
+the frame's locals as its parameters. The guest frame was pushed by the interpreter
+exactly as for any call, and it is the frame a pause shows. Entering records a
+`GRCORE_ACTIVATION_JIT` activation, which draws on the native-depth budget (AD-21):
+if the budget is full the function is simply not entered this time, the interpreter
+runs it and the budget is untouched. Each entry retains the code for the call, so
+a function discarded during a run is freed only after the call ends. The tier-up
+that compiled the function in this very poll is entered in the same invocation.
+
+**What is compiled.** Inline: `POLL`, `LINE`, `POP`, `DUP`, `NULL`, `TRUE`,
+`FALSE`, `CONST` (a small integer only), `LOAD_LOCAL`, `STORE_LOCAL`, `NEG`,
+`NOT`, `ADD`, `SUB`, `MUL`, `LT`, `LE`, `GT`, `GE`, `EQ`, `NE`, `JMP`, `JMP_FALSE`,
+`JMP_TRUE`, `AND`, `OR` and `RET`. Each step mirrors the interpreter's own inline
+path: both operands carry the integer tag or a guard fails; `ADD`, `SUB` and `NEG`
+check the result against the small-integer range; `MUL` needs both untagged
+operands inside -2^29..2^29-1 so the product cannot leave the range; the operand
+of `NOT`, the jumps, `AND` and `OR` must be a boolean. Everything else (`DIV`,
+`MOD`, `CALL`, globals, casts, indexing, attributes, slices, the `SET_*`, `ADOPT`,
+`ARRAY`, `MAP`, `PRINT*`, `ITER_*`, `DISCARD`, `SET_RESULT`, `USE`, `FUNC`, `HALT`
+and any other constant) is an unconditional deoptimization exit at that
+operation. A tagged value is computed on through `GRJIT_OP_BITCAST` (a `REF`
+reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
+
+**The guard and the exit.** A guard that fails, or an unconditional exit, returns
+from compiled code with a frame state in the guest frame's own slot order: the
+function word, the pc, the sp, the flags (dead: the frame keeps its own), one slot
+per local, one per operand-stack position and last the fuel the compiled code had
+counted and not charged. The deoptimizer writes pc, sp, the locals and the stack
+into the guest frame, adds the fuel to the execution's pending fuel, and the
+interpreter resumes at the operation, which it re-executes whole: an operation that
+deopts has not been charged, because its guard is tested before its cost is added.
+A function that deoptimizes eight times is discarded and never compiled again in
+that execution (`functions_discarded`); one whose first operation after its entry
+poll is an unconditional exit is not compiled at all.
+
+**Polls, and the frame at a GC point.** Compiled code never pushes or pops a
+frame, and calls no allocating, polling or guest-calling helper. Its only calls
+out are the two fuel helpers (no GC point) and the poll helper. A poll is a load
+of the request word and a branch; with nothing pending the helper is not called.
+The slow path calls `gltang_jit_poll`, which finds the compiled frame through its
+own frame-pointer chain (the JIT module is built with `-fno-omit-frame-pointer`, a
+stamped Makefile flag), reads the frame state of the site with
+`grcore_deopt_read`, writes pc, sp, the locals and the stack into the top guest
+frame, polls with the same identity as the interpreter's own poll, reloads the
+guest frame (the stack may have moved), and on continue copies the slots back with
+`grcore_deopt_write_back`, so that a collector that updated a reference in place is
+honoured. A pause or an unwind returns from compiled code with the verdict and the
+guest frame already current: the interpreter returns paused or jumps to `unwound`
+exactly as for its own poll. The poll helper is the one GC point, and at it the
+guest frame is current, so a collection, a pause, the debugger and the frame
+differential all see an ordinary interpreter frame, and no native frame is ever
+scanned by the collector (AD-17).
+
+**Fuel (AD-21)** is the same on every tier. Compiled code counts each executed
+bytecode's cost in a register and flushes it to the execution before every poll
+(`gltang_jit_flush`, which also flushes to the context, as the interpreter's `POLL`
+does), on `RET`, and in the deoptimizer on exit. A budget therefore pauses or
+unwinds at the same poll with the same total on both tiers, which the fuel-parity
+test checks over four programs and three budgets.
+
+**`LINE`** loads the execution's `statement_polls` byte at every execution, so a
+host that turns the switch on mid-run (a test flips it from a poll handler) gets a
+poll at the next compiled `LINE`, and with it clear a `LINE` costs a load and a
+branch and no fuel. The engine never asks whether a debugger is attached: a
+breakpoint in compiled code is a `LINE` poll whose vote the debugger casts, the
+frame is written, and stepping resumes in the interpreter. A later call of the
+function enters compiled code again.
+
+**Ownership.** Compiled code is context-specialised in this story (it bakes in the
+program-and-function word and the execution's own addresses) and owned by its
+execution's cache; its pages come from the context's counting page provider, so
+they are on the context's meter and a memory budget can refuse them. A compile
+refused by memory, by a limit or by `protect`, marks the function never-compile,
+is counted (`compile_failures`) and the run goes on in the interpreter. `a/code.h`
+holds the count: the cache owns one reference and each entry takes one.
+
+### Why this and not something else
+
+- **The guest frame is pushed first and compiled code updates it, vs rebuilding
+  the frame on a pause.** The shadow frame makes four problems disappear without a
+  new core feature: a push can fail only where the interpreter already handles it,
+  a pause finds only interpreter frames (AD-8), a collection at a poll sees every
+  reference as an ordinary slot, and the frame differential compares an interpreter
+  frame with an interpreter frame. Rebuilding on a pause would put a frame builder
+  in the pause path and make the debugger's view a function of the JIT. The price
+  is that the guest frame is stale between polls, which is harmless because
+  compiled code has no GC point between them.
+- **The frame is written at every poll's slow path, vs a precise native walk of
+  compiled frames.** A precise walk would let compiled code call allocating
+  helpers and hold references across them, which is what a wider supported set
+  needs, and it needs the collector's root source to read native frames, which
+  `runtime-core` does not have. Writing the frame is cheap where it happens (only
+  when something is pending) and the walk is the next step.
+- **Tier-up in ACT with entry after the entry poll, vs on-stack replacement.**
+  Entering at a function's start needs the state at one place, with an empty stack.
+  Replacing a running interpreter frame at a loop's back-edge needs a mapping from
+  every loop head's interpreter state to compiled registers and an entry point at
+  each. A loop that is hot in a function called once stays in the interpreter for
+  that call: the first measurement shows what that costs and the next step is to
+  say whether it matters (AD-26).
+- **A counter on `POLL` vs call counts.** A poll is the interpreter's one common
+  place for entry and back-edge, so one counter sees a hot loop that a call count
+  would miss. The cost is one load, one increment and one compare per poll when
+  tier-up is on.
+- **Helper calls for fuel vs inline.** Two helper calls are two places where the
+  count is added to an execution field, and the baseline keeps every register in a
+  frame slot anyway. An inline add of the running count to `pending_fuel` would be
+  a store the poll's fast path does not need, and the interpreter already charges
+  where it charges. The poll costs one call whether or not anything is pending.
+- **The small supported set vs a wider one.** Every operation compiled inline is
+  one with no GC point, no allocation and nothing to restore on a failure but its
+  operands. A wider set (calls, globals, containers) needs a precise native walk,
+  the call protocol between compiled frames, and barrier code the engine passes in;
+  each is a story.
+- **The `LINE` flag read at every execution vs forcing the interpreter when
+  statement polls are on.** Forcing the interpreter would make a debugger detach a
+  function from the JIT, so a breakpoint test would test the interpreter; reading
+  the flag costs a load and keeps the compiled function the one that stops.
+- **Context-specialised code vs shared code.** Code that bakes in an execution's
+  addresses is a smaller compiler and no indirection; sharing between contexts
+  (AD-22) needs a context register for every address and a cache keyed by program,
+  which `a/code.h`'s atomic count is ready for and nothing else is.
+
+### Measured
+
+
+First measurements (`make bench` on an Intel Core 7 150U, gcc 14.2 -O2, release, best of seven, calibration 1.12 ns per xorshift step; an engine case's unit is one run of a fixed program, setup excluded; nothing was tuned, AD-26). The loop is `function f(n) { i = 0; while (i < n) { i = i + 1; } return i; }`, called once with n = 10,000,000, with the JIT off and with a threshold of one, so that the compiled run includes the compile and the entry:
+
+| Case | Figure |
+| --- | --- |
+| the 10-million-iteration integer loop, interpreted | 359 ms (36 ns an iteration: a poll, a comparison, a jump and one statement) |
+| the same, compiled | 111 ms (11 ns an iteration): **3.2 times faster** (3.3 in the run before it) |
+| the same work as four statements an iteration (2.5 million iterations), interpreted | 164 ms |
+| the same, compiled | 63 ms: 2.6 times faster |
+| a poll with nothing pending, from the two loops | the loop skeleton (a poll, a comparison and a jump) costs 26 ns interpreted and 6.4 ns compiled, and a statement `i = i + 1` 9.9 ns interpreted and 4.7 ns compiled. A compiled poll is a call of the fuel helper, a load of the request word and a branch; the interpreter's is the fuel flush, `SAVE`, `SYNC`, the call of `grcore_stack_poll` and a reload |
+| a typical small function (a comparison, a branch, a 3-iteration loop), run once | 0.52 us interpreted; 76.4 us with a threshold of one, which is the compile and the entry of two functions (the top level and `f`), about 38 us each |
+| what the JIT's presence costs a run that never tiers up (the same case, `JIT=yes` with the default threshold against `JIT=no`, alternating) | loops and string and array building: +2 to +5% (a counter on each poll of a function that is not the main program's top level, and the registration of the tier-up handler at creation); native calls, `use` and the error list within the noise |
+| `fib(15)`, 1,973 calls | 180 us without the JIT, 220 us with it (+22%): `fib` is compiled after 200 polls, every call enters compiled code and leaves it at the `CALL`, and after eight such exits the code is discarded; the compile (about 40 us) is the cost, and nothing the JIT does here pays it back. A call-heavy function is what a baseline without calls inside compiled code is worst at, and is the next thing a benchmark would name |
+
+The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason.
+
+### What is not done
+
+- **Calls inside compiled code.** A `CALL` is a deoptimization exit; the
+  interpreter makes the call and the callee enters its own compiled code at its
+  entry. JIT frames do not call JIT frames.
+- **On-stack replacement into a running loop.** Compiled code is entered at a
+  function's entry only; a loop that gets hot in a function called once runs in
+  the interpreter for that call, and after a pause at a compiled poll the rest of
+  that invocation is the interpreter's too.
+- **A compiler thread**, **code sharing between contexts** and **a cache**. The code is
+  context-specialised and per execution, compiled synchronously in a poll; there
+  is no cache on disk. (`a/code.h`'s count is atomic so that sharing can be added
+  without changing who owns what.)
+- **Other architectures and Windows.** x86-64 on Linux only; `grjit_backend_available()`
+  is false elsewhere and the compile is then `GLTANG_ERR_UNSUPPORTED`, counted as a
+  failure. `JIT=no` is the arm for every other target.
+- **Inline caches**, **inlining of heap operations** (arrays, maps, strings, calls
+  to natives), floating point, boxed integers and `DIV`/`MOD`: all of them are
+  exits, and the interpreter does them.
+- **Hardening** of the generated code (guard pages, randomised layout, constant
+  blinding): the pages are never writable and executable at once, and that is all.
+- **A precise native-frame walk for roots.** Not needed here, and what a wider
+  supported set would need first.
+- **Compile-time limits tuned to a benchmark.** The supported set, the threshold
+  of 200 polls and the eight-deoptimization rule are the story's figures, taken as
+  given; nothing was tuned (AD-26).
 
 ## Known defects, inherited and open
 
@@ -1484,7 +1719,9 @@ reading future figures against the calibration beside them:
 | run: the same, statement polls on with nothing pending | about 130 us (about 16 ns a poll on the unarmed fast path) |
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
-are where they were, within the noise of the machine.
+are where they were, within the noise of the machine. (With the JIT built, the
+default threshold costs a run that never tiers up 2 to 5%, and `fib` 22%; see "The
+baseline JIT", which also has the cases that measure the compiled loop.)
 
 **The statement-boundary instruction (story 13).** `LINE` is executed even with
 statement polls off, so the cases above that run statements are slower than they
@@ -1532,7 +1769,8 @@ protocol (the frame walk, scopes and variables read from a paused context, which
 name the right program for every frame) and polls at statements when a host asks
 ("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the
 web-server example are its hosts. No conditional breakpoints, no expression
-evaluation. No `simplify`. No JIT, no snapshots. No
+evaluation. No `simplify`. No snapshots. The JIT is a baseline: it is described, with
+what it does not do, under "The baseline JIT". No
 parse-time charge to a context's memory (see "The memory-budget contract"). No
 CI.
 
