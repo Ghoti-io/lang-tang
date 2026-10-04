@@ -129,6 +129,9 @@ struct Outcome {
   }
 };
 
+// run() and expect_same() serve the JIT arm only; the JIT=no arm has no test that
+// calls them, and -Wunused-function would report them there.
+#ifdef GLTANG_WITH_JIT
 Outcome run(const Scenario & sc, long threshold) {
   Outcome out;
   Compiled page(sc.source, sc.mode, "jit.tang");
@@ -237,6 +240,7 @@ void expect_same(const Scenario & sc, Outcome * interpreter = nullptr, Outcome *
     *jit = b;
   }
 }
+#endif
 
 const char * const kLoop =
     "function sum(n) { s = 0; i = 0; while (i < n) { s = s + i; i = i + 1; } return s; }\n"
