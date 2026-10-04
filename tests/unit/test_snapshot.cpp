@@ -314,6 +314,60 @@ TEST(Snapshot, OutputSoFarContinuesFromTheSameBytesAndTheErrorListIsIdentical) {
   EXPECT_EQ(dst.raw().substr(0, output_at_pause.size()), output_at_pause);
 }
 
+TEST(Snapshot, TheDroppedErrorCountAndTheLimitSurviveARestoreAndLaterErrorsAreStillDropped) {
+  // A limit of two with six swallowed errors: four are dropped. The pause is
+  // after the list overflowed, so the count is part of what the image carries.
+  const char * source =
+      "print(1 / 0); print(1 / 0); print(1 / 0); print(1 / 0);\n"
+      "for (i = 0; i < 40; i += 1) { }\n"
+      "print(1 / 0); print(1 / 0); 3;";
+  auto c = compile(source);
+  ::Setup limit = [](Context & ctx) { ASSERT_EQ(gltang_execution_set_error_limit(ctx.execution, 2), GLTANG_OK); };
+  Reference ref = run_reference(*c, Config(), limit);
+  ASSERT_EQ(ref.seen.dropped, 4u);
+  bool any = false;
+  for (uint64_t at : {40, 60, 80, 100}) {
+    Source src(*c, at, Config(), limit);
+    if (!src.paused() || gltang_execution_errors_dropped(src.ctx->execution) == 0) {
+      continue;
+    }
+    any = true;
+    uint64_t dropped_at_pause = gltang_execution_errors_dropped(src.ctx->execution);
+    Snap snap;
+    ASSERT_EQ(gltang_snapshot_take(src.ctx->execution, &snap.s), GLTANG_OK);
+    Finished f = restore_and_finish(*c, snap.s, Config(), limit);
+    EXPECT_TRUE(same_as(ref, f, src.fuel_at_pause)) << "fuel " << at;
+    EXPECT_GE(f.seen.dropped, dropped_at_pause);
+    EXPECT_EQ(f.seen.dropped, 4u);
+  }
+  EXPECT_TRUE(any) << "no fuel point paused after the list overflowed";
+}
+
+TEST(Snapshot, AnUnloggedErrorResultSurvivesAPauseBeforeTheNextStatement) {
+  // A statement whose value is an error, nothing consumed it: the next
+  // statement's result replaces it and the loss is recorded. A pause between
+  // the two must not forget that it is pending.
+  const char * source =
+      "1 / 0;\n"
+      "for (i = 0; i < 30; i += 1) { }\n"
+      "2;";
+  auto c = compile(source);
+  Reference ref = run_reference(*c, Config());
+  size_t checked = 0;
+  for (uint64_t at = 2; at < ref.fuel; at += 3) {
+    Source src(*c, at);
+    if (!src.paused()) {
+      continue;
+    }
+    Snap snap;
+    ASSERT_EQ(gltang_snapshot_take(src.ctx->execution, &snap.s), GLTANG_OK);
+    Finished f = restore_and_finish(*c, snap.s);
+    EXPECT_TRUE(same_as(ref, f, src.fuel_at_pause)) << "fuel " << at;
+    checked++;
+  }
+  EXPECT_GT(checked, 3u);
+}
+
 // ---------------------------------------------------------------------------
 // The corpus
 // ---------------------------------------------------------------------------
