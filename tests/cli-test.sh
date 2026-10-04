@@ -33,6 +33,12 @@ TANG="${1:?usage: cli-test.sh <path to tang>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CORPUS="$HERE/corpus"
 failures=0
+# Windows (MSYS2, or the cross-build imitating it) is where the standard streams
+# default to text mode and where the descriptor transport is a stub.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) WINDOWS=1 ;;
+  *) WINDOWS= ;;
+esac
 TMPFILE="$(mktemp)"
 trap 'rm -f "$TMPFILE"' EXIT
 
@@ -105,6 +111,17 @@ check "--depth bounds it" "no" \
   "$("$TANG" --depth 10 -e 'function d(n) { if (n <= 0) { return 0; } return d(n - 1); } if (d(20) == 0) { print("ok"); } else { print("no"); }')"
 check "50,000 deep recursion, depth raised" "50000" \
   "$("$TANG" --depth 100000 -e 'function d(n) { if (n <= 0) { return 0; } return 1 + d(n - 1); } print(d(50000));')"
+
+# The standard streams are byte streams on every platform: a newline the
+# program prints is one LF, not CR LF (Windows opens them in text mode unless the
+# command says otherwise), and diagnostics carry no CR. Counted with tr and wc
+# because $(...) strips a trailing LF but not a CR, which is how this was found.
+check "stdout: a printed newline is one byte" "4" "$("$TANG" -e 'print("a\nb\n");' | wc -c | tr -d ' ')"
+check "stdout: no carriage return is added" "0" "$("$TANG" -e 'print("a\nb\n");' | tr -cd '\r' | wc -c | tr -d ' ')"
+check "stderr: a diagnostic carries no carriage return" "0" \
+  "$("$TANG" --errors -s -e 'print(1/0);' 2>&1 >/dev/null | tr -cd '\r' | wc -c | tr -d ' ')"
+check "stdin: a Ctrl-Z byte is a byte and not the end of the file" "1" \
+  "$(printf 'print(1);\032print(2);' | "$TANG" -s >/dev/null 2>&1; echo $?)"
 
 # A runaway loop under a fuel budget pauses; the command has no one to resume
 # it, so it says where and exits 5. The process survives.
@@ -293,6 +310,16 @@ status "--dap with the source on stdin exits 2" 2 "$TANG" --dap
 out="$("$TANG" --dap </dev/null 2>&1)"
 check "--dap with stdin as the source says why" "tang: --dap needs a FILE or --evaluate: standard input carries the debug session" "$out"
 
+if [ -n "$WINDOWS" ]; then
+  # runtime-debug's descriptor transport is a stub on Windows, so there is no
+  # session to play: the command says so and exits 7, the status of a runtime
+  # that could not be set up, without running the program.
+  out="$("$TANG" --dap -s -e 'print(1);' </dev/null 2>&1)"
+  check "--dap on Windows says it is unsupported" \
+    "<evaluate>: --dap is not supported on this platform: the debugger has no transport over standard input and output here" "$out"
+  status "--dap on Windows exits 7 (setup)" 7 "$TANG" --dap -s -e 'print(1);'
+  check "--dap on Windows runs nothing" "" "$("$TANG" --dap -s -e 'print(1);' 2>/dev/null </dev/null)"
+else
 # A framed message: Content-Length, a blank line, the body.
 frame() {
   printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
@@ -334,6 +361,7 @@ esac
 check "--dap with a client that is already gone runs free (status)" "0" "$?"
 check "--dap with a client that is already gone runs free (output)" "7" "$(cat "$TMPFILE.err")"
 rm -f "$TMPFILE.out" "$TMPFILE.err"
+fi
 out="$("$TANG" --help)"
 case "$out" in
   *"--dap"*"Debug Adapter Protocol"*) printf '  ok    --help describes --dap\n' ;;

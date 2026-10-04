@@ -86,6 +86,10 @@
 #endif
 #include <errno.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #define EXIT_REFUSED 1
 #define EXIT_USAGE 2
@@ -261,6 +265,12 @@ static int debug_host_create(DebugHost * host, GRCORE_Context * context, const c
   }
   if (result == GRDBG_OK) {
     result = grdbg_dap_create(host->debugger, host->transport, NULL, &host->dap);
+  }
+  if (result == GRDBG_ERR_UNSUPPORTED) {
+    // Windows: the descriptor transport is a stub (runtime-debug's transport.h).
+    fprintf(stderr, "%s: --dap is not supported on this platform: the debugger has no transport over standard input and output here\n", name);
+    debug_host_destroy(host);
+    return EXIT_SETUP;
   }
   if (result != GRDBG_OK) {
     fprintf(stderr, "%s: the debugger could not be set up: %s\n", name, grdbg_result_string(result));
@@ -456,7 +466,11 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   GRCORE_Result ran;
 #ifdef GLTANG_WITH_DEBUG
   if (options->dap) {
+#ifdef SIGPIPE
+    // A client that went away is an error return from the write, not a signal
+    // that ends the process. Windows has no SIGPIPE (and no descriptor transport).
     signal(SIGPIPE, SIG_IGN);
+#endif
     int attached = debug_host_create(&debug, context, name);
     if (attached) {
       status = attached;
@@ -466,11 +480,7 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   }
   else {
     ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
-#ifdef SIGPIPE
-    // A client that went away is an error return from the write, not a signal
-    // that ends the process. Windows has no SIGPIPE (and no descriptor transport).
   }
-#endif
 #else
   ran = grcore_run(context, gltang_execution_entry, execution, &outcome);
 #endif
@@ -562,6 +572,21 @@ int main(int argc, const char * argv[]) {
   Options options;
   memset(&options, 0, sizeof(options));
   options.depth = DEFAULT_CALL_DEPTH;
+
+#ifdef _WIN32
+  // The standard streams are byte streams. The Windows C runtime opens them in
+  // text mode, which writes every \n as \r\n and ends a read at a Ctrl-Z: the
+  // rendered output of a template (HTML, JSON, a generated file) then differs
+  // by platform and, redirected to a file or a pipe, is not what the program
+  // wrote; stdin as source would not be the bytes the parser was given; and
+  // the diagnostics a script compares (name:line:column: message) would carry
+  // a stray \r. The output is counted in bytes (fwrite of an explicit length),
+  // so there is no text to translate. A console shows \n as a line break all
+  // the same.
+  _setmode(_fileno(stdin), _O_BINARY);
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
+#endif
 
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "--evaluate") || !strcmp(argv[i], "-e")) {

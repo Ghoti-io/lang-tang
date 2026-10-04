@@ -194,6 +194,17 @@ CXXFLAGS += -DGLTANG_STATIC
 endif
 LIB_CFLAGS := $(CFLAGS) -fvisibility=hidden -DGLTANG_BUILD $(EXTRA_CFLAGS)
 LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
+# The parser accepts a tree GLTANG_MAX_TREE_DEPTH (10,000) levels tall, and
+# destroying, walking, counting, printing and compiling it recurse once a level
+# on the native stack. That takes about 1.5 MB on Linux (1 MB is not enough, 2
+# is) and more on Windows, where frames carry shadow space, against a default
+# reserve of 2 MB for a MinGW executable and 1 MB for MSVC's: tang and the test
+# programs died there on a 9,990-deep tree, with no message. 16 MB is the
+# reserve (address space, committed only as it is used) of a main thread on
+# which the whole depth budget fits with room for a debug build.
+ifeq ($(OS_NAME), Windows)
+LDFLAGS += -Wl,--stack,16777216
+endif
 ifdef PREFIX
 LDFLAGS += -Wl,-rpath,$(LIB_INSTALL_PATH)/$(SUITE)
 ifeq ($(OS_NAME), Windows)
