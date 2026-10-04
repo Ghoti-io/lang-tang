@@ -27,6 +27,7 @@ templates also include `library.h`.
 | Register a template and call it from another (`use sidebar; sidebar()`) | [`nested_templates.c`](nested_templates.c), `gltang_library_add_template` |
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |
+| See a function tier up, and read what the JIT did (and run in a build without it) | [`jit_hot_loop.c`](jit_hot_loop.c), `run_once`: `gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built` |
 | Serve templates over HTTP, a fresh context for each request | [`web_server.c`](web_server.c), `run_request`; the templates are in [`web/`](web/) |
 | Answer a runaway template with its file and line, and keep serving | [`web_server.c`](web_server.c), `run_request` (raise the budget once, then a second pause is final) |
 | Compile a template with the path it was read from, so a breakpoint names the real file | [`web_server.c`](web_server.c), `load_program` |

@@ -32,7 +32,11 @@
  * budget) and of the host API (a `use` with a member access, a native function
  * called in a loop, a template call that opens and closes a budget scope, a
  * loop of swallowed errors with the error list at its cap, and a generator
- * drawn in a loop), and of the opt-in statement poll (a loop of four statements
+ * drawn in a loop), and of the baseline JIT (a 10-million-iteration integer loop
+ * interpreted and compiled, the same loop with four statements an iteration so
+ * that the cost of a poll can be read from the difference, and a small function
+ * run once interpreted and once with a threshold of one, the difference being
+ * the compile; the cases exist only when the library has the JIT), and of the opt-in statement poll (a loop of four statements
  * an iteration with statement polls off, and on with nothing pending). An engine case's unit is one run of a fixed program; the
  * clock covers the run and not the building or the tearing down of the context.
  *
@@ -446,6 +450,69 @@ static uint64_t statements_on_run(uint64_t iterations, double * elapsed) {
   return run_source_with(STATEMENTS_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_statement_polls);
 }
 
+#ifdef GLTANG_WITH_JIT
+/* The baseline JIT (story 15). Each run is one compile of a hot loop's source
+ * in a context of its own, so the clock covers the run, which for the
+ * compiled cases includes the compile and the entry (both are small beside ten
+ * million iterations). --smoke shrinks the loop so that `make test` stays quick. */
+static int smoke_mode;
+
+static uint64_t loop_count(void) {
+  return smoke_mode ? 100000u : 10000000u;
+}
+
+static void setup_jit_off(GLTANG_Execution * execution) {
+  if (gltang_execution_set_jit_threshold(execution, 0) != GLTANG_OK) {
+    setup_failed("the JIT threshold");
+  }
+}
+
+static void setup_jit_on(GLTANG_Execution * execution) {
+  if (gltang_execution_set_jit_threshold(execution, 1) != GLTANG_OK) {
+    setup_failed("the JIT threshold");
+  }
+}
+
+/* `body` is the loop's statements; the loop counts i up to n. A body of four
+ * statements steps four times as far each iteration, so the same number of
+ * statements run in a quarter of the polls. */
+static uint64_t jit_loop(const char * body, uint64_t step, Setup setup, uint64_t iterations, double * elapsed) {
+  char source[512];
+  snprintf(source, sizeof(source), "function f(n) { i = 0; while (i < n) { %s } return i; } f(%llu);", body, (unsigned long long)(loop_count() / step * step));
+  return run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+}
+
+static uint64_t jit_loop_interpreted_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1;", 1, setup_jit_off, iterations, elapsed);
+}
+
+static uint64_t jit_loop_compiled_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1;", 1, setup_jit_on, iterations, elapsed);
+}
+
+static uint64_t jit_loop4_interpreted_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1; i = i + 1; i = i + 1; i = i + 1;", 4, setup_jit_off, iterations, elapsed);
+}
+
+static uint64_t jit_loop4_compiled_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1; i = i + 1; i = i + 1; i = i + 1;", 4, setup_jit_on, iterations, elapsed);
+}
+
+/* A typical small function, run once: nothing hot, so the difference between
+ * the compiled case and the interpreted one is the time to compile it and to
+ * enter the code (and nothing the function does). */
+#define SMALL_FUNCTION_SOURCE \
+  "function f(a, b) { c = a * 2 + b; if (c > 10) { c = c - 10; } else { c = c + 10; } i = 0; while (i < 3) { c = c + i; i = i + 1; } return c - a; } f(7, 3);"
+
+static uint64_t small_function_interpreted_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(SMALL_FUNCTION_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_jit_off);
+}
+
+static uint64_t small_function_compiled_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(SMALL_FUNCTION_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_jit_on);
+}
+#endif
+
 static const Case cases[] = {
     {"calibration", calibration_run, 200u * 1000u * 1000u, 1000u * 1000u},
     {"parse-small-script", parse_small_script_run, 100000u, 100u},
@@ -465,6 +532,14 @@ static const Case cases[] = {
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},
     {"run-statements-1000-polls-on", statements_on_run, 5000u, 5u},
+#ifdef GLTANG_WITH_JIT
+    {"jit-loop-10M-interpreted", jit_loop_interpreted_run, 3u, 1u},
+    {"jit-loop-10M-compiled", jit_loop_compiled_run, 10u, 1u},
+    {"jit-loop4-10M-interpreted", jit_loop4_interpreted_run, 3u, 1u},
+    {"jit-loop4-10M-compiled", jit_loop4_compiled_run, 10u, 1u},
+    {"jit-small-function-interpreted", small_function_interpreted_run, 5000u, 5u},
+    {"jit-small-function-compiled", small_function_compiled_run, 5000u, 5u},
+#endif
 };
 
 #define REPEATS 7
@@ -480,6 +555,9 @@ int main(int argc, char ** argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--smoke") == 0) {
       smoke = 1;
+#ifdef GLTANG_WITH_JIT
+      smoke_mode = 1;
+#endif
     }
     else {
       fprintf(stderr, "bench: unknown argument '%s'\n", argv[i]);
