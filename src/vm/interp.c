@@ -157,7 +157,8 @@ resume_loop:
         // Hotness: one counter per function, per execution. Crossing the
         // threshold posts a request of the engine's own kind, so that this very
         // poll runs the tier-up handler (ACT, and only if the poll continues).
-        if (exec->jit_threshold) {
+        const bool jit_watching = exec->jit_threshold != 0 && fword != exec->jit_settled_fword;
+        if (jit_watching) {
           gltang_jit_note_poll(exec, fword, pc == 1u);
         }
 #endif
@@ -175,7 +176,7 @@ resume_loop:
         // the guest frame the interpreter pushed already in place: the
         // compiled function starts "after the entry poll, pc 1". Everything
         // else about the call is the interpreter's.
-        if (pc == 1u && exec->jit_threshold) {
+        if (pc == 1u && jit_watching && exec->jit_threshold) {
           GLTANG_Value returned = 0;
           switch (gltang_jit_enter(exec, context, fword, &returned)) {
             case GLTANG_JIT_NOT_ENTERED:

@@ -435,6 +435,10 @@ struct GLTANG_Execution {
   // reason for an execution not to exist.
   struct GLTANG_Jit * jit;
   uint32_t jit_threshold;
+  // The function whose last poll found it settled: it will never be compiled
+  // (it was discarded, or refused). Its polls then cost one compare, because
+  // there is nothing to count and nothing to enter. UINT64_MAX is none.
+  uint64_t jit_settled_fword;
   GLTANG_JitStats jit_stats;
 #endif
 };

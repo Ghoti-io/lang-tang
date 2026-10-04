@@ -119,6 +119,7 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
   }
   exec->jit = jit;
   exec->jit_threshold = GLTANG_JIT_DEFAULT_THRESHOLD;
+  exec->jit_settled_fword = UINT64_MAX;
 }
 
 static void discard(GLTANG_JitFn * f) {
@@ -170,6 +171,11 @@ void gltang_jit_note_poll(GLTANG_Execution * exec, uint64_t fword, bool at_entry
     }
     jit->last_fword = fword;
     jit->last_fn = f;
+  }
+  if (f->state == GLTANG_JITFN_NEVER) {
+    // Settled: the interpreter stops asking about this function.
+    exec->jit_settled_fword = fword;
+    return;
   }
   if (f->state != GLTANG_JITFN_COLD || ++f->polls < exec->jit_threshold) {
     return;
@@ -255,7 +261,9 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   if (!jit) {
     return GLTANG_JIT_NOT_ENTERED;
   }
-  GLTANG_JitFn * f = find_fn(exec, jit, fword, false);
+  // The poll that has just run left this function in the one-entry cache, so
+  // the common answer (a function that is not compiled) costs no lookup.
+  GLTANG_JitFn * f = jit->last_fn != NULL && jit->last_fword == fword ? jit->last_fn : find_fn(exec, jit, fword, false);
   if (!f || f->state != GLTANG_JITFN_COMPILED) {
     return GLTANG_JIT_NOT_ENTERED;
   }

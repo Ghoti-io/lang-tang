@@ -539,6 +539,34 @@ static uint64_t small_function_interpreted_run(uint64_t iterations, double * ela
 static uint64_t small_function_compiled_run(uint64_t iterations, double * elapsed) {
   return run_source_with(SMALL_FUNCTION_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_jit_on);
 }
+
+/* The call-heavy case: run-fib-15 with the JIT at its default threshold is the
+ * compiled side; this is the same program interpreted. A compiled function
+ * leaves its code at every CALL (story 15: no JIT frame calls a JIT frame), so
+ * for code that is mostly calls the JIT can only cost. */
+#define FIB_SOURCE "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } fib(%d);"
+
+static uint64_t fib_source_run(int n, Setup setup, uint64_t iterations, double * elapsed) {
+  char source[256];
+  snprintf(source, sizeof(source), FIB_SOURCE, n);
+  return run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+}
+
+static uint64_t fib15_interpreted_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(15, setup_jit_off, iterations, elapsed);
+}
+
+static uint64_t fib15_default_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(15, NULL, iterations, elapsed);
+}
+
+static uint64_t fib22_interpreted_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(22, setup_jit_off, iterations, elapsed);
+}
+
+static uint64_t fib22_default_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(22, NULL, iterations, elapsed);
+}
 #endif
 
 /* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
@@ -672,6 +700,10 @@ static const Case cases[] = {
     {"profile-loop-10M-1ms", profile_loop_1ms_run, 3u, 1u},
     {"jit-small-function-interpreted", small_function_interpreted_run, 5000u, 5u},
     {"jit-small-function-compiled", small_function_compiled_run, 5000u, 5u},
+    {"fib-15-interpreted", fib15_interpreted_run, 1000u, 2u},
+    {"fib-15-jit-default", fib15_default_run, 1000u, 2u},
+    {"fib-22-interpreted", fib22_interpreted_run, 100u, 1u},
+    {"fib-22-jit-default", fib22_default_run, 100u, 1u},
 #endif
 };
 
