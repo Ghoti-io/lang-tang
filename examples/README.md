@@ -28,6 +28,9 @@ templates also include `library.h`.
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |
 | See a function tier up, and read what the JIT did (and run in a build without it) | [`jit_hot_loop.c`](jit_hot_loop.c), `run_once`: `gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built` |
+| Find the hot loop of a program by sampling it (a timer, a profile of self and inclusive samples by file and line), on the interpreter and the JIT | [`profile_hot_loop.c`](profile_hot_loop.c), `profile_once`: `grcore_profiler_attach`, `grcore_profiler_timer_start`, `grcore_profiler_report` |
+| Ask why a value of a paused program is still alive (the chain from the guest stack through an array to the value) | [`retention_leak.c`](retention_leak.c), `main`: `grheap_retention_path`, `grheap_retention_dump` |
+| Read a paused frame's local variables by name (the scope interface, as a debugger does) | [`retention_leak.c`](retention_leak.c), `find_local` |
 | Freeze a context that has run its prologue, and start many contexts from it instead of redoing the prologue | [`snapshot_start.c`](snapshot_start.c), `main`: `gltang_snapshot_take`, `gltang_snapshot_restore` |
 | Check that a context started from a snapshot prints what a run from scratch prints | [`snapshot_start.c`](snapshot_start.c), the comparison in the request loop |
 | Resume a restored context (a snapshot of a paused context leaves the destination paused) | [`snapshot_start.c`](snapshot_start.c), `grcore_resume` after the restore |

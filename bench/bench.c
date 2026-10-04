@@ -279,6 +279,10 @@ typedef struct {
 /* Fills the execution's library before the run: a case's own host API. */
 typedef void (*Setup)(GLTANG_Execution * execution);
 
+/* The context of the execution a Setup is being called for, for a case whose
+ * setup needs the context (the profiler attaches to it). */
+static GRCORE_Context * setup_context;
+
 static void engine_open(Engine * e, GLTANG_Program * program, uint64_t fuel) {
   GRCORE_Options * options = NULL;
   GRHEAP_Options * heap_options = NULL;
@@ -315,6 +319,7 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
     Engine e;
     engine_open(&e, program, fuel_slice ? fuel_slice : GRCORE_UNLIMITED);
     if (setup) {
+      setup_context = e.context;
       setup(e.execution);
     }
     GRCORE_Outcome outcome;
@@ -498,6 +503,29 @@ static uint64_t jit_loop4_compiled_run(uint64_t iterations, double * elapsed) {
   return jit_loop("i = i + 1; i = i + 1; i = i + 1; i = i + 1;", 4, setup_jit_on, iterations, elapsed);
 }
 
+/* The cost of sampling: the same interpreted loop with no profiler and with the
+ * profiler attached and its timer at one millisecond, which is how a host would
+ * run it. The timer thread only posts a request; a sample is taken at the next
+ * poll. At 1 kHz the difference is a few samples' worth of frame walks per
+ * second of run, and the figure says how large that is beside the loop. */
+static void setup_profiled(GLTANG_Execution * execution) {
+  (void)execution;
+  GRCORE_Profiler * profiler;
+  if (gltang_execution_set_jit_threshold(execution, 0) != GLTANG_OK
+      || grcore_profiler_attach(setup_context, 0, &profiler) != GRCORE_OK
+      || grcore_profiler_timer_start(profiler, 1000) != GRCORE_OK) {
+    setup_failed("the profiler");
+  }
+}
+
+static uint64_t profile_loop_off_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1;", 1, setup_jit_off, iterations, elapsed);
+}
+
+static uint64_t profile_loop_1ms_run(uint64_t iterations, double * elapsed) {
+  return jit_loop("i = i + 1;", 1, setup_profiled, iterations, elapsed);
+}
+
 /* A typical small function, run once: nothing hot, so the difference between
  * the compiled case and the interpreted one is the time to compile it and to
  * enter the code (and nothing the function does). */
@@ -640,6 +668,8 @@ static const Case cases[] = {
     {"jit-loop-10M-compiled", jit_loop_compiled_run, 10u, 1u},
     {"jit-loop4-10M-interpreted", jit_loop4_interpreted_run, 3u, 1u},
     {"jit-loop4-10M-compiled", jit_loop4_compiled_run, 10u, 1u},
+    {"profile-loop-10M-off", profile_loop_off_run, 3u, 1u},
+    {"profile-loop-10M-1ms", profile_loop_1ms_run, 3u, 1u},
     {"jit-small-function-interpreted", small_function_interpreted_run, 5000u, 5u},
     {"jit-small-function-compiled", small_function_compiled_run, 5000u, 5u},
 #endif
