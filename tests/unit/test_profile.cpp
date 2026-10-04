@@ -70,8 +70,9 @@ uint64_t total_self(const Profile & p) {
   return n;
 }
 
-/// Asks for a sample at every poll (an ACT handler posting the profiler's
-/// kind), and counts what each sample must hold with a walk of its own (an
+/// Asks for a sample at every poll (a YIELD handler posting the profiler's
+/// kind, after the poll's OBSERVE handlers have cleared it, so the next poll
+/// finds it), and counts what each sample must hold with a walk of its own (an
 /// OBSERVE handler that looks at the same pending bit the profiler does).
 struct EveryPoll {
   GRCORE_Profiler * profiler = nullptr;
@@ -88,7 +89,7 @@ struct EveryPoll {
   ~EveryPoll() { grcore_port_release(port); }
 
   static const GRCORE_Key & poster() {
-    static const GRCORE_Key k = {"profile test poster", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_ACT,
+    static const GRCORE_Key k = {"profile test poster", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_YIELD,
         nullptr, &EveryPoll::post, nullptr, nullptr, nullptr};
     return k;
   }
@@ -98,14 +99,16 @@ struct EveryPoll {
     return k;
   }
 
-  /// The oracle is registered before the profiler, so that in an unshuffled
-  /// poll it looks at the profiler's request before the profiler clears it.
+  /// The oracle is registered after the profiler on purpose. The profiler
+  /// clears its request, and a poll tells every handler what was pending when
+  /// it started, so the oracle still counts the sample (AD-5: OBSERVE handlers
+  /// commute, which the phase-shuffle test below checks).
   bool attach(GRCORE_Context * context, size_t capacity = 0) {
     if (grcore_context_port(context, &port) != GRCORE_OK ||
         grcore_context_request_kind(context, &poster(), &keep) != GRCORE_OK ||
         grcore_context_register(context, &poster(), this) != GRCORE_OK ||
-        grcore_context_register(context, &oracle(), this) != GRCORE_OK ||
-        grcore_profiler_attach(context, capacity, &profiler) != GRCORE_OK) {
+        grcore_profiler_attach(context, capacity, &profiler) != GRCORE_OK ||
+        grcore_context_register(context, &oracle(), this) != GRCORE_OK) {
       return false;
     }
     kind = grcore_profiler_kind(profiler);
@@ -169,7 +172,7 @@ struct Counted {
 /// library templates ({name, source}), and returns the report beside the count.
 Counted run_counted(const std::string & source, long threshold,
     const std::vector<std::pair<std::string, std::string>> & templates = {},
-    Mode mode = Mode::Script) {
+    Mode mode = Mode::Script, uint64_t shuffle_seed = 0) {
   Counted out;
   Compiled page(source, mode, "page.tang");
   EXPECT_TRUE(page.ok()) << page.error.message;
@@ -193,6 +196,9 @@ Counted run_counted(const std::string & source, long threshold,
   }
   EveryPoll every;
   EXPECT_TRUE(every.attach(context.context));
+  if (shuffle_seed != 0) {
+    EXPECT_EQ(grcore_context_set_phase_shuffle(context.context, true, shuffle_seed), GRCORE_OK);
+  }
   EXPECT_TRUE(context.execute());
   out.output = context.raw();
   out.report = read_profile(every.profiler, &out.totals);
@@ -250,6 +256,18 @@ TEST(Profile, TheReportIsExactlyWhatAnIndependentWalkAtEverySampleSaysOnEveryTie
   }
   EXPECT_EQ(interpreted.stats.functions_compiled, 0u);
 #endif
+}
+
+TEST(Profile, TheReportDoesNotDependOnTheOrderTheObserversRan) {
+  Counted plain = run_counted(kCalls, 0);
+  ASSERT_TRUE(plain.ok);
+  for (uint64_t seed = 1; seed <= 16; seed++) {
+    Counted shuffled = run_counted(kCalls, 0, {}, Mode::Script, seed);
+    ASSERT_TRUE(shuffled.ok);
+    EXPECT_EQ(shuffled.totals.samples, shuffled.oracle_samples) << "seed " << seed;
+    EXPECT_EQ(describe(shuffled.report), describe(plain.report)) << "seed " << seed;
+    EXPECT_EQ(describe(shuffled.expected), describe(plain.expected)) << "seed " << seed;
+  }
 }
 
 TEST(Profile, SelfIsTheInnermostFrameAndInclusiveCountsEveryCallerOnceEvenInARecursion) {
