@@ -955,10 +955,14 @@ endif
 
 # The interpreter-only arm: the library built with JIT=no, in its own tree, and
 # its suites (AD-2). It is a nested make, so every variable given on this
-# command line (PREFIX, EXTRA_CFLAGS, CC) reaches it.
+# command line (PREFIX, EXTRA_CFLAGS, CC) reaches it. TEST_GATES is the one it
+# sets for itself, and only when the caller left any: `make coverage` clears
+# them (the gcov runtime exports mangle_path, which check-symbols rightly
+# rejects), and an arm that put them back made coverage fail in check-symbols
+# on the nested tree.
 test-nojit: ## The JIT=no arm: build without the JIT in its own tree and run its suites and gates
 	@printf '\n### The interpreter-only arm (JIT=no) ###\n\n'
-	@$(MAKE) --no-print-directory test JIT=no GLTANG_NESTED_ARM=1 TEST_GATES="$(NOJIT_GATES)"
+	@$(MAKE) --no-print-directory test JIT=no GLTANG_NESTED_ARM=1 TEST_GATES="$(if $(strip $(TEST_GATES)),$(NOJIT_GATES))"
 
 # The arm without the debugger: the library and its unit suites built with
 # WITH_DEBUG=no in a tree of their own, against a prefix from which
