@@ -1,0 +1,2 @@
+function rec(n, acc) { if (n <= 0) { return acc; } return rec(n - 1, acc + n); }
+a = []; a[2] = rec(2, 3); j = 20 - a[2]; print(a); print(j); a;

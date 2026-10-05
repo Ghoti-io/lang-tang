@@ -937,7 +937,7 @@ verdict and requires the judge to name the file.
 The rows are the departures the spec lists: ctang's open section 13 items (9
 and 13), the per-context generator, budgets and the pause and unwind outcomes,
 error reporting, and everything the execution differential found (D-009 to
-D-015, D-017, D-023 to D-029). The ledger is closed when no row is `open`, and
+D-015, D-017, D-023 to D-030). The ledger is closed when no row is `open`, and
 it is: its final state is in "Verification".
 
 Two things the corpus found about ctang are worth recording here because they
@@ -1025,8 +1025,9 @@ function ends in a `return`), D-011 (functions are declared first), D-012,
 D-013 (containers hold integers), D-014, D-015 (a map with more than one key is
 never printed), D-017, D-023, D-024, D-025 (no global array in a function),
 D-026 (`use` once, at the top), D-027 (arrays are compared with `==` only),
-D-028 (no array is repeated or sliced) and D-029 (the right operand of a string
-`+` is `san(x)`, which turns an error into 0).
+D-028 (no array is repeated or sliced), D-029 (the right operand of a string
+`+` is `san(x)`, which turns an error into 0) and D-030 (a value stored into an
+array element is `(e + 0)`).
 
 `make test-oracle` runs the fixed batch (`FuzzDiff.FixedBatch`: seeds 1 to 220,
 both modes, 440 programs) in 9 seconds; `make fuzz-diff FUZZ_DIFF_COUNT=N
@@ -1065,7 +1066,9 @@ batch (a crash or hang would lose the batch's verdicts).
 - **Recorded, found by the fuzz run:** D-027 (`!=` on arrays is `==`), D-028
   (arithmetic on an element of an array that `*` or a slice built is done in
   place: `a = [5] * 2; x = a[0] - 1;` leaves `a` as `[4, 5]`) and D-029 (a string
-  plus the error `Not implemented` is `Not supported`).
+  plus the error `Not implemented` is `Not supported`) and D-030 (the same
+  in-place arithmetic, reached by an index store: `x = 5 + 1; a[2] = x;
+  j = 20 - a[2];` leaves `a[2]` as 14; found by the 900,000-program soak).
 - **Not defects, noted:** a ctang that takes 2.5 seconds for `[1] * 100000000`
   (the early seed 67) is slow and not wrong, and the generator no longer repeats
   arrays; ctang's JIT asserts on `tests-first-program.tang` (see above).

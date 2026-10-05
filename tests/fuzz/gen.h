@@ -59,6 +59,10 @@
  *    `san(x)`, which is `x` unless `x == x` is not true (an error, a map, a
  *    NaN), then 0; the only `as string` is of `null`; every other conversion
  *    to text is a `+` with a string.
+ *  - D-030: arithmetic on an element that an index store put there from a
+ *    computed value held in a variable or returned by a call (ctang does the
+ *    arithmetic in place, as for D-028). A stored value is `(e + 0)`, which is
+ *    a number of its own; an array literal's elements and `+` are not affected.
  *  - D-003 and D-021: `random.global`, `random.default` and native values.
  *    Only `random.seeded(n)` with a literal seed is used.
  *
@@ -570,7 +574,8 @@ class Builder {
           code("print(1);");
         }
         else {
-          code(arr_var() + "[(" + integer(1) + ") % 10] = " + integer(2) + ";");
+          // D-030: stored as `(e + 0)`, a fresh number, never the shared one.
+          code(arr_var() + "[(" + integer(1) + ") % 10] = (" + integer(2) + " + 0);");
         }
         break;
       }
