@@ -1055,8 +1055,8 @@ GLTANG_Result gltang_snapshot_restore(GLTANG_Execution * execution, const GLTANG
   if (!execution || !snapshot || execution->destroyed || execution->in_host || execution->state != GLTANG_EXECUTION_NEW) {
     return GLTANG_ERR_INVALID;
   }
-  RestoreEnv env = {execution, {resolve_type, execution}};
-  GRCORE_RestoreEnv core = {0};
+  RestoreEnv env = {execution, GRHEAP_RESTORE_ENV_INIT(resolve_type, execution)};
+  GRCORE_RestoreEnv core = GRCORE_RESTORE_ENV_INIT(NULL, NULL, NULL, NULL, NULL);
   core.user = &env;
   core.lookup = restore_lookup;
   core.entry = gltang_execution_entry;

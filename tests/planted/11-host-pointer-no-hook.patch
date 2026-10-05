@@ -2,16 +2,16 @@
 # defect: the template type has no snapshot or restore hook, so an image holds the library member's address
 # caught by: the address scan of a snapshot (testSnapshot)
 #
---- a/src/vm/libvalue.c	2026-10-03 23:52:11.489936590 -0500
-+++ b/src/vm/libvalue.c	2026-10-03 23:52:11.509936590 -0500
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
 @@ -51,7 +51,9 @@
  // the hooks write its name and resolve it again (snapshot.c).
- const GRHEAP_Type gltang_type_library = {"lang-tang library", sizeof(GLTANG_LibraryObject), NULL, NULL, NULL, gltang_vm_library_snapshot, gltang_vm_library_restore};
- const GRHEAP_Type gltang_type_native = {"lang-tang native function", sizeof(GLTANG_NativeObject), native_trace, NULL, NULL, gltang_vm_native_snapshot, gltang_vm_native_restore};
--const GRHEAP_Type gltang_type_template = {"lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL, gltang_vm_template_snapshot, gltang_vm_template_restore};
+ const GRHEAP_Type gltang_type_library = GRHEAP_TYPE_INIT("lang-tang library", sizeof(GLTANG_LibraryObject), NULL, NULL, NULL, gltang_vm_library_snapshot, gltang_vm_library_restore);
+ const GRHEAP_Type gltang_type_native = GRHEAP_TYPE_INIT("lang-tang native function", sizeof(GLTANG_NativeObject), native_trace, NULL, NULL, gltang_vm_native_snapshot, gltang_vm_native_restore);
+-const GRHEAP_Type gltang_type_template = GRHEAP_TYPE_INIT("lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL, gltang_vm_template_snapshot, gltang_vm_template_restore);
 +/* planted: the template type forgets its hooks, so its payload keeps the host
 +   pointer to the library member in every image */
-+const GRHEAP_Type gltang_type_template = {"lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL, NULL, NULL};
- const GRHEAP_Type gltang_type_rng = {"lang-tang generator", sizeof(GLTANG_RngObject), NULL, NULL, NULL, NULL, NULL};
++const GRHEAP_Type gltang_type_template = GRHEAP_TYPE_INIT("lang-tang template", sizeof(GLTANG_TemplateObject), NULL, NULL, NULL, NULL, NULL);
+ const GRHEAP_Type gltang_type_rng = GRHEAP_TYPE_INIT("lang-tang generator", sizeof(GLTANG_RngObject), NULL, NULL, NULL, NULL, NULL);
  
  static GLTANG_Value library_value(GLTANG_Execution * exec, const GLTANG_Library * library) {

@@ -78,7 +78,8 @@ struct Tracker {
   size_t live_bytes = 0;
   size_t peak_bytes = 0;
   GRCORE_Allocator allocator;
-  GRCORE_PageProvider pages = {};
+  GRCORE_PageProvider pages =
+      GRCORE_PAGE_PROVIDER_INIT(nullptr, 0, nullptr, nullptr, nullptr);
   const GRCORE_PageProvider * base_pages = grcore_page_provider_default();
 
   Tracker() {

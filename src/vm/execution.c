@@ -328,7 +328,7 @@ static void descriptor_unwind(GRCORE_Context * context, const GRCORE_AbstractFra
   }
 }
 
-const GRCORE_EngineDescriptor gltang_engine_descriptor = {
+const GRCORE_EngineDescriptor gltang_engine_descriptor = GRCORE_ENGINE_DESCRIPTOR_INIT(
   .name = "lang-tang",
   .slot_kind = descriptor_slot_kind,
   .locate = descriptor_locate,
@@ -337,7 +337,7 @@ const GRCORE_EngineDescriptor gltang_engine_descriptor = {
   .decoder = {UINT64_MAX, 0, 0},
   .roots = NULL,
   .unwind = descriptor_unwind,
-};
+);
 
 // ---------------------------------------------------------------------------
 // Roots
@@ -375,7 +375,7 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
   }
 }
 
-static const GRCORE_RootSource root_source = {"lang-tang execution", enumerate_roots};
+static const GRCORE_RootSource root_source = GRCORE_ROOT_SOURCE_INIT("lang-tang execution", enumerate_roots);
 
 // ---------------------------------------------------------------------------
 // Create and destroy

@@ -957,13 +957,13 @@ TEST(SnapshotRefusals, ACRootAHandleAPinAndAConservativeRangeRefuseTheTakeAndThe
   }
   {
     static uint64_t cell;
-    static GRCORE_RootSource range_source = {"range", [](GRCORE_Context *, void *, const GRCORE_RootVisitor * v) {
+    static GRCORE_RootSource range_source = GRCORE_ROOT_SOURCE_INIT("range", [](GRCORE_Context *, void *, const GRCORE_RootVisitor * v) {
       if (v->range) {
         uint64_t lo = reinterpret_cast<uint64_t>(&cell);
         GRCORE_ConservativeRange r = {lo, lo + 8, UINT64_MAX, 0, 0};
         v->range(v->user, &r);
       }
-    }};
+    });
     ASSERT_EQ(grcore_context_add_root_source(src.ctx->context, &range_source, &cell), GRCORE_OK);
     EXPECT_EQ(gltang_snapshot_take(src.ctx->execution, &snap.s), GLTANG_ERR_INVALID) << "a conservative range";
     ASSERT_EQ(grcore_context_remove_root_source(src.ctx->context, &range_source, &cell), GRCORE_OK);
@@ -982,8 +982,8 @@ TEST(SnapshotRefusals, ACRootAHandleAPinAndAConservativeRangeRefuseTheTakeAndThe
 
 namespace {
 
-const GRCORE_EngineDescriptor kDummyEngine = {"dummy", nullptr, nullptr, nullptr, GRCORE_ScopeInterface{nullptr, nullptr, nullptr},
-    GRCORE_ConservativeDecoder{0, 0, 0}, nullptr, nullptr};
+const GRCORE_EngineDescriptor kDummyEngine = GRCORE_ENGINE_DESCRIPTOR_INIT("dummy", nullptr, nullptr, nullptr, GRCORE_ScopeInterface{nullptr, nullptr, nullptr},
+    GRCORE_ConservativeDecoder{0, 0, 0}, nullptr, nullptr);
 
 GRCORE_Result extra_snapshot(GRCORE_Context *, void *, GRCORE_SnapshotWriter *) { return GRCORE_OK; }
 GRCORE_Result extra_restore(GRCORE_Context *, void *, GRCORE_SnapshotReader *, void *, GRCORE_RestoreMode) { return GRCORE_OK; }
