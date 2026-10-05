@@ -192,7 +192,10 @@ void run_row(const Row & row) {
     // difference that counts.
     EXPECT_GT(r.native_polls, base.native_polls) << "the operation made no poll under the name " << row.native;
   }
-  EXPECT_LT(r.seconds, 20.0) << "the wall clock is only a backstop, and this case needed it";
+  // Only a backstop (the alarm above is the hang detector). Under the heavy
+  // instruments a row that is allowed 300 seconds took 20.2 of them on the
+  // unchanged tree, so the backstop is scaled the way the alarm is.
+  EXPECT_LT(r.seconds, tt::heavy_instruments() ? 120.0 : 20.0) << "the wall clock is only a backstop, and this case needed it";
 }
 
 /// Under the collector's torture mode every allocation is a collection, under a
