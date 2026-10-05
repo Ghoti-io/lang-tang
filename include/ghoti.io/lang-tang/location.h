@@ -34,12 +34,16 @@
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * A span of source text, as the parser reports it for a token or a rule.
+ * Lines and columns are as the generated parser counts them.
+ */
 typedef struct GLTANG_PARSER_LTYPE
 {
-  int first_line;
-  int first_column;
-  int last_line;
-  int last_column;
+  int first_line;   ///< Line on which the span starts.
+  int first_column; ///< Column at which the span starts.
+  int last_line;    ///< Line on which the span ends.
+  int last_column;  ///< Column at which the span ends.
 } GLTANG_PARSER_LTYPE;
 
 #ifdef __cplusplus

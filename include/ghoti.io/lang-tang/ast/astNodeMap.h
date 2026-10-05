@@ -43,8 +43,8 @@ GLTANG_API_DATA extern GLTANG_Ast_Node_VTable gltang_ast_node_map_vtable;
  * For "map" expressions, we need to store the key-value pairs in a vector.
  */
 struct GLTANG_Ast_Node_Map_Pair {
-  GLTANG_Ast_Node * key;    ///> The key of the pair.
-  GLTANG_Ast_Node * value;  ///> The value of the pair.
+  GLTANG_Ast_Node * key;    ///< The key of the pair.
+  GLTANG_Ast_Node * value;  ///< The value of the pair.
 };
 
 /**
