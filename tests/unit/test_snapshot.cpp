@@ -844,7 +844,7 @@ void take_at_a_poll(GRCORE_Context *, void * value, GRCORE_PollCall *) {
   ++t->calls;
 }
 
-const GRCORE_Key kTakeAtPoll = {"take at poll", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_OBSERVE, nullptr, take_at_a_poll, nullptr, nullptr, nullptr};
+const GRCORE_Key kTakeAtPoll = GRCORE_KEY_INIT("take at poll", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_OBSERVE, nullptr, take_at_a_poll, nullptr, nullptr, nullptr);
 
 }  // namespace
 
@@ -988,7 +988,7 @@ const GRCORE_EngineDescriptor kDummyEngine = {"dummy", nullptr, nullptr, nullptr
 GRCORE_Result extra_snapshot(GRCORE_Context *, void *, GRCORE_SnapshotWriter *) { return GRCORE_OK; }
 GRCORE_Result extra_restore(GRCORE_Context *, void *, GRCORE_SnapshotReader *, void *, GRCORE_RestoreMode) { return GRCORE_OK; }
 GRCORE_Result extra_settle(GRCORE_Context *, void *, void *, GRCORE_SettleMode) { return GRCORE_OK; }
-const GRCORE_Key kExtraHooked = {"an extra hooked key", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_NONE, nullptr, nullptr, extra_snapshot, extra_restore, extra_settle};
+const GRCORE_Key kExtraHooked = GRCORE_KEY_INIT("an extra hooked key", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_NONE, nullptr, nullptr, extra_snapshot, extra_restore, extra_settle);
 
 /// A destination built by hand, for the mismatches the harness cannot make:
 /// something registered before the execution, or a heap with the wrong codec.

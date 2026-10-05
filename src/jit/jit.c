@@ -55,13 +55,13 @@
 
 static void tierup_poll(GRCORE_Context * context, void * value, GRCORE_PollCall * call);
 
-static const GRCORE_Key tierup_key = {
+static const GRCORE_Key tierup_key = GRCORE_KEY_INIT(
   .name = "lang-tang tier-up",
   .cardinality = GRCORE_CARDINALITY_ONE,
   .phase = GRCORE_PHASE_ACT,
   .destroy = NULL,
   .poll = tierup_poll,
-};
+);
 
 static GLTANG_JitFn * find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uint64_t fword, bool create) {
   uint32_t p = GLTANG_FN_PROGRAM(fword);

@@ -450,7 +450,7 @@ static void key_destroy(GRCORE_Context * context, void * value) {
   gcu_allocator_free(exec->allocator, exec);
 }
 
-const GRCORE_Key gltang_execution_key = {
+const GRCORE_Key gltang_execution_key = GRCORE_KEY_INIT(
   .name = "lang-tang execution",
   .cardinality = GRCORE_CARDINALITY_ONE,
   .phase = GRCORE_PHASE_NONE,
@@ -459,7 +459,7 @@ const GRCORE_Key gltang_execution_key = {
   .snapshot = gltang_vm_exec_snapshot,
   .restore = gltang_vm_exec_restore,
   .settle = gltang_vm_exec_settle,
-};
+);
 
 static GLTANG_Result map_core_result(GRCORE_Result r) {
   switch (r) {

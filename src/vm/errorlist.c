@@ -264,13 +264,13 @@ static void halt_poll(GRCORE_Context * context, void * value, GRCORE_PollCall * 
   }
 }
 
-static const GRCORE_Key halt_key = {
+static const GRCORE_Key halt_key = GRCORE_KEY_INIT(
   .name = "lang-tang halt-on-error",
   .cardinality = GRCORE_CARDINALITY_ONE,
   .phase = GRCORE_PHASE_DECIDE,
   .destroy = NULL,
   .poll = halt_poll,
-};
+);
 
 // ---------------------------------------------------------------------------
 // The host's side

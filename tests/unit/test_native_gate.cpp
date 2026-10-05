@@ -472,7 +472,7 @@ void poster_handler(GRCORE_Context *, void * value, GRCORE_PollCall *) {
   }
 }
 
-const GRCORE_Key kPosterKey = {"test timer", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_OBSERVE, nullptr, poster_handler, nullptr, nullptr, nullptr};
+const GRCORE_Key kPosterKey = GRCORE_KEY_INIT("test timer", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_OBSERVE, nullptr, poster_handler, nullptr, nullptr, nullptr);
 
 struct WallCase {
   const char * name;

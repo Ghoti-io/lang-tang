@@ -89,13 +89,13 @@ struct EveryPoll {
   ~EveryPoll() { grcore_port_release(port); }
 
   static const GRCORE_Key & poster() {
-    static const GRCORE_Key k = {"profile test poster", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_YIELD,
-        nullptr, &EveryPoll::post, nullptr, nullptr, nullptr};
+    static const GRCORE_Key k = GRCORE_KEY_INIT("profile test poster", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_YIELD,
+        nullptr, &EveryPoll::post, nullptr, nullptr, nullptr);
     return k;
   }
   static const GRCORE_Key & oracle() {
-    static const GRCORE_Key k = {"profile test oracle", GRCORE_CARDINALITY_ONE,
-        GRCORE_PHASE_OBSERVE, nullptr, &EveryPoll::count, nullptr, nullptr, nullptr};
+    static const GRCORE_Key k = GRCORE_KEY_INIT("profile test oracle", GRCORE_CARDINALITY_ONE,
+        GRCORE_PHASE_OBSERVE, nullptr, &EveryPoll::count, nullptr, nullptr, nullptr);
     return k;
   }
 

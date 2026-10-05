@@ -51,7 +51,7 @@ struct Script {
   ~Script() { grcore_port_release(port); }
 
   static const GRCORE_Key & key() {
-    static const GRCORE_Key k = {"jit test script", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_ACT, nullptr, &Script::handler, nullptr, nullptr, nullptr};
+    static const GRCORE_Key k = GRCORE_KEY_INIT("jit test script", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_ACT, nullptr, &Script::handler, nullptr, nullptr, nullptr);
     return k;
   }
 
