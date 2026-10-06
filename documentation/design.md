@@ -352,9 +352,10 @@ and that is all a budget needs. A debugger needs more: a breakpoint can only
 fire where the engine polls, so with those sites alone a breakpoint on a line in
 a straight run of statements never fires, and a step over a statement has
 nowhere to stop (runtime-debug's design.md states that as the contract an engine
-has to meet). **This is an extension of AD-4's list of poll sites, recorded here
-and in the Auto Run Result of story 13 for Corey to ratify or reject.** It is
-opt-in, so that nothing in the suite moves unless a host asks.
+has to meet). **This was an extension of AD-4's list of poll sites, and the spine now
+ratifies it: AD-4 lists the statement boundary among its poll sites (commit
+`afc292d` of the workspace).** It is opt-in, so that nothing in the suite moves
+unless a host asks.
 
 The `LINE` instruction is emitted at the start of every statement
 `compile_statement` handles, except a block (a block is the list of the
@@ -1251,9 +1252,10 @@ oracle is a later decision (AD-16 retirement).
 
 ### What is not done
 
-No clang run: the libFuzzer harnesses were not built or run here (no clang
-campaign), and the 12,000-program differential is a measurement, not a long
-campaign. No outside test suite (Test262 and the like). No debugger-attached
+No long libFuzzer campaign: the harnesses build with clang (`make fuzz-parse`),
+and the library, its tests and `test-asan` build and run under clang (the clang
+fixes are in `d273366`), but nothing has been fuzzed for hours, and the
+12,000-program differential is a measurement, not a long campaign. No outside test suite (Test262 and the like). No debugger-attached
 comparison: the observer is built for it and it is story 12. (The
 interpreter-against-JIT differential is story 15's, above.) The execution corpus does not compare the order
 of a map's keys or the error list, which have no ctang equivalent.
@@ -1635,9 +1637,15 @@ The gain is where the supported set is: a hot loop over small integers and boole
 
 ### What is not done
 
-- **Calls inside compiled code.** A `CALL` is a deoptimization exit; the
-  interpreter makes the call and the callee enters its own compiled code at its
-  entry. JIT frames do not call JIT frames.
+- **Calls inside compiled code: a defect of milestone 1, not a choice.** A
+  `CALL` is a deoptimization exit; the interpreter makes the call and the callee
+  enters its own compiled code at its entry. JIT frames do not call JIT frames,
+  so call-heavy code runs slower with the JIT on (`fib(15)` +12%, "Measured").
+  Leaving calls out was a bug (Corey, 2026-10-05), and the spine's AD-9 now
+  says a baseline without them is incomplete. It has its own spec,
+  `planning/specs/spec-runtime-calls/`, and nothing here claims it is done.
+  Floating point in compiled code is the same kind of defect:
+  `planning/specs/spec-runtime-float/`.
 - **On-stack replacement into a running loop.** Compiled code is entered at a
   function's entry only; a loop that gets hot in a function called once runs in
   the interpreter for that call, and after a pause at a compiled poll the rest of
@@ -1935,8 +1943,10 @@ nested template's scope and resumed on another thread (`testTemplate`), which
 gives the same output, error list and result as an uninterrupted run. `check-install` proves what `make install` leaves
 behind is usable by a consumer that includes only the umbrella.
 
-CI is not added: the spine defers it until each engine has a body, and `compress`
-and `text` are the libraries that have it. A local `make test` is the whole gate.
+CI exists (`.github/workflows/ci.yml`, commit `91bc6fd`) and has never run on a
+runner: GitHub Actions is disabled for cost, so no workflow fires on a push. A
+local `make test` (plus `tools/xarch` and `tools/xwin` for other targets) is the
+whole gate, and a claim about a result names where it ran.
 
 ## Benchmarks
 
@@ -2055,8 +2065,8 @@ evaluation. No `simplify`. Snapshots are in-memory objects, taken of a paused or
 execution with no template call in flight: no byte format, no file and no
 sharing of compiled code ("Snapshots", "What is not done"). The JIT is a baseline: it is described, with
 what it does not do, under "The baseline JIT". No
-parse-time charge to a context's memory (see "The memory-budget contract"). No
-CI.
+parse-time charge to a context's memory (see "The memory-budget contract"). The CI
+workflow has not run on a runner (see "Gates").
 
 **Story 9's deferred items.** The resolver contract is closed: host callbacks
 are opaque, run on the owner thread and cannot re-enter (see "The callback
