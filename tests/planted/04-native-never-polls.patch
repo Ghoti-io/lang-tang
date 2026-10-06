@@ -4,45 +4,46 @@
 #
 --- a/src/vm/string.c
 +++ b/src/vm/string.c
-@@ -258,6 +258,7 @@
+@@ -297,6 +297,7 @@
      return exec->roots[GLTANG_ROOT_OOM];
    }
    Pacer pacer = GLTANG_PACER(exec, STRING_CONCAT);
 +  (void)pacer;
    GLTANG_Status poll = GLTANG_ST_OK;
-   uint32_t * offsets = gltang_string_offsets(s);
-   if (offsets) {
-@@ -268,13 +269,13 @@
+   ConcatView c;
+   concat_view(exec, mark, &c);
+@@ -306,14 +307,14 @@
      for (size_t i = 0; i < xg && poll == GLTANG_ST_OK; ++i) {
-       offsets[i] = xo ? xo[i] : (uint32_t)i;
+       c.offsets[i] = c.xo ? c.xo[i] : (uint32_t)i;
        if ((i & 1023u) == 1023u) {
 -        poll = pace(&pacer, 1024u * 4u);
 +        poll = GLTANG_ST_OK; /* planted: the poll removed */
+         concat_view(exec, mark, &c);
        }
      }
      for (size_t i = 0; i <= yg && poll == GLTANG_ST_OK; ++i) {
-       offsets[xg + i] = (uint32_t)(x->byte_length + (yo ? yo[i] : i));
+       c.offsets[xg + i] = (uint32_t)(c.x->byte_length + (c.yo ? c.yo[i] : i));
        if ((i & 1023u) == 1023u) {
 -        poll = pace(&pacer, 1024u * 4u);
 +        poll = GLTANG_ST_OK; /* planted: the poll removed */
+         concat_view(exec, mark, &c);
        }
      }
-   }
-@@ -288,7 +289,7 @@
+@@ -325,7 +326,7 @@
      }
-     memcpy(dest + done, from_x + done, n);
+     memcpy(c.dest + done, c.from_x + done, n);
      done += n;
 -    poll = pace(&pacer, n);
 +    poll = GLTANG_ST_OK; /* planted: the poll removed */
+     concat_view(exec, mark, &c);
    }
-   for (size_t done = 0; done < y->byte_length && poll == GLTANG_ST_OK;) {
-     size_t n = (size_t)y->byte_length - done;
-@@ -297,7 +298,7 @@
+   for (size_t done = 0; done < c.y->byte_length && poll == GLTANG_ST_OK;) {
+@@ -335,7 +336,7 @@
      }
-     memcpy(dest + x->byte_length + done, from_y + done, n);
+     memcpy(c.dest + c.x->byte_length + done, c.from_y + done, n);
      done += n;
 -    poll = pace(&pacer, n);
 +    poll = GLTANG_ST_OK; /* planted: the poll removed */
+     concat_view(exec, mark, &c);
    }
-   gltang_vm_temp_pop(exec);
-   if (poll != GLTANG_ST_OK) {
+   GLTANG_Value result = gltang_vm_temp_at(exec, mark + 2u);
