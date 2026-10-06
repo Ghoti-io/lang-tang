@@ -953,6 +953,10 @@ ifdef RELOCATE_PREFIX
 ifndef GLTANG_NESTED_ARM
 	@$(MAKE) --no-print-directory test-relocate
 endif
+else
+ifndef GLTANG_NESTED_ARM
+	@printf '\n*** THE RELOCATION ARM WAS NOT RUN: RELOCATE_PREFIX is not set. Everything above ran against a heap that never moves an object, so it cannot show a stale reference. Run it with: make test-relocate RELOCATE_PREFIX=<prefix of a runtime-heap installed with RELOCATE=yes> ***\n\n'
+endif
 endif
 
 # The interpreter-only arm: the library built with JIT=no, in its own tree, and

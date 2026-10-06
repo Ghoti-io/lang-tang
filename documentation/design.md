@@ -1246,23 +1246,38 @@ a root could be kept in a C variable. It cannot: a collection rewrites the root
 and not the variable. Every operation that allocates or polls more than once, or
 loops over a string or an array with a poll in the loop, held a value or a pointer
 into an object across a GC point and read it afterwards. Fixed, one commit for
-each family, each with a test in `testRelocate`: growing an array or a map
+each family: growing an array or a map
 (`array_new`, `array_grow`, `map_new`, `map_set`, and the stores that call them:
 a value stored beyond the end of an array that is itself the value, a boxed
 integer stored while the array grows); the deep copy and the comparison of
 containers; the operators that build arrays (concatenation, repetition, slicing,
 `+` with a string); every string operation that copies in chunks (concatenation,
 substring, slice, retag, render); the sinks (printing and rendering a container
-or a string into the output, which can only move at a poll, and a poll collects
-only when the memory budget asks it to reclaim, so no test of the arm reaches
-that change: it follows the rule and is read, not run); and a native bound to a
-value. The rule is now: a value held across a GC point is pushed as a
+or a string into the output); and a native bound to a value.
+
+What `testRelocate` shows for each. The families that allocate (growing, copying,
+the array operators, the string operations' result, the native) each have a case
+that fails with the fix removed; that was checked against the parent of each fix
+commit, and every case crashes there. The loops that poll as they copy, and the
+sinks, move an object only at a poll, and a poll collects only when the memory
+budget asks it to reclaim; a test cannot set a budget to a program, so one case
+(`TheLoopsThatPollAsTheyCopy...`) posts a request that never ends, which makes
+every runtime poll a slow one that runs the heap's handler, which under torture
+collects, which under relocation moves. It runs a multi-chunk concatenation, a
+slice with a step, a substring, retag and render, an array grown and compared at
+length, and the printing of long strings and of a container of them, each
+compared with the ordinary heap's run. Deleting the re-read after the poll in
+concatenation, in slice, in the sink's string copy, in `array_grow` and in
+`equal_rec`, one at a time, makes it die (a stale read of a large object's
+unmapped old mapping), so those re-reads are run and needed. The rule is now: a
+value held across a GC point is pushed as a
 temporary (`gltang_vm_temp_push`) and read again from it (`gltang_vm_temp_at`),
-and a pointer into an object is derived again after every poll. The interpreter's
-own loop already did this (it reloads the frame after every GC point) and the
-baseline JIT's poll copies the guest frame back after the collector has rewritten
-it, so neither needed a change. No address is used as a key anywhere in the
-engine.
+and a pointer into an object is derived again after every poll; `temp_at` and
+`temp_release` assert (in a build without `NDEBUG`) that the index or mark is
+within the temporaries. The interpreter's own loop already reloaded the frame after
+every GC point and the baseline JIT's poll copies the guest frame back after the
+collector has rewritten it, so neither needed a change. The arm found no address
+used as a key in the engine; that is what it found, not a proof of absence.
 
 **Limits.** The arm proves the paths the suites run; a path no suite reaches is
 not shown. A test that keeps an address in a C variable across a run (the

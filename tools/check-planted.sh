@@ -46,7 +46,8 @@
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13 and 14, against PLANTED_RELOC_PREFIX and
 #               PLANTED_RELOC_LIBDIR (a relocation runtime-heap); `make
-#               test-relocate` runs these
+#               check-planted-relocate` runs these, and `make test-relocate`
+#               calls that
 #   --selftest  prove the script itself: a patch that applies to nothing fails
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
