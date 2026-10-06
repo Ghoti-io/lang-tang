@@ -17,7 +17,7 @@ function activate(context) {
         if (session.configuration.script) {
           return new vscode.DebugAdapterExecutable("tang", ["--script", "--dap", file]);
         }
-        return new vscode.DebugAdapterExecutable("tang-old", ["--dap", file]);
+        return new vscode.DebugAdapterExecutable("tang", ["--script", "--dap", file]);
       },
     })
   );

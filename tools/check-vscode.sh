@@ -51,6 +51,9 @@ else:
     launch = d.get("configurationAttributes", {}).get("launch", {})
     if "program" not in launch.get("required", []) or "program" not in launch.get("properties", {}):
         fail("%s: the tang debugger's launch attributes do not require a \"program\"" % manifest_path)
+    script = launch.get("properties", {}).get("script", {})
+    if script.get("type") != "boolean" or script.get("default") is not False:
+        fail("%s: the tang debugger's launch attributes have no boolean \"script\" that defaults to false (a template)" % manifest_path)
     if not d.get("initialConfigurations"):
         fail("%s: the tang debugger offers no initialConfigurations" % manifest_path)
 if not any(b.get("language") == "tang" for b in contributes.get("breakpoints", [])):
@@ -65,17 +68,27 @@ elif not os.path.isfile(extension):
 else:
     with open(extension) as f:
         source = f.read()
-    m = re.search(r'DebugAdapterExecutable\(\s*"([^"]+)"\s*,\s*\[([^\]]*)\]\s*\)', source)
-    if not m:
+    calls = re.findall(r'DebugAdapterExecutable\(\s*"([^"]+)"\s*,\s*\[([^\]]*)\]\s*\)', source)
+    if not calls:
         fail("%s: has no DebugAdapterExecutable(\"command\", [arguments]) call" % extension)
-    else:
-        args = [a.strip() for a in m.group(2).split(",") if a.strip()]
-        if m.group(1) != "tang":
-            fail("%s: the adapter command is \"%s\", not \"tang\"" % (extension, m.group(1)))
+    scripts = 0
+    templates = 0
+    for command, text in calls:
+        args = [a.strip() for a in text.split(",") if a.strip()]
+        if command != "tang":
+            fail("%s: the adapter command is \"%s\", not \"tang\"" % (extension, command))
         if '"--dap"' not in args:
             fail("%s: the adapter's arguments do not include \"--dap\"" % extension)
         if "file" not in args:
             fail("%s: the adapter's arguments do not include the program (the identifier `file`)" % extension)
+        if '"--script"' in args:
+            scripts += 1
+        else:
+            templates += 1
+    if calls and scripts != 1:
+        fail("%s: expected one adapter call with \"--script\" (a script), found %d" % (extension, scripts))
+    if calls and templates != 1:
+        fail("%s: expected one adapter call without \"--script\" (a template, which the checkpoint steps), found %d" % (extension, templates))
     if 'registerDebugAdapterDescriptorFactory("tang"' not in source:
         fail("%s: does not register a descriptor factory for \"tang\"" % extension)
 

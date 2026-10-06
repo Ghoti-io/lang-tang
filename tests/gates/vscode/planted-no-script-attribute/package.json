@@ -51,11 +51,6 @@
                 "type": "string",
                 "description": "The Tang file to run under the debugger.",
                 "default": "${file}"
-              },
-              "script": {
-                "type": "boolean",
-                "description": "Run the file as a script (tang --script) instead of as a template.",
-                "default": false
               }
             }
           }

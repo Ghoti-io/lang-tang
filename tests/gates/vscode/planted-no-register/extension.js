@@ -11,13 +11,13 @@ const vscode = require("vscode");
 
 function activate(context) {
   context.subscriptions.push(
-    vscode.debug.registerDebugAdapterDescriptorFactory("tang", {
+    vscode.debug.registerDebugAdapterDescriptorFactory("tcl", {
       createDebugAdapterDescriptor(session) {
         const file = session.configuration.program;
         if (session.configuration.script) {
           return new vscode.DebugAdapterExecutable("tang", ["--script", "--dap", file]);
         }
-        return new vscode.DebugAdapterExecutable("tang-old", ["--dap", file]);
+        return new vscode.DebugAdapterExecutable("tang", ["--dap", file]);
       },
     })
   );

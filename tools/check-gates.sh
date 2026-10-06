@@ -103,14 +103,22 @@ printf 'check-vscode\n'
 V="$HERE/check-vscode.sh"
 expect_pass 'vscode/control' "$V" "$FIX/vscode/control"
 expect_pass 'vscode/the contribution as it is' "$V" "$ROOT/editors/vscode"
-expect_fail 'vscode/planted-bad-json' 'is not valid JSON' "$V" "$FIX/vscode/planted-bad-json"
-expect_fail 'vscode/planted-no-debugger' 'no debugger of type "tang"' "$V" "$FIX/vscode/planted-no-debugger"
-expect_fail 'vscode/planted-no-program' 'do not require a "program"' "$V" "$FIX/vscode/planted-no-program"
-expect_fail 'vscode/planted-no-breakpoints' 'contributes.breakpoints' "$V" "$FIX/vscode/planted-no-breakpoints"
-expect_fail 'vscode/planted-no-main' 'missing.js, which does not exist' "$V" "$FIX/vscode/planted-no-main"
-expect_fail 'vscode/planted-wrong-command' '"tang-old", not "tang"' "$V" "$FIX/vscode/planted-wrong-command"
-expect_fail 'vscode/planted-no-dap' 'do not include "--dap"' "$V" "$FIX/vscode/planted-no-dap"
-expect_fail 'vscode/planted-no-file' 'the identifier `file`' "$V" "$FIX/vscode/planted-no-file"
+vf() { expect_fail "vscode/$1" "$2" "$V" "$FIX/vscode/$1"; }
+vf planted-bad-json 'is not valid JSON'
+vf planted-no-debugger 'no debugger of type "tang"'
+vf planted-no-program 'do not require a "program"'
+vf planted-no-script-attribute 'no boolean "script"'
+vf planted-script-defaults-true 'no boolean "script"'
+vf planted-no-initial-configurations 'no initialConfigurations'
+vf planted-no-breakpoints 'contributes.breakpoints'
+vf planted-no-main 'missing.js, which does not exist'
+vf planted-no-main-key 'has no "main"'
+vf planted-wrong-command '"tang-old", not "tang"'
+vf planted-no-dap 'do not include "--dap"'
+vf planted-no-file 'the identifier `file`'
+vf planted-script-only 'expected one adapter call with "--script"'
+vf planted-script-only 'a template, which the checkpoint steps), found 0'
+vf planted-no-register 'does not register a descriptor factory'
 expect_fail 'vscode/empty' 'checks nothing' "$V" "$work/empty"
 
 printf 'check-stamps\n'

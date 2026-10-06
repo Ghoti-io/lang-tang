@@ -60,22 +60,6 @@
             }
           }
         },
-        "initialConfigurations": [
-          {
-            "type": "tang",
-            "request": "launch",
-            "name": "Debug the current Tang template",
-            "program": "${file}",
-            "script": false
-          },
-          {
-            "type": "tang",
-            "request": "launch",
-            "name": "Debug the current Tang script",
-            "program": "${file}",
-            "script": true
-          }
-        ],
         "configurationSnippets": [
           {
             "label": "Tang: debug a template",

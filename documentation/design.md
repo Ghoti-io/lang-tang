@@ -1428,20 +1428,26 @@ exactly what the plain command prints on stdout, with the same status.
 
 **VS Code** (`editors/vscode`, story 19). A debug adapter in VS Code is a
 descriptor, and the descriptor here is the whole contribution: `extension.js`
-returns `DebugAdapterExecutable("tang", ["--script", "--dap", file])` for a
-"tang" launch configuration, and `package.json` contributes the `tang` debugger,
-its launch attributes (`program`) and breakpoints in `.tang` files. No debugger
-is written in JavaScript; the adapter is the command above. Nothing in the suite
-can start VS Code, so the test is what can be checked without it:
-`TheVsCodeContributionStartsTheCommandLineThisSuiteDrives` in
-`test_tang_dap.cpp` reads the manifest and the argument list out of
-`extension.js`, maps the command name to the command under test and drives
-`configure`, `stopped`, `disconnect` over exactly that command line, so a
-manifest and a command line that drift apart fail it; `make check-vscode` checks
-the manifest and the call in the extension, and is seen to fail on a planted
-defect for each check (`tests/gates/vscode`, run by `check-gates`). That stepping
-a template in VS Code itself works is a manual step and the closing checkpoint of
-story 19.
+returns `DebugAdapterExecutable("tang", ["--dap", file])` for a "tang" launch
+configuration, which runs the file as a template, and
+`DebugAdapterExecutable("tang", ["--script", "--dap", file])` when the
+configuration says `"script": true`. `package.json` contributes the `tang`
+debugger, its launch attributes (`program`, and `script`, a boolean that
+defaults to false) and breakpoints in `.tang` files. No debugger is written in
+JavaScript; the adapter is the command above. Nothing in the suite can start VS
+Code, so two checks stand in, and each says only what it checks. The test,
+`TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndAScript` in
+`test_tang_dap.cpp`, reads both command lines out of `extension.js`, maps the
+command name to the command under test and drives `configure`, `stopped`,
+`disconnect` over each, so a command line the real command does not accept fails
+it; of the manifest it reads only that a tang debugger and a `script` attribute
+are named. `make check-vscode` checks the manifest's structure (valid JSON, the
+debugger, its required `program`, the `script` attribute and its default,
+initial configurations, breakpoints, `main`) and the shape of the calls in
+`extension.js`, and is seen to fail on a planted defect for each check
+(`tests/gates/vscode`, run by `check-gates`). Neither compares the manifest with
+the command line beyond that. That stepping a template in VS Code itself works
+is a manual step and the closing checkpoint of story 19.
 
 ## The web-server example
 

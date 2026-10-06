@@ -657,11 +657,14 @@ TEST(TangDap, TheSourceNameIsTheFileNameAsGivenOnTheCommandLine) {
 }
 
 // The VS Code contribution (editors/vscode) cannot be started from a test. What
-// can be: read the manifest, read the command line its extension would hand VS
-// Code as the debug adapter, and drive exactly that against the real command, so
-// that the two cannot drift apart. The command name "tang" is the command under
-// test (tang_path()), as it is on the PATH of a VS Code that has one.
-TEST(TangDap, TheVsCodeContributionStartsTheCommandLineThisSuiteDrives) {
+// can be: read the command lines its extension would hand VS Code as the debug
+// adapter (one for a template, one for a script) and drive each against the real
+// command, so that a command line the command does not accept fails here. The
+// manifest's structure is `make check-vscode`'s, not this test's: all it reads
+// from the manifest is that a tang debugger and its `script` attribute are named.
+// The command name "tang" is the command under test (tang_path()), as it is on
+// the PATH of a VS Code that has one.
+TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndAScript) {
 #ifndef GLTANG_TEST_DATA
 #error "GLTANG_TEST_DATA must name the tests/ directory; the Makefile defines it"
 #endif
@@ -674,53 +677,69 @@ TEST(TangDap, TheVsCodeContributionStartsTheCommandLineThisSuiteDrives) {
   };
   const std::string manifest = read_file(dir + "/package.json");
   ASSERT_FALSE(manifest.empty()) << "no manifest at " << dir;
-  EXPECT_NE(manifest.find("\"type\": \"tang\""), std::string::npos) << "the manifest contributes no debugger of type tang";
-  EXPECT_NE(manifest.find("\"main\": \"./extension.js\""), std::string::npos);
-  EXPECT_NE(manifest.find("\"program\""), std::string::npos) << "the launch configuration names no program";
-  EXPECT_NE(manifest.find("\"breakpoints\""), std::string::npos) << "a breakpoint cannot be set in a tang file";
+  EXPECT_NE(manifest.find("\"type\": \"tang\""), std::string::npos);
+  EXPECT_NE(manifest.find("\"script\""), std::string::npos) << "the launch configuration has no script attribute";
 
   const std::string extension = read_file(dir + "/extension.js");
-  std::smatch call;
-  ASSERT_TRUE(std::regex_search(extension, call, std::regex("DebugAdapterExecutable\\(\\s*\"([^\"]+)\"\\s*,\\s*\\[([^\\]]*)\\]\\s*\\)")))
-      << "extension.js has no DebugAdapterExecutable(\"command\", [arguments]) call";
-  EXPECT_EQ(call[1].str(), "tang") << "the adapter is the tang command";
+  const std::regex call_pattern("DebugAdapterExecutable\\(\\s*\"([^\"]+)\"\\s*,\\s*\\[([^\\]]*)\\]\\s*\\)");
+  struct Arm {
+    bool script;
+    std::vector<std::string> arguments;  // with `file` as the empty string
+  };
+  std::vector<Arm> arms;
+  for (auto it = std::sregex_iterator(extension.begin(), extension.end(), call_pattern); it != std::sregex_iterator(); ++it) {
+    EXPECT_EQ((*it)[1].str(), "tang") << "the adapter is the tang command";
+    Arm arm{false, {}};
+    std::stringstream list((*it)[2].str());
+    std::string item;
+    while (std::getline(list, item, ',')) {
+      size_t first = item.find_first_not_of(" \t\r\n");
+      size_t last = item.find_last_not_of(" \t\r\n");
+      if (first == std::string::npos) {
+        continue;
+      }
+      item = item.substr(first, last - first + 1);
+      if (item == "file") {
+        arm.arguments.push_back("");  // session.configuration.program, which VS Code fills with the file
+      } else {
+        ASSERT_GE(item.size(), 2u) << item;
+        ASSERT_EQ(item.front(), '"') << "an argument that is neither a string literal nor `file`: " << item;
+        ASSERT_EQ(item.back(), '"') << item;
+        arm.arguments.push_back(item.substr(1, item.size() - 2));
+        arm.script = arm.script || arm.arguments.back() == "--script";
+      }
+    }
+    arms.push_back(arm);
+  }
+  ASSERT_EQ(arms.size(), 2u) << "extension.js has not two DebugAdapterExecutable calls, one for a template and one for a script";
+  EXPECT_NE(arms[0].script, arms[1].script) << "one call is for a script and the other for a template";
 
   TempDir temp;
-  std::string file = temp.write("vscode.tang", "a = 1;\nprint(a);\n");
-  std::vector<std::string> argv;
-  std::stringstream list(call[2].str());
-  std::string item;
-  while (std::getline(list, item, ',')) {
-    size_t first = item.find_first_not_of(" \t\r\n");
-    size_t last = item.find_last_not_of(" \t\r\n");
-    if (first == std::string::npos) {
-      continue;
+  for (const Arm & arm : arms) {
+    // A script has a statement on line 1; a template has a tag on line 2, which
+    // a breakpoint stops at (see the template session above).
+    const std::string file = arm.script ? temp.write("vscode-script.tang", "a = 1;\nprint(a);\n")
+                                        : temp.write("vscode-template.tang", "<p><%= 1 + 1 %></p>\n<% x = 3; %>\n<b><%= x %></b>\n");
+    const int line = arm.script ? 1 : 2;
+    std::vector<std::string> argv;
+    for (const std::string & a : arm.arguments) {
+      argv.push_back(a.empty() ? file : a);
     }
-    item = item.substr(first, last - first + 1);
-    if (item == "file") {
-      argv.push_back(file);  // session.configuration.program, which VS Code fills with the file
-    } else {
-      ASSERT_GE(item.size(), 2u) << item;
-      ASSERT_EQ(item.front(), '"') << "an argument that is neither a string literal nor `file`: " << item;
-      ASSERT_EQ(item.back(), '"') << item;
-      argv.push_back(item.substr(1, item.size() - 2));
-    }
-  }
-  ASSERT_FALSE(argv.empty());
-  EXPECT_NE(std::find(argv.begin(), argv.end(), "--dap"), argv.end());
-  EXPECT_NE(std::find(argv.begin(), argv.end(), file), argv.end());
+    EXPECT_NE(std::find(argv.begin(), argv.end(), "--dap"), argv.end());
+    EXPECT_NE(std::find(argv.begin(), argv.end(), file), argv.end());
 
-  // configure, stopped, disconnect: the session a client opens, a stop at the
-  // first line, and the client going away.
-  Tang tang(argv);
-  tang.configure(file, {1});
-  std::string stopped = tang.event("stopped");
-  EXPECT_NE(stopped.find("\"reason\":\"breakpoint\""), std::string::npos) << stopped;
-  EXPECT_EQ(tang.where().line, 1);
-  EXPECT_NE(tang.request("disconnect").find("\"success\":true"), std::string::npos);
-  Result result = tang.finish();
-  EXPECT_EQ(result.out, "") << "nothing but the protocol is written to stdout";
-  EXPECT_EQ(result.status, 0) << result.err;
+    // configure, stopped, disconnect: the session a client opens, a stop at the
+    // breakpoint, and the client going away.
+    Tang tang(argv);
+    tang.configure(file, {line});
+    std::string stopped = tang.event("stopped");
+    EXPECT_NE(stopped.find("\"reason\":\"breakpoint\""), std::string::npos) << (arm.script ? "script: " : "template: ") << stopped;
+    EXPECT_EQ(tang.where().line, line);
+    EXPECT_NE(tang.request("disconnect").find("\"success\":true"), std::string::npos);
+    Result result = tang.finish();
+    EXPECT_EQ(result.out, "") << "nothing but the protocol is written to stdout";
+    EXPECT_EQ(result.status, 0) << result.err;
+  }
 }
 
 TEST(TangDap, MisuseIsAUsageError) {
@@ -762,16 +781,19 @@ struct Played {
   int status = -1;
 };
 
-// One scripted session: stop at line 10, before the first call. Step in, to
-// the entry of f (a compiled f is entered here when the JIT is on, since
-// threshold 1 compiles it at its first poll), step over once inside it, and
-// step out, which finishes the print and stops at the breakpoint on line 11
-// (between the calls, f already compiled when the JIT is on). Set a breakpoint on line 5
-// inside f, continue into the second call, step over twice, step out, and
-// continue until the end.
+// One scripted session, the same on every tier:
+//   1. Stop at the breakpoint on line 10, before the first call.
+//   2. Step in: f's entry, line 1, one frame deeper.
+//   3. Step over: line 2 of f.
+//   4. Step out: back in the caller. Nothing else is set, so a stop here is the
+//      step's alone (reason "step") and never a breakpoint's.
+//   5. Set a breakpoint on line 5 inside f and continue: the second call stops
+//      there (f already compiled when the JIT is on).
+//   6. Step over twice and step out.
+//   7. Continue until the end.
 Played play_hot(const std::string & file, long jit_threshold) {
   Tang tang({"--script", "--dap", "--jit-threshold", std::to_string(jit_threshold), "--jit-stats", file});
-  tang.configure(file, {10, 11});
+  tang.configure(file, {10});
   Played out;
   auto stop = [&](const char * what) {
     std::string event = tang.event("stopped");
@@ -785,8 +807,6 @@ Played play_hot(const std::string & file, long jit_threshold) {
     EXPECT_NE(tang.request(step, "{\"threadId\":1}").find("\"success\":true"), std::string::npos) << step;
     stop(step);
   }
-  // The step out ends the call and the print, and so lands on the breakpoint at
-  // line 11, between the two calls: that is the first stop of the older script.
   std::string reply = tang.request("setBreakpoints", "{\"source\":{\"path\":\"" + file + "\"},\"breakpoints\":[{\"line\":5}]}");
   EXPECT_NE(reply.find("\"success\":true"), std::string::npos) << reply;
   EXPECT_NE(tang.request("continue", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
@@ -832,11 +852,12 @@ TEST(TangDap, ABreakpointInCompiledCodeStopsAtTheRightLineWithTheRightLocalsAndS
   }
   // Step in goes into f, at its entry and one frame deeper, interpreted and
   // compiled alike; a step over there is its next statement, and a step out
-  // finishes the call and the print and stops at the breakpoint on line 11.
+  // finishes the call and the print and stops, as a step (not a breakpoint), on
+  // line 11 in the caller.
   EXPECT_NE(compiled.transcript.find("before the first call: breakpoint line 10 frames 1"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("stepIn: step line 1 frames 2"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("next: step line 2 frames 2"), std::string::npos) << compiled.transcript;
-  EXPECT_NE(compiled.transcript.find("stepOut: breakpoint line 11 frames 1"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("stepOut: step line 11 frames 1"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("inside f: breakpoint line 5 frames 2"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("\"name\":\"n\",\"value\":\"4\""), std::string::npos) << compiled.transcript;
   // The output is the plain run's, on stderr with the JIT line after it.

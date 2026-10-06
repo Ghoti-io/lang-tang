@@ -55,7 +55,7 @@
               "script": {
                 "type": "boolean",
                 "description": "Run the file as a script (tang --script) instead of as a template.",
-                "default": false
+                "default": true
               }
             }
           }
