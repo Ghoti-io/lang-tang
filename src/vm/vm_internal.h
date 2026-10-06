@@ -29,11 +29,17 @@
  *
  * Rules every function in the vm directory follows:
  *
- *  - A value is one 64-bit word (::GLTANG_Value). Never keep a raw pointer to
- *    a heap object in a C variable across a call that can allocate unless the
- *    object is reachable from a frame slot, an execution root or a temporary
- *    root. The collector does not move objects, so the word stays valid while
- *    the object is reachable.
+ *  - A value is one 64-bit word (::GLTANG_Value). Never keep a value, or a
+ *    pointer into a heap object, in a C variable across a GC point (an
+ *    allocation, a poll, or anything that calls one) unless it is read again
+ *    from where the collector can reach it afterwards: a frame slot, an
+ *    execution root or a temporary root. The collector keeps such an object
+ *    alive, and a collector that moves objects (runtime-heap's relocation
+ *    torture is one, AD-12, AD-28) rewrites the slot and not your variable. So
+ *    an operation that allocates twice holds what it needs after the first
+ *    allocation with gltang_vm_temp_push, and takes it from
+ *    gltang_vm_temp_at after the second. A pointer into an object (a string's
+ *    bytes, an array's storage) is derived again after every poll in a loop.
  *  - A pointer stored into a heap object goes through grheap_store*; so does
  *    every other write to a slot the object's trace function reports,
  *    integers included, because barrier-verify compares the slot with the last
@@ -528,6 +534,25 @@ GLTANG_Status gltang_vm_alloc(GLTANG_Execution * exec, const GRHEAP_Type * type,
 /** @brief Keeps a value alive until the matching pop. */
 bool gltang_vm_temp_push(GLTANG_Execution * exec, GLTANG_Value v);
 void gltang_vm_temp_pop(GLTANG_Execution * exec);
+
+/** @brief The index the next temporary will have: the mark for
+ *   ::gltang_vm_temp_release, and the index of the first one pushed after it. */
+static inline size_t gltang_vm_temp_mark(const GLTANG_Execution * exec) {
+  return exec->temp_count;
+}
+
+/**
+ * @brief The value held at temporary `index`, as the collector last left it.
+ *
+ * A collection rewrites a temporary when it moves its object, so this is how a
+ * value held across a GC point is read again afterwards (see the rules above).
+ */
+static inline GLTANG_Value gltang_vm_temp_at(const GLTANG_Execution * exec, size_t index) {
+  return exec->temps[index];
+}
+
+/** @brief Drops every temporary pushed since `mark`. */
+void gltang_vm_temp_release(GLTANG_Execution * exec, size_t mark);
 
 // ---------------------------------------------------------------------------
 // Values (value.c)

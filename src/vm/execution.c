@@ -141,6 +141,12 @@ void gltang_vm_temp_pop(GLTANG_Execution * exec) {
   exec->temps[--exec->temp_count] = 0;
 }
 
+void gltang_vm_temp_release(GLTANG_Execution * exec, size_t mark) {
+  while (exec->temp_count > mark) {
+    exec->temps[--exec->temp_count] = 0;
+  }
+}
+
 GLTANG_Value gltang_vm_constant(GLTANG_Execution * exec, uint32_t index) {
   GLTANG_Value cached = exec->constants[index];
   if (cached) {

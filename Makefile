@@ -168,6 +168,13 @@ override BUILD := $(BUILD)-nodebug
 endif
 endif
 
+# The relocation arm (test-relocate) builds in a tree of its own as well: it
+# links a runtime-heap that moves every unpinned object at every collection,
+# which no other tree may be built against.
+ifdef GLTANG_RELOCATE_ARM
+override BUILD := $(BUILD)-reloc
+endif
+
 ifdef PREFIX
 INCLUDE_INSTALL_PATH := $(PREFIX)/include
 LIB_INSTALL_PATH := $(PREFIX)/lib
@@ -412,7 +419,15 @@ CORELIBRARY := -Wl,--whole-archive $(APP_DIR)/$(STATIC_TARGET) -Wl,--no-whole-ar
 # so works under ASan and TSan, where defining malloc outright would not.
 TEST_LDFLAGS := -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free
 
-TEST_PAIRS := $(shell find tests/unit -type f -name 'test_*.cpp' 2>/dev/null | sort | grep -v test_helpers | while read f; do \
+# test_relocate.cpp drives the relocation arm's heap (it names the setter and the
+# counters of runtime-heap's relocate.h, which only a relocation build installs),
+# so it is built in that arm and no other.
+ifdef GLTANG_RELOCATE_ARM
+TEST_EXCLUDE := test_helpers
+else
+TEST_EXCLUDE := test_helpers\|test_relocate
+endif
+TEST_PAIRS := $(shell find tests/unit -type f -name 'test_*.cpp' 2>/dev/null | sort | grep -v '$(TEST_EXCLUDE)' | while read f; do \
 	echo "$$f|$$(basename "$$f" .cpp | sed 's/test_/test/; s/^test\([a-z]\)/test\U\1/')"; done)
 # test_tang_dap drives the real `tang` command, which exists only with
 # WITH_DEBUG=yes (it links the debugger). Without it the suite is left out and
@@ -663,7 +678,7 @@ $(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
 endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
-.PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
+.PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest check-planted-relocate test-relocate test-relocate-run
 .PHONY: check-labels check-edges check-gates check-vscode check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
@@ -826,6 +841,15 @@ check-planted: ## All twelve planted defects: each caught by its instrument, eac
 
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
+
+check-planted-relocate: ## Planted defects 13 and 14 (a reference visited and not updated), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
+ifndef RELOCATE_PREFIX
+	@printf 'check-planted-relocate: RELOCATE_PREFIX is needed (the prefix of a runtime-heap built with RELOCATE=yes)\n' >&2; exit 1
+else
+	@PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" \
+		PLANTED_RELOC_PREFIX="$(abspath $(RELOCATE_PREFIX))" PLANTED_RELOC_LIBDIR="$(abspath $(RELOCATE_PREFIX))/lib/$(SUITE)" \
+		PKG_CONFIG_PATH="$(abspath $(RELOCATE_PREFIX))/share/pkgconfig" tools/check-planted.sh --relocate
+endif
 endif
 
 ####################################################################
@@ -924,6 +948,12 @@ ifndef GLTANG_NESTED_ARM
 	@$(MAKE) --no-print-directory test-nojit
 endif
 endif
+# With a relocation heap named, the relocation arm is part of the run.
+ifdef RELOCATE_PREFIX
+ifndef GLTANG_NESTED_ARM
+	@$(MAKE) --no-print-directory test-relocate
+endif
+endif
 
 # The interpreter-only arm: the library built with JIT=no, in its own tree, and
 # its suites (AD-2). It is a nested make, so every variable given on this
@@ -966,6 +996,51 @@ else
 	env PKG_CONFIG_PATH= $(MAKE) --no-print-directory test WITH_DEBUG=no GLTANG_NESTED_ARM=1 GLTANG_NODEBUG_ARM=1 \
 		PREFIX="$$shadow" TEST_GATES="$(NODEBUG_GATES)"
 endif
+
+# The relocation arm (CAP-10): the unit suites against a runtime-heap built with
+# RELOCATE=yes, in which every collection moves every unpinned object and poisons
+# the old cell, so a reference the engine keeps in a C variable across a GC
+# point, an address it uses as a key, or a slot it reports through a copy reads
+# poison and fails. RELOCATE_PREFIX is the private prefix that heap was installed
+# into (`make install RELOCATE=yes PREFIX=...` in libs/runtime-heap), with the
+# other dependencies beside it. The arm runs interpreted and with the JIT at
+# threshold 1, the suites under relocation alone and the engine-driving ones
+# under relocation with torture and verify (a move at every GC point).
+#
+# It FAILS when that heap has no relocation mode, and never skips: tools/
+# check-relocation-required.sh asks the library, and shows it moving an object,
+# before anything runs, as check-backend-required does for a missing JIT backend.
+# Its planted defects (13 and 14: a reference visited and not updated) are run
+# against the same heap, and each must be caught by relocation and by nothing
+# else.
+RELOCATE_PREFIX ?=
+test-relocate: ## The relocation arm: the suites against a runtime-heap that moves every object (needs RELOCATE_PREFIX)
+ifndef RELOCATE_PREFIX
+	@printf 'test-relocate: RELOCATE_PREFIX is needed: the prefix a runtime-heap built with RELOCATE=yes is installed in\n' >&2; exit 1
+else
+	@printf '\n### The relocation arm (runtime-heap with RELOCATE=yes, from %s) ###\n\n' "$(abspath $(RELOCATE_PREFIX))"
+	@tools/check-relocation-required.sh "$(abspath $(RELOCATE_PREFIX))" "$(BRANCH)"
+	@env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL PKG_CONFIG_PATH="$(abspath $(RELOCATE_PREFIX))/share/pkgconfig" \
+		$(MAKE) --no-print-directory test-relocate-run PREFIX="$(abspath $(RELOCATE_PREFIX))" JIT=$(JIT) \
+		WITH_DEBUG=$(WITH_DEBUG) GLTANG_RELOCATE_ARM=1 GLTANG_NESTED_ARM=1
+	@$(MAKE) --no-print-directory check-planted-relocate
+endif
+
+# What the arm runs, inside its own tree (GLTANG_RELOCATE_ARM).
+RELOCATE_MODES := "GRHEAP_RELOCATE=1" "GRHEAP_RELOCATE=1 GRHEAP_TORTURE=1 GRHEAP_VERIFY=1"
+ifeq ($(JIT),yes)
+RELOCATE_JIT_MODES := "$(JIT_THRESHOLD_ENV) GRHEAP_RELOCATE=1" "$(JIT_THRESHOLD_ENV) GRHEAP_RELOCATE=1 GRHEAP_TORTURE=1 GRHEAP_VERIFY=1"
+endif
+test-relocate-run: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-relocation-required.sh "$(abspath $(PREFIX))" "$(BRANCH)"
+	@for mode in $(RELOCATE_MODES) $(RELOCATE_JIT_MODES); do \
+		case "$$mode" in *GRHEAP_TORTURE*) suites="$(TORTURE_BOUNDED) testRelocate";; *) suites="$(TEST_NAMES)";; esac; \
+		for t in $$suites; do \
+			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+		done; \
+	done
+	@printf '\nThe relocation arm is clean.\n'
 
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) ## Run tests, one line per suite
 	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; any_failed=0; \

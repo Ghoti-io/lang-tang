@@ -118,6 +118,7 @@ void leaked_element(long threshold) {
   Compiled page(kProgram, Mode::Script, "leak.tang");
   ASSERT_TRUE(page.ok()) << page.error.message;
   Config config;
+  config.relocate = 0;  // the test reads the inner array through a C variable
   config.fuel = 600;  // inside the first loop
   config.jit_threshold = threshold;
   Context context(page.program, config);
@@ -217,6 +218,7 @@ TEST(Retention, AnArrayNothingReachesAnyMoreIsNotRetainedAndTheCollectorFreesIt)
     Compiled page(source, Mode::Script, "gone.tang");
     ASSERT_TRUE(page.ok());
     Config config;
+    config.relocate = 0;  // the test names the array by its address
     config.fuel = 600;
     config.jit_threshold = threshold;
     Context context(page.program, config);
@@ -258,6 +260,7 @@ TEST(Retention, TheQueryChangesNothingTheNextCollectionOrTheResultCouldSee) {
   Compiled page(kProgram, Mode::Script, "same.tang");
   ASSERT_TRUE(page.ok());
   Config config;
+  config.relocate = 0;  // the test names the array by its address
   config.fuel = 600;
   Context context(page.program, config);
   ASSERT_TRUE(context.ok());

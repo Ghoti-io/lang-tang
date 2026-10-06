@@ -32,6 +32,13 @@
 #include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
+// The relocation arm links a runtime-heap built with RELOCATE=yes, which
+// installs this header; every other build has no such header, and no test then
+// names the setter.
+#if defined(__has_include) && __has_include(<ghoti.io/runtime-heap/relocate.h>)
+#include <ghoti.io/runtime-heap/relocate.h>
+#define GLTANG_TEST_HAS_RELOCATE 1
+#endif
 
 #include <malloc.h>
 #if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
@@ -278,6 +285,11 @@ struct Config {
   int torture = -1;
   int verify = -1;
   int moving_stack = -1;
+  /// Relocation (runtime-heap's test-only mode, which only the relocation arm
+  /// has): -1 takes GRHEAP_RELOCATE from the environment, 0 forces it off, 1
+  /// on. A test that keeps an address in a C variable across a collection turns
+  /// it off, as it does torture; the setter exists only where the mode does.
+  int relocate = -1;
   /// The baseline JIT's threshold (polls before a function tiers up), three-way
   /// as the instruments are: -1 takes GLTANG_TEST_JIT_THRESHOLD from the
   /// environment (and the library's default when that is unset), 0 forces
@@ -424,6 +436,11 @@ class Context {
       if (config.verify >= 0) {
         grheap_options_set_verify(heap_options, config.verify != 0 ? GRHEAP_VERIFY_ABORT : GRHEAP_VERIFY_OFF);
       }
+#ifdef GLTANG_TEST_HAS_RELOCATE
+      if (config.relocate >= 0) {
+        grheap_options_set_relocate(heap_options, config.relocate != 0);
+      }
+#endif
       torture_on = grheap_options_get_torture(heap_options);
       if (config.arena) {
         grheap_options_set_mode(heap_options, GRHEAP_MODE_ARENA);
