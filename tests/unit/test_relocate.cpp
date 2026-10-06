@@ -98,6 +98,12 @@ TEST(Relocate, TheRunIsDrivenByTheRelocatingHeapAndNotByAnOrdinaryOneThatLooksTh
   EXPECT_GT(moved.moved, 0u);
   EXPECT_EQ(plain.described, moved.described);
 }
+TEST(Relocate, CopyingAndComparingNestedContainersGivesTheSameAnswersWhereverTheyMove) {
+  expect_same("x = [[1, [2, 3]], {k: [4, 5]}, \"s\"]; y = x; x[0][1][0] = 9; ((x == y) as string) + (y as string);");
+  expect_same("x = [[1, [2, 3]], [4]]; y = [[1, [2, 3]], [4]]; (x == y) as string;");
+  expect_same("x = [[1, [2, 3]], [4]]; y = [[1, [2, 4]], [4]]; (x == y) as string;");
+}
+
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

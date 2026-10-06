@@ -366,35 +366,47 @@ static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth,
   }
   bool is_array = gltang_v_is_kind(v, GLTANG_OBJ_ARRAY);
   size_t n = is_array ? (size_t)gltang_vm_array(v)->length : (size_t)gltang_vm_map(v)->count;
+  // Every call below is a GC point, and the source is in no root of its own
+  // here: hold it, with the copy, and read both again from the temporaries.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    *fail = COPY_OOM;
+    return GLTANG_V_NULL;
+  }
   GLTANG_Value copy = is_array ? gltang_vm_array_new(exec, n) : gltang_vm_map_new(exec, n);
   if (!gltang_v_is_kind(copy, is_array ? GLTANG_OBJ_ARRAY : GLTANG_OBJ_MAP)) {
     *fail = copy == GLTANG_V_UNWIND ? COPY_UNWIND : COPY_OOM;
+    gltang_vm_temp_release(exec, mark);
     return GLTANG_V_NULL;
   }
   if (!gltang_vm_temp_push(exec, copy)) {
     *fail = COPY_OOM;
+    gltang_vm_temp_release(exec, mark);
     return GLTANG_V_NULL;
   }
   for (size_t i = 0; i < n && !*fail; ++i) {
+    GLTANG_Value source = gltang_vm_temp_at(exec, mark);
     if (is_array) {
-      GLTANG_Value child = copy_rec(exec, gltang_vm_array(v)->store.typed->slots[i], depth + 1, fail, pacer);
+      GLTANG_Value child = copy_rec(exec, gltang_vm_array(source)->store.typed->slots[i], depth + 1, fail, pacer);
       if (!*fail) {
-        gltang_vm_array_push(exec, copy, child);
+        // Nothing collects between the child's return and its being stored.
+        gltang_vm_array_push(exec, gltang_vm_temp_at(exec, mark + 1u), child);
       }
     }
     else {
-      GLTANG_MapStore * store = gltang_vm_map(v)->store.typed;
-      GLTANG_Value child = copy_rec(exec, store->slots[2u * i + 1u], depth + 1, fail, pacer);
+      GLTANG_Value child = copy_rec(exec, gltang_vm_map(source)->store.typed->slots[2u * i + 1u], depth + 1, fail, pacer);
       if (!*fail) {
-        GLTANG_Value pair[2] = {store->slots[2u * i], child};
-        gltang_vm_map_fill(exec, copy, pair, 1);
+        source = gltang_vm_temp_at(exec, mark);
+        GLTANG_Value pair[2] = {gltang_vm_map(source)->store.typed->slots[2u * i], child};
+        gltang_vm_map_fill(exec, gltang_vm_temp_at(exec, mark + 1u), pair, 1);
       }
     }
     if (!*fail && pace(pacer, 1) != GLTANG_ST_OK) {
       *fail = COPY_UNWIND;
     }
   }
-  gltang_vm_temp_pop(exec);
+  copy = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   return copy;
 }
 
@@ -421,7 +433,7 @@ GLTANG_Value gltang_vm_op_adopt(GLTANG_Execution * exec, GLTANG_Value v) {
 // Equality
 // ---------------------------------------------------------------------------
 
-typedef enum { EQ_FALSE = 0, EQ_TRUE, EQ_NOT_SUPPORTED, EQ_DEEP, EQ_UNWIND } EqResult;
+typedef enum { EQ_FALSE = 0, EQ_TRUE, EQ_NOT_SUPPORTED, EQ_DEEP, EQ_UNWIND, EQ_OOM } EqResult;
 
 static bool is_weak(GLTANG_ValueKind k) {
   return k == GLTANG_KIND_NULL || k == GLTANG_KIND_BOOL || k == GLTANG_KIND_STRING;
@@ -452,25 +464,39 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
     if (depth >= GLTANG_MAX_VALUE_DEPTH) {
       return EQ_DEEP;
     }
-    const GLTANG_ArrayObject * x = gltang_vm_array(a);
-    const GLTANG_ArrayObject * y = gltang_vm_array(b);
-    if (x->length != y->length) {
+    if (gltang_vm_array(a)->length != gltang_vm_array(b)->length) {
       return EQ_FALSE;
     }
-    for (uint64_t i = 0; i < x->length; ++i) {
-      EqResult r = equal_rec(x->store.typed->slots[i], y->store.typed->slots[i], depth + 1, pacer);
-      if (r == EQ_DEEP || r == EQ_UNWIND) {
-        return r;
+    uint64_t length = gltang_vm_array(a)->length;
+    // The comparison polls as it goes, and a poll can move either array: hold
+    // both, and take each element from the arrays as they are at that point.
+    GLTANG_Execution * exec = pacer->exec;
+    size_t mark = gltang_vm_temp_mark(exec);
+    if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
+      gltang_vm_temp_release(exec, mark);
+      return EQ_OOM;
+    }
+    EqResult result = EQ_TRUE;
+    for (uint64_t i = 0; i < length; ++i) {
+      GLTANG_Value ea = gltang_vm_array(gltang_vm_temp_at(exec, mark))->store.typed->slots[i];
+      GLTANG_Value eb = gltang_vm_array(gltang_vm_temp_at(exec, mark + 1u))->store.typed->slots[i];
+      EqResult r = equal_rec(ea, eb, depth + 1, pacer);
+      if (r == EQ_DEEP || r == EQ_UNWIND || r == EQ_OOM) {
+        result = r;
+        break;
       }
       if (r != EQ_TRUE) {
         // An element that cannot be compared is not equal.
-        return EQ_FALSE;
+        result = EQ_FALSE;
+        break;
       }
       if (pace(pacer, 1) != GLTANG_ST_OK) {
-        return EQ_UNWIND;
+        result = EQ_UNWIND;
+        break;
       }
     }
-    return EQ_TRUE;
+    gltang_vm_temp_release(exec, mark);
+    return result;
   }
   return EQ_NOT_SUPPORTED;
 }
@@ -482,6 +508,7 @@ GLTANG_Value gltang_vm_equal(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Val
     case EQ_FALSE: return GLTANG_V_FALSE;
     case EQ_DEEP: return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
     case EQ_UNWIND: return GLTANG_V_UNWIND;
+    case EQ_OOM: return exec->roots[GLTANG_ROOT_OOM];
     default: return gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
