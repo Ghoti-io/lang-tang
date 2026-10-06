@@ -384,7 +384,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage clears this: --coverage links the gcov runtime, whose mangle_path
 # check-symbols is right to reject in a shipping library.
 TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
-	check-edges check-gates check-backend-required examples cli-test fuzz-replay \
+	check-edges check-gates check-backend-required check-oracle-absent examples cli-test fuzz-replay \
 	test-oracle check-planted-quick
 
 # Valgrind runs threads one at a time under a lock that is not fair by default:
@@ -664,7 +664,7 @@ endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
-.PHONY: check-labels check-edges check-gates check-backend-required bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
+.PHONY: check-labels check-edges check-gates check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 .PHONY: fuzz fuzz-clean
@@ -1275,7 +1275,7 @@ ORACLE_TEST := $(APP_DIR)/testOracle$(EXE_EXTENSION)
 ORACLE_RPATH := $(foreach f,$(filter -L%,$(ORACLE_LIBS)),-Wl,-rpath,$(patsubst -L%,%,$f))
 -include $(OBJ_DIR)/oracle/test_oracle.d
 
-.PHONY: oracle-present
+.PHONY: oracle-present check-oracle-absent
 # Fails, never skips. A differential that is skipped when its reference is
 # missing reports success over a population of zero, which is the failure this
 # whole target exists to prevent.
@@ -1286,6 +1286,27 @@ oracle-present:
 		printf 'or point PKG_CONFIG_PATH at the directory holding ghoti.io-tang-0.pc.\n' >&2; \
 		exit 1; \
 	fi
+
+# "Oracle absent fails" is a claim about oracle-present, so it is run: against a
+# package that does not exist it must exit non-zero and say what to do, and
+# against the real one (the control) it must exit zero, so that a target which
+# fails whatever it is given cannot pass. It runs on Windows too, because
+# oracle-present is shell and pkg-config only; it is test-oracle itself that is
+# skipped there.
+ORACLE_ABSENT_PC := ghoti.io-no-such-oracle-package
+check-oracle-absent: ## Fail unless oracle-present exits non-zero for a missing oracle (and zero for the real one)
+	@if ! $(MAKE) --no-print-directory -s oracle-present >/dev/null 2>&1; then \
+		printf 'check-oracle-absent: the control failed: oracle-present does not pass with %s, so ctang is missing or the gate fails whatever it is given\n' "$(ORACLE_PC)" >&2; exit 1; \
+	fi
+	@out="$$($(MAKE) --no-print-directory -s oracle-present ORACLE_PC=$(ORACLE_ABSENT_PC) 2>&1)"; rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		printf 'check-oracle-absent: oracle-present exited 0 for the package %s, which does not exist: an absent oracle would not fail\n' "$(ORACLE_ABSENT_PC)" >&2; exit 1; \
+	fi; \
+	case "$$out" in \
+		*"$(ORACLE_ABSENT_PC)"*"was not found"*) ;; \
+		*) printf 'check-oracle-absent: oracle-present failed, but without naming the package and saying it was not found:\n%s\n' "$$out" >&2; exit 1 ;; \
+	esac; \
+	printf 'check-oracle-absent: ok: oracle-present fails for a missing oracle, naming it, and passes for %s\n' "$(ORACLE_PC)"
 
 $(ORACLE_RUNNER): tests/oracle/oracle_ctang.c $(FLAGS_STAMP) | oracle-present
 	@mkdir -p $(@D)
