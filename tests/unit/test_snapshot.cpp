@@ -983,7 +983,7 @@ TEST(SnapshotRefusals, ACRootAHandleAPinAndAConservativeRangeRefuseTheTakeAndThe
 namespace {
 
 const GRCORE_EngineDescriptor kDummyEngine = GRCORE_ENGINE_DESCRIPTOR_INIT("dummy", nullptr, nullptr, nullptr, GRCORE_ScopeInterface{nullptr, nullptr, nullptr},
-    GRCORE_ConservativeDecoder{0, 0, 0}, nullptr, nullptr);
+    GRCORE_ConservativeDecoder{0, 0, 0}, nullptr, nullptr, nullptr, nullptr);
 
 GRCORE_Result extra_snapshot(GRCORE_Context *, void *, GRCORE_SnapshotWriter *) { return GRCORE_OK; }
 GRCORE_Result extra_restore(GRCORE_Context *, void *, GRCORE_SnapshotReader *, void *, GRCORE_RestoreMode) { return GRCORE_OK; }
