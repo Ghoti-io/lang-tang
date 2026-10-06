@@ -142,6 +142,7 @@ void gltang_vm_temp_pop(GLTANG_Execution * exec) {
 }
 
 void gltang_vm_temp_release(GLTANG_Execution * exec, size_t mark) {
+  assert(mark <= exec->temp_count && "a release above the top: a mark taken after the temporaries were already dropped");
   while (exec->temp_count > mark) {
     exec->temps[--exec->temp_count] = 0;
   }

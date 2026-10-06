@@ -54,6 +54,7 @@
 
 #include <ghoti.io/lang-tang/macros.h>
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -548,6 +549,7 @@ static inline size_t gltang_vm_temp_mark(const GLTANG_Execution * exec) {
  * value held across a GC point is read again afterwards (see the rules above).
  */
 static inline GLTANG_Value gltang_vm_temp_at(const GLTANG_Execution * exec, size_t index) {
+  assert(index < exec->temp_count && "a temporary read after it was released, or never pushed");
   return exec->temps[index];
 }
 
