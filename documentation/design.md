@@ -841,6 +841,16 @@ means deciding to freeze those, and `tools/check-labels.sh` still fails an
 unlabelled or doubly labelled header; two fixtures show that `library.h` labelled
 stable and `seeds.h` labelled free are refused.
 
+**`execution.h` stays `free` (decided with Corey, 2026-10-05, when story 15's
+text called it `stable`).** Promoting it needs `value.h`, `program.h` and
+`library.h` to be stable first, because it names their types, and none of them
+is ready: calls in compiled code and floating point
+(`planning/specs/spec-runtime-calls/`, `planning/specs/spec-runtime-float/`)
+will change the JIT statistics (`GLTANG_JitStats`) and the execution options
+this header carries, and a `stable` label would make each of those a breaking
+change. The label follows the decision to freeze, and that decision comes after
+those two specs.
+
 ## Rejected alternatives
 
 **Link ctang instead of porting its parser.** The spec forbids it and the
