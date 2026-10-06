@@ -18,6 +18,7 @@
 #endif
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -66,25 +67,60 @@ bool available();
     }                                                                                                 \
   } while (0)
 
+/* The targets runtime-jit has a backend for, spelled as the library spells them
+ * (runtime-jit src/code/code.c, and GRJIT_TEST_HAVE_BACKEND in its tests):
+ * Linux x86-64, Linux arm64 and Windows x86-64. */
+#if ((defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)) || \
+    (defined(_WIN64) && defined(__x86_64__))
+#define GLTANG_TEST_BACKEND_GATED 1
+#else
+#define GLTANG_TEST_BACKEND_GATED 0
+#endif
+
 /// Whether compiled code can run in this process: the library has the JIT and
-/// the target has a native backend for it (runtime-jit has one for Linux x86-64,
-/// Linux arm64 and Windows x86-64). Where it cannot, the "JIT arm" of a test is the interpreter, a
-/// test of tier-up has nothing to observe and skips, and the checks that the
-/// arm "is not vacuous" are not made.
+/// the target has a native backend for it. Where it cannot, the "JIT arm" of a
+/// test is the interpreter and the checks that the arm "is not vacuous" are not
+/// made.
+///
+/// The environment variable GLTANG_TEST_FORCE_NO_BACKEND, when set to anything
+/// but "0", makes this answer false as a target without a backend would. It
+/// exists so that `make check-backend-required` can show that the tier-up tests
+/// fail on a gated target whose backend has gone missing, instead of skipping
+/// (a skip there reads as a pass over a population of zero).
 inline bool jit_backend_present() {
 #ifdef GLTANG_WITH_JIT
+  const char * off = getenv("GLTANG_TEST_FORCE_NO_BACKEND");
+  if (off != nullptr && off[0] != '\0' && !(off[0] == '0' && off[1] == '\0')) {
+    return false;
+  }
   return grjit_backend_available();
 #else
   return false;
 #endif
 }
 
+/// A test of tier-up needs a backend. Built with JIT=no there is no JIT to
+/// observe, and the test skips, naming that. On a gated target (Linux x86-64,
+/// Linux arm64, Windows x86-64) the backend must exist, so a test that cannot
+/// run there fails. Elsewhere (Windows arm64, macOS) the backend must say it is
+/// absent, and the test is reported as skipped, naming the target.
+#ifdef GLTANG_WITH_JIT
+#if GLTANG_TEST_BACKEND_GATED
+#define GLTANG_REQUIRE_JIT_BACKEND()                                                                  \
+  ASSERT_TRUE(jit_backend_present()) << "the native code backend is unavailable on a target that "    \
+                                        "has one (a skip here would hide every tier-up test)"
+#else
 #define GLTANG_REQUIRE_JIT_BACKEND()                                                                  \
   do {                                                                                                \
-    if (!jit_backend_present()) {                                                                     \
-      GTEST_SKIP() << "no native code backend on this target (runtime-jit): nothing tiers up";        \
-    }                                                                                                 \
+    ASSERT_FALSE(jit_backend_present());                                                              \
+    GTEST_SKIP() << "no native code backend on this target (runtime-jit has one for Linux x86-64, "   \
+                    "Linux arm64 and Windows x86-64): nothing tiers up";                              \
   } while (0)
+#endif
+#else
+#define GLTANG_REQUIRE_JIT_BACKEND()                                                                  \
+  GTEST_SKIP() << "built with JIT=no: there is no JIT, so nothing tiers up"
+#endif
 
 /// An anonymous scratch file opened "w+b" and deleted when closed. tmpfile()
 /// writes to the root of the current drive on Windows, where an ordinary user may

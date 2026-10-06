@@ -384,7 +384,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage clears this: --coverage links the gcov runtime, whose mangle_path
 # check-symbols is right to reject in a shipping library.
 TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
-	check-edges check-gates examples cli-test fuzz-replay test-oracle check-planted-quick
+	check-edges check-gates check-backend-required examples cli-test fuzz-replay \
+	test-oracle check-planted-quick
 
 # Valgrind runs threads one at a time under a lock that is not fair by default:
 # a thread that never blocks (the interpreter loop) can hold it for minutes while
@@ -663,7 +664,7 @@ endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
-.PHONY: check-labels check-edges check-gates bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
+.PHONY: check-labels check-edges check-gates check-backend-required bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 .PHONY: fuzz fuzz-clean
@@ -771,6 +772,22 @@ endif
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
 	@env -u GLTANG_EDGES_JIT CC="$(CC)" tools/check-gates.sh
+
+####################################################################
+# The tier-up tests fail, not skip, without a backend (story 19, item 5)
+#
+# tools/check-backend-required.sh runs the testJit executable as built and again
+# with GLTANG_TEST_FORCE_NO_BACKEND=1, and requires the second run to fail in
+# every test that uses GLTANG_REQUIRE_JIT_BACKEND. It needs the JIT, so it is
+# not in the JIT=no arm.
+####################################################################
+
+check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) ## Fail if the tier-up tests skip, rather than fail, when the backend is forced off
+ifeq ($(JIT),yes)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR)/testJit$(EXE_EXTENSION) tests/unit/test_jit.cpp
+else
+	@printf 'check-backend-required: skipped, JIT=no (there is no JIT to lose a backend)\n'
+endif
 
 ####################################################################
 # Planted defects in the library itself (CAP-7)
