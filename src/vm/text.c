@@ -174,13 +174,10 @@ static bool output_add_segment(GLTANG_Execution * exec, GLTANG_OutBuf * out, GLT
   return true;
 }
 
-/** Appends bytes to the execution's output, with the tag they carry. */
-static GLTANG_Status output_append(GLTANG_Sink * sink, const char * text, size_t length, GLTANG_String_Type type) {
+/** Makes room in the execution's output for `length` more bytes carrying `type`. */
+static GLTANG_Status output_prepare(GLTANG_Sink * sink, size_t length, GLTANG_String_Type type) {
   GLTANG_Execution * exec = sink->exec;
   GLTANG_OutBuf * out = exec->out;
-  if (!length) {
-    return GLTANG_ST_OK;
-  }
   void * output = out->bytes;
   if (!grow(exec, &output, &out->capacity, out->length + length + 1u, 1)) {
     return GLTANG_ST_OOM;
@@ -188,6 +185,21 @@ static GLTANG_Status output_append(GLTANG_Sink * sink, const char * text, size_t
   out->bytes = output;
   if (!output_add_segment(exec, out, type)) {
     return GLTANG_ST_OOM;
+  }
+  return GLTANG_ST_OK;
+}
+
+/** Appends bytes to the execution's output, with the tag they carry. `text` is
+ *  not in the heap: it is read across the polls this makes. */
+static GLTANG_Status output_append(GLTANG_Sink * sink, const char * text, size_t length, GLTANG_String_Type type) {
+  GLTANG_Execution * exec = sink->exec;
+  GLTANG_OutBuf * out = exec->out;
+  if (!length) {
+    return GLTANG_ST_OK;
+  }
+  GLTANG_Status prepared = output_prepare(sink, length, type);
+  if (prepared != GLTANG_ST_OK) {
+    return prepared;
   }
   for (size_t done = 0; done < length;) {
     size_t n = length - done;
@@ -326,7 +338,58 @@ static GLTANG_Status sink_block(GLTANG_Sink * sink, const GLTANG_StringBlock * s
   return sink_pace(sink, (size_t)s->byte_length);
 }
 
+/**
+ * A string of the heap into the execution's output. Each chunk is copied and
+ * then the sink polls, and a poll can move the string, so it is held and its
+ * bytes are found again after every one (output_append reads host text, which
+ * does not move).
+ */
+static GLTANG_Status output_string(GLTANG_Sink * sink, GLTANG_Value value) {
+  GLTANG_Execution * exec = sink->exec;
+  if (!gltang_vm_string(value)->byte_length) {
+    return GLTANG_ST_OK;
+  }
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, value)) {
+    return GLTANG_ST_OOM;
+  }
+  GLTANG_Status st = GLTANG_ST_OK;
+  size_t segment_count = gltang_vm_string(value)->segment_count;
+  for (size_t i = 0; i < segment_count && st == GLTANG_ST_OK; ++i) {
+    const GLTANG_StringBlock * s = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+    const uint64_t * segments = gltang_string_segments(s);
+    size_t first = GLTANG_SEGMENT_FIRST(segments[i]);
+    size_t next = i + 1u < s->segment_count ? GLTANG_SEGMENT_FIRST(segments[i + 1u]) : (size_t)s->grapheme_length;
+    size_t from = gltang_string_byte_offset(s, first);
+    size_t length = gltang_string_byte_offset(s, next) - from;
+    GLTANG_String_Type type = GLTANG_SEGMENT_TYPE(segments[i]);
+    if (!length) {
+      continue;
+    }
+    st = output_prepare(sink, length, type);
+    GLTANG_OutBuf * out = exec->out;
+    for (size_t done = 0; st == GLTANG_ST_OK && done < length;) {
+      size_t n = length - done;
+      if (n > GLTANG_POLL_BYTES) {
+        n = GLTANG_POLL_BYTES;
+      }
+      s = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+      memcpy(out->bytes + out->length, gltang_string_bytes(s) + from + done, n);
+      out->length += n;
+      out->bytes[out->length] = '\0';
+      done += n;
+      st = sink_pace(sink, n);
+    }
+  }
+  gltang_vm_temp_release(exec, mark);
+  return st;
+}
+
 GLTANG_Status gltang_sink_string(GLTANG_Sink * sink, GLTANG_Value s) {
+  if (sink->mode == GLTANG_SINK_OUTPUT) {
+    return output_string(sink, s);
+  }
+  // The other two copy the whole string before anything can poll.
   return sink_block(sink, gltang_vm_string(s));
 }
 
@@ -382,6 +445,41 @@ static GLTANG_Status render_number(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Va
   return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
 }
 
+/**
+ * A container held while its elements are rendered. Every piece a sink takes can
+ * poll (all but a buffer sink's, which never does), and a poll can move the
+ * container, so it is held in a temporary and found again from there before
+ * each element is read (the rules at the top of vm_internal.h).
+ */
+typedef struct Held {
+  GLTANG_Execution * exec;
+  size_t mark;
+  GLTANG_Value plain;
+  bool on;
+} Held;
+
+static bool hold(const GLTANG_Sink * sink, GLTANG_Value v, Held * h) {
+  h->on = sink->exec != NULL && sink->mode != GLTANG_SINK_BUFFER;
+  h->plain = v;
+  h->exec = sink->exec;
+  h->mark = 0;
+  if (!h->on) {
+    return true;
+  }
+  h->mark = gltang_vm_temp_mark(h->exec);
+  return gltang_vm_temp_push(h->exec, v);
+}
+
+static GLTANG_Value held(const Held * h) {
+  return h->on ? gltang_vm_temp_at(h->exec, h->mark) : h->plain;
+}
+
+static void unhold(const Held * h) {
+  if (h->on) {
+    gltang_vm_temp_release(h->exec, h->mark);
+  }
+}
+
 GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, int depth, bool * too_deep) {
   switch (gltang_vm_kind(v)) {
     case GLTANG_KIND_NULL:
@@ -399,16 +497,20 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
         *too_deep = true;
         return GLTANG_ST_OK;
       }
+      Held h;
+      if (!hold(sink, v, &h)) {
+        return GLTANG_ST_OOM;
+      }
       GLTANG_Status st = text(sink, "[");
-      const GLTANG_ArrayObject * array = gltang_vm_array(v);
-      for (uint64_t i = 0; i < array->length && st == GLTANG_ST_OK && !*too_deep && !sink_full(sink); ++i) {
+      for (uint64_t i = 0; st == GLTANG_ST_OK && !*too_deep && !sink_full(sink) && i < gltang_vm_array(held(&h))->length; ++i) {
         if (i) {
           st = text(sink, ", ");
         }
         if (st == GLTANG_ST_OK) {
-          st = gltang_vm_render(sink, array->store.typed->slots[i], GLTANG_RENDER_ELEMENT, depth + 1, too_deep);
+          st = gltang_vm_render(sink, gltang_vm_array(held(&h))->store.typed->slots[i], GLTANG_RENDER_ELEMENT, depth + 1, too_deep);
         }
       }
+      unhold(&h);
       return st == GLTANG_ST_OK ? text(sink, "]") : st;
     }
     case GLTANG_KIND_MAP: {
@@ -416,9 +518,12 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
         *too_deep = true;
         return GLTANG_ST_OK;
       }
+      Held h;
+      if (!hold(sink, v, &h)) {
+        return GLTANG_ST_OOM;
+      }
       GLTANG_Status st = text(sink, "{");
-      const GLTANG_MapObject * map = gltang_vm_map(v);
-      for (uint64_t i = 0; i < map->count && st == GLTANG_ST_OK && !*too_deep && !sink_full(sink); ++i) {
+      for (uint64_t i = 0; st == GLTANG_ST_OK && !*too_deep && !sink_full(sink) && i < gltang_vm_map(held(&h))->count; ++i) {
         if (i) {
           st = text(sink, ", ");
         }
@@ -426,15 +531,16 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
           st = text(sink, "\"");
         }
         if (st == GLTANG_ST_OK) {
-          st = gltang_sink_string(sink, map->store.typed->slots[2u * i]);
+          st = gltang_sink_string(sink, gltang_vm_map(held(&h))->store.typed->slots[2u * i]);
         }
         if (st == GLTANG_ST_OK) {
           st = text(sink, "\": ");
         }
         if (st == GLTANG_ST_OK) {
-          st = gltang_vm_render(sink, map->store.typed->slots[2u * i + 1u], GLTANG_RENDER_ELEMENT, depth + 1, too_deep);
+          st = gltang_vm_render(sink, gltang_vm_map(held(&h))->store.typed->slots[2u * i + 1u], GLTANG_RENDER_ELEMENT, depth + 1, too_deep);
         }
       }
+      unhold(&h);
       return st == GLTANG_ST_OK ? text(sink, "}") : st;
     }
     case GLTANG_KIND_FUNCTION: {

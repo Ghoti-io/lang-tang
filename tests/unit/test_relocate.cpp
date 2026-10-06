@@ -119,6 +119,12 @@ TEST(Relocate, EveryStringOperationThatCopiesInChunksReadsTheSameWhereverTheStri
   expect_same("s = \"abc\"; (s + 1) + (2 + s) + ([1, \"x\"] as string) + s + true;");
 }
 
+TEST(Relocate, PrintingAndRenderingContainersAndLongStringsGiveTheSameOutput) {
+  expect_same("x = [1, \"two\", [3, {a: 4}], 5.5]; print(x); print(\"|\"); print(x[2]); print(\"|\"); print({k: x});");
+  expect_same("s = \"y\"; for (i = 0; i < 13; i += 1) { s = s + s; } print(s); print(\"|\"); print([s, [s]]); 1;");
+  expect_same("x = [1, [2, [3, [4, [5]]]]]; (x as string) + (x[1] as string);");
+}
+
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
