@@ -19,11 +19,37 @@
 
 #include "exec_harness.h"
 
+#include <memory>
+
 using tt::Compiled;
 using tt::Config;
 using tt::Context;
 
 namespace {
+
+/// A request that stays pending for the life of the context, so that every
+/// runtime poll is a slow one and runs the ACT handlers, the heap's among them:
+/// under torture it then collects at the poll, and under relocation moves what
+/// it finds. (A fast poll does neither, and only a poll over the memory budget
+/// asks the heap to reclaim; this is the narrowest way to make a poll collect
+/// without a budget tuned to a program.) The handler votes for nothing.
+void idle_poll(GRCORE_Context *, void *, GRCORE_PollCall *) {}
+const GRCORE_Key kIdleKey = GRCORE_KEY_INIT("lang-tang relocation test: a request that never ends",
+    GRCORE_CARDINALITY_ONE, GRCORE_PHASE_DECIDE, nullptr, idle_poll, nullptr, nullptr, nullptr);
+
+struct SlowPolls {
+  GRCORE_Port * port = nullptr;
+  explicit SlowPolls(GRCORE_Context * context) {
+    GRCORE_RequestKind kind;
+    EXPECT_EQ(grcore_context_request_kind(context, &kIdleKey, &kind), GRCORE_OK);
+    EXPECT_EQ(grcore_context_port(context, &port), GRCORE_OK);
+    EXPECT_EQ(grcore_context_register(context, &kIdleKey, this), GRCORE_OK);
+    EXPECT_EQ(grcore_port_post(port, kind), GRCORE_OK);
+  }
+  ~SlowPolls() { grcore_port_release(port); }
+  SlowPolls(const SlowPolls &) = delete;
+  SlowPolls & operator=(const SlowPolls &) = delete;
+};
 
 struct Outcome {
   bool finished = false;
@@ -35,7 +61,7 @@ struct Outcome {
 
 /// Runs `source`, on a relocating heap with a collection at every allocation or
 /// on an ordinary one.
-Outcome run_program(const std::string & source, bool relocating) {
+Outcome run_program(const std::string & source, bool relocating, bool slow_polls = false) {
   Config config;
   config.relocate = relocating ? 1 : 0;
   config.torture = relocating ? 1 : 0;
@@ -44,6 +70,10 @@ Outcome run_program(const std::string & source, bool relocating) {
   EXPECT_TRUE(compiled.ok()) << source << ": " << compiled.error.message;
   Context context(compiled.program, config);
   EXPECT_TRUE(context.ok()) << source;
+  std::unique_ptr<SlowPolls> slow;
+  if (slow_polls) {
+    slow = std::make_unique<SlowPolls>(context.context);
+  }
   Outcome out;
   out.finished = context.execute();
   out.described = out.finished ? context.describe() : std::string("<no result>");
@@ -55,9 +85,9 @@ Outcome run_program(const std::string & source, bool relocating) {
   return out;
 }
 
-void expect_same(const std::string & source) {
+void expect_same(const std::string & source, bool slow_polls = false) {
   Outcome plain = run_program(source, false);
-  Outcome moved = run_program(source, true);
+  Outcome moved = run_program(source, true, slow_polls);
   EXPECT_EQ(plain.moved, 0u) << "the ordinary heap moved something: " << source;
   EXPECT_GT(moved.moved, 0u) << "the relocating heap moved nothing, so this proves nothing: " << source;
   EXPECT_EQ(moved.finished, plain.finished) << source;
@@ -119,6 +149,27 @@ TEST(Relocate, PrintingAndRenderingContainersAndLongStringsGiveTheSameOutput) {
 TEST(Relocate, ANativeBoundToAValueKeepsTheValueItIsBoundTo) {
   expect_same("use random; r = random.seeded(5); f = r.set_seed; f(7); r.next_int;");
   expect_same("use random; r = random.seeded(5); a = r.next_int; r.set_seed(9); (a as string) + (r.next_int as string);");
+}
+
+/// With every poll a collecting one, the loops that copy in chunks and poll
+/// between chunks (and the sinks) are moved under: each reads its operands again
+/// after the poll, or reads poison. Each program is long enough to poll several
+/// times (a poll is paid for every 4096 bytes, or its element equivalent).
+TEST(Relocate, TheLoopsThatPollAsTheyCopyReadTheSameWhenEveryPollCollectsAndMoves) {
+  const char * big = "s = \"h\u00e9llo \"; for (i = 0; i < 12; i += 1) { s = s + s; } ";
+  // A concatenation of two long strings, copied in several chunks.
+  expect_same(std::string(big) + "t = s + s; (t.length as string) + (t[20000:20010] as string);", true);
+  // A slice with a step, copied a grapheme at a time with a poll between.
+  expect_same(std::string(big) + "u = s[::3]; (u.length as string) + (u[1000:1010] as string);", true);
+  expect_same(std::string(big) + "v = s[100:9000:7]; v as string;", true);
+  // A substring and a retag and a render of a long string.
+  expect_same(std::string(big) + "w = s[5:30000]; h = w.html; (w.length as string) + (h.render.length as string);", true);
+  // An array grown past a poll, and compared and copied at length.
+  expect_same("x = [1, 2, 3, 4] * 400; x[2500] = 1; y = x * 1; z = x[10:1500:3]; ((x == y) as string) + (x.size as string) + (z.size as string);", true);
+  expect_same("x = [[1, \"k\"], [2, \"k\"]] * 300; y = x + x; ((y == y) as string) + (y.size as string);", true);
+  // Printing a long string, and a container of them, into the output.
+  expect_same(std::string(big) + "print(s); print(\"|\"); print([s, [s]]); 1;", true);
+  expect_same("x = [7, 8, 9, 10] * 700; print(x); y = x as string; y.length;", true);
 }
 
 TEST(Relocate, TheRunIsDrivenByTheRelocatingHeapAndNotByAnOrdinaryOneThatLooksTheSame) {
