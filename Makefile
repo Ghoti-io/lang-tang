@@ -800,7 +800,7 @@ check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store
 	@$(PLANTED_ENV) tools/check-planted.sh --slow
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted: ## All ten planted defects: each caught by its instrument, each control passing
+check-planted: ## All twelve planted defects: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all
 
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
