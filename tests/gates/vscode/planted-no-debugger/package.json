@@ -1,0 +1,81 @@
+{
+  "name": "tang-debug",
+  "displayName": "Tang debugger",
+  "description": "Runs a Tang program or template under the tang command's Debug Adapter Protocol server (tang --dap)",
+  "version": "0.0.1",
+  "publisher": "ghoti-io",
+  "license": "LGPL-3.0-only",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onDebugResolve:tang",
+    "onDebugDynamicConfigurations:tang"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "tang",
+        "aliases": [
+          "Tang"
+        ],
+        "extensions": [
+          ".tang"
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "tang"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "tang2",
+        "label": "Tang",
+        "languages": [
+          "tang"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The Tang file to run under the debugger.",
+                "default": "${file}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "tang",
+            "request": "launch",
+            "name": "Debug the current Tang file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Tang: debug a file",
+            "description": "Run a Tang file under tang --dap",
+            "body": {
+              "type": "tang",
+              "request": "launch",
+              "name": "Debug the current Tang file",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

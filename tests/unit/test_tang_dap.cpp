@@ -47,10 +47,12 @@ TEST(TangDap, NeedsTheDescriptorTransportAndSoIsNotRunOnWindows) {
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -652,6 +654,73 @@ TEST(TangDap, TheSourceNameIsTheFileNameAsGivenOnTheCommandLine) {
   EXPECT_FALSE(tang.event("terminated").empty()) << "a differently spelled path is not the same source";
   tang.request("disconnect");
   EXPECT_EQ(tang.finish().err, "3");
+}
+
+// The VS Code contribution (editors/vscode) cannot be started from a test. What
+// can be: read the manifest, read the command line its extension would hand VS
+// Code as the debug adapter, and drive exactly that against the real command, so
+// that the two cannot drift apart. The command name "tang" is the command under
+// test (tang_path()), as it is on the PATH of a VS Code that has one.
+TEST(TangDap, TheVsCodeContributionStartsTheCommandLineThisSuiteDrives) {
+#ifndef GLTANG_TEST_DATA
+#error "GLTANG_TEST_DATA must name the tests/ directory; the Makefile defines it"
+#endif
+  const std::string dir = std::string(GLTANG_TEST_DATA) + "/../editors/vscode";
+  auto read_file = [](const std::string & path) {
+    std::ifstream in(path, std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    return text.str();
+  };
+  const std::string manifest = read_file(dir + "/package.json");
+  ASSERT_FALSE(manifest.empty()) << "no manifest at " << dir;
+  EXPECT_NE(manifest.find("\"type\": \"tang\""), std::string::npos) << "the manifest contributes no debugger of type tang";
+  EXPECT_NE(manifest.find("\"main\": \"./extension.js\""), std::string::npos);
+  EXPECT_NE(manifest.find("\"program\""), std::string::npos) << "the launch configuration names no program";
+  EXPECT_NE(manifest.find("\"breakpoints\""), std::string::npos) << "a breakpoint cannot be set in a tang file";
+
+  const std::string extension = read_file(dir + "/extension.js");
+  std::smatch call;
+  ASSERT_TRUE(std::regex_search(extension, call, std::regex("DebugAdapterExecutable\\(\\s*\"([^\"]+)\"\\s*,\\s*\\[([^\\]]*)\\]\\s*\\)")))
+      << "extension.js has no DebugAdapterExecutable(\"command\", [arguments]) call";
+  EXPECT_EQ(call[1].str(), "tang") << "the adapter is the tang command";
+
+  TempDir temp;
+  std::string file = temp.write("vscode.tang", "a = 1;\nprint(a);\n");
+  std::vector<std::string> argv;
+  std::stringstream list(call[2].str());
+  std::string item;
+  while (std::getline(list, item, ',')) {
+    size_t first = item.find_first_not_of(" \t\r\n");
+    size_t last = item.find_last_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+      continue;
+    }
+    item = item.substr(first, last - first + 1);
+    if (item == "file") {
+      argv.push_back(file);  // session.configuration.program, which VS Code fills with the file
+    } else {
+      ASSERT_GE(item.size(), 2u) << item;
+      ASSERT_EQ(item.front(), '"') << "an argument that is neither a string literal nor `file`: " << item;
+      ASSERT_EQ(item.back(), '"') << item;
+      argv.push_back(item.substr(1, item.size() - 2));
+    }
+  }
+  ASSERT_FALSE(argv.empty());
+  EXPECT_NE(std::find(argv.begin(), argv.end(), "--dap"), argv.end());
+  EXPECT_NE(std::find(argv.begin(), argv.end(), file), argv.end());
+
+  // configure, stopped, disconnect: the session a client opens, a stop at the
+  // first line, and the client going away.
+  Tang tang(argv);
+  tang.configure(file, {1});
+  std::string stopped = tang.event("stopped");
+  EXPECT_NE(stopped.find("\"reason\":\"breakpoint\""), std::string::npos) << stopped;
+  EXPECT_EQ(tang.where().line, 1);
+  EXPECT_NE(tang.request("disconnect").find("\"success\":true"), std::string::npos);
+  Result result = tang.finish();
+  EXPECT_EQ(result.out, "") << "nothing but the protocol is written to stdout";
+  EXPECT_EQ(result.status, 0) << result.err;
 }
 
 TEST(TangDap, MisuseIsAUsageError) {

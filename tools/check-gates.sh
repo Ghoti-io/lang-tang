@@ -99,6 +99,20 @@ expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"
 
+printf 'check-vscode\n'
+V="$HERE/check-vscode.sh"
+expect_pass 'vscode/control' "$V" "$FIX/vscode/control"
+expect_pass 'vscode/the contribution as it is' "$V" "$ROOT/editors/vscode"
+expect_fail 'vscode/planted-bad-json' 'is not valid JSON' "$V" "$FIX/vscode/planted-bad-json"
+expect_fail 'vscode/planted-no-debugger' 'no debugger of type "tang"' "$V" "$FIX/vscode/planted-no-debugger"
+expect_fail 'vscode/planted-no-program' 'do not require a "program"' "$V" "$FIX/vscode/planted-no-program"
+expect_fail 'vscode/planted-no-breakpoints' 'contributes.breakpoints' "$V" "$FIX/vscode/planted-no-breakpoints"
+expect_fail 'vscode/planted-no-main' 'missing.js, which does not exist' "$V" "$FIX/vscode/planted-no-main"
+expect_fail 'vscode/planted-wrong-command' '"tang-old", not "tang"' "$V" "$FIX/vscode/planted-wrong-command"
+expect_fail 'vscode/planted-no-dap' 'do not include "--dap"' "$V" "$FIX/vscode/planted-no-dap"
+expect_fail 'vscode/planted-no-file' 'the identifier `file`' "$V" "$FIX/vscode/planted-no-file"
+expect_fail 'vscode/empty' 'checks nothing' "$V" "$work/empty"
+
 printf 'check-stamps\n'
 # The real Makefile with `JIT=$(JIT)` taken out of its stamps: the gate must
 # name JIT. The unmodified Makefile is the control.

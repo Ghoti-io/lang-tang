@@ -384,7 +384,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage clears this: --coverage links the gcov runtime, whose mangle_path
 # check-symbols is right to reject in a shipping library.
 TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
-	check-edges check-gates check-backend-required check-oracle-absent examples cli-test fuzz-replay \
+	check-edges check-gates check-vscode check-backend-required check-oracle-absent examples cli-test fuzz-replay \
 	test-oracle check-planted-quick
 
 # Valgrind runs threads one at a time under a lock that is not fair by default:
@@ -664,7 +664,7 @@ endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest
-.PHONY: check-labels check-edges check-gates check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
+.PHONY: check-labels check-edges check-gates check-vscode check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 .PHONY: fuzz fuzz-clean
@@ -769,6 +769,9 @@ check-edges: $(APP_DIR)/$(TARGET) ## Fail on a forbidden #include or NEEDED edge
 	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --includes .
 	@GLTANG_EDGES_JIT=$(JIT) tools/check-edges.sh --links $(APP_DIR)/$(TARGET)
 endif
+
+check-vscode: ## Fail if the VS Code debug contribution under editors/vscode is malformed
+	@tools/check-vscode.sh editors/vscode
 
 check-gates: ## Prove each gate fails on its planted defect and passes its control
 	@env -u GLTANG_EDGES_JIT CC="$(CC)" tools/check-gates.sh
@@ -883,7 +886,7 @@ TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile
 # of its own, running the whole unit suite, the command's test, the examples and
 # the gates that apply; it does not repeat the torture modes, which exercise
 # the loop it shares with the JIT arm.
-NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates examples cli-test fuzz-replay
+NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates check-vscode examples cli-test fuzz-replay
 JIT_THRESHOLD_ENV := GLTANG_TEST_JIT_THRESHOLD=1
 
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests

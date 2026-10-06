@@ -27,7 +27,7 @@ debugger is [runtime-debug](../runtime-debug)'s, and two programs here are its
 hosts: `tang --dap` speaks the Debug Adapter Protocol on stdin and stdout, and
 [examples/web_server.c](examples/web_server.c) serves templates one context per
 request, answers a runaway template with `503` and the file and line it was
-stopped on, and lets the same template be stepped over DAP. The engine also has
+stopped on, and lets the same template be stepped over DAP. [editors/vscode](editors/vscode) is a minimal VS Code extension that starts `tang --dap` as the debug adapter. The engine also has
 a **baseline JIT** behind a build option (`JIT=yes`, the default): a function that
 is hot is compiled, through [runtime-jit](../runtime-jit), to machine code for
 small-integer and boolean work, entered right after its entry poll, and left for
@@ -139,6 +139,9 @@ this library:
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
 | `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one (and `runtime-jit` under `JIT=yes`, in `src/jit/` only; under `JIT=no` nothing of it at all) - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
+| `check-vscode` | check the VS Code debug contribution in `editors/vscode` (see its [README](editors/vscode/README.md)): a valid manifest that contributes a `tang` debugger and breakpoints in `.tang` files, and an extension that starts `tang` with `--dap`; `check-gates` runs it against a planted defect for each check |
+| `check-backend-required` | run the tier-up tests as built and with the native backend forced off (`GLTANG_TEST_FORCE_NO_BACKEND=1`), and fail unless every one of them fails the second time: on Linux x86-64, Linux arm64 and Windows x86-64 a missing backend fails them, never skips them |
+| `check-oracle-absent` | run `oracle-present` against a ctang package that does not exist and fail unless it exits non-zero, naming the package (and against the real one, which must pass) |
 | `cli-test` | run the `tang` command over its documented cases and exit statuses, `--dap` included |
 | `examples` | build and run every example; the web server with `--self-test` |
 | `fuzz-replay` | feed every corpus and seed file once through the fuzz entry points, in an ordinary build |
