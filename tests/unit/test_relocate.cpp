@@ -109,6 +109,16 @@ TEST(Relocate, TheOperatorsThatBuildArraysFromArraysGiveTheSameArrays) {
   expect_same("x = [1, [2, 3], 4, [5], 6, 7]; (x[::2] as string) + (x[1:5] as string) + (x[::-1] as string);");
 }
 
+TEST(Relocate, EveryStringOperationThatCopiesInChunksReadsTheSameWhereverTheStringMoves) {
+  // Long enough to be copied in several chunks, with graphemes of several
+  // widths so there is an offsets table to copy too.
+  expect_same("s = \"héllo wörld \"; for (i = 0; i < 10; i += 1) { s = s + s; } t = s + s; (t[3:9000] as string) + (t[::7] as string);");
+  expect_same("s = \"x\"; for (i = 0; i < 14; i += 1) { s = s + s; } t = s + s; (t.length as string) + (t[100:9000].length as string) + (t[::2].length as string);");
+  expect_same("s = \"a<b>&c \"; for (i = 0; i < 12; i += 1) { s = s + s; } h = s.html; (h + s + 12 + [1, \"x\"]) as string;");
+  expect_same("s = \"a<b>&c\"; h = s.html; r = h.render; (r + (h as string) + (s.raw as string)) as string;");
+  expect_same("s = \"abc\"; (s + 1) + (2 + s) + ([1, \"x\"] as string) + s + true;");
+}
+
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

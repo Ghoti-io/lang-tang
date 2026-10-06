@@ -225,6 +225,36 @@ uint64_t gltang_vm_string_hash(const char * bytes, size_t length) {
 // Concatenation
 // ---------------------------------------------------------------------------
 
+/**
+ * What a concatenation reads and writes, taken from its temporaries: the two
+ * operands at `mark` and `mark + 1`, the result at `mark + 2`. A poll can move
+ * any of them, so the view is made again after every one (the rules at the top
+ * of vm_internal.h).
+ */
+typedef struct ConcatView {
+  const GLTANG_StringBlock * x;
+  const GLTANG_StringBlock * y;
+  GLTANG_StringBlock * s;
+  uint32_t * offsets;
+  const uint32_t * xo;
+  const uint32_t * yo;
+  char * dest;
+  const char * from_x;
+  const char * from_y;
+} ConcatView;
+
+static void concat_view(const GLTANG_Execution * exec, size_t mark, ConcatView * c) {
+  c->x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+  c->y = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
+  c->s = gltang_vm_string(gltang_vm_temp_at(exec, mark + 2u));
+  c->offsets = gltang_string_offsets(c->s);
+  c->xo = gltang_string_offsets(c->x);
+  c->yo = gltang_string_offsets(c->y);
+  c->dest = gltang_string_bytes(c->s);
+  c->from_x = gltang_string_bytes(c->x);
+  c->from_y = gltang_string_bytes(c->y);
+}
+
 GLTANG_Value gltang_vm_string_concat(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b) {
   const GLTANG_StringBlock * x = gltang_vm_string(a);
   const GLTANG_StringBlock * y = gltang_vm_string(b);
@@ -241,65 +271,75 @@ GLTANG_Value gltang_vm_string_concat(GLTANG_Execution * exec, GLTANG_Value a, GL
   size_t segments = (size_t)x->segment_count + y->segment_count - (merge ? 1u : 0u);
   size_t graphemes = (size_t)(x->grapheme_length + y->grapheme_length);
   size_t bytes = (size_t)(x->byte_length + y->byte_length);
+  // The operands are held across the allocation, and read again after it.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
+    gltang_vm_temp_release(exec, mark);
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   GLTANG_StringBlock * s;
   GLTANG_Status st = gltang_vm_string_alloc(exec, segments, bytes, graphemes, &s);
   if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
+  x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+  y = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
   uint64_t * out = gltang_string_segments(s);
   memcpy(out, gltang_string_segments(x), (size_t)x->segment_count * 8u);
   const uint64_t * ys = gltang_string_segments(y);
   for (size_t i = merge ? 1u : 0u; i < y->segment_count; ++i) {
     out[x->segment_count + i - (merge ? 1u : 0u)] = ys[i] + (uint64_t)x->grapheme_length;
   }
-  GLTANG_Value result = gltang_value_of(s);
   // From here the string can wait at a poll, so it is kept alive.
-  if (!gltang_vm_temp_push(exec, result)) {
+  if (!gltang_vm_temp_push(exec, gltang_value_of(s))) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
   Pacer pacer = GLTANG_PACER(exec, STRING_CONCAT);
   GLTANG_Status poll = GLTANG_ST_OK;
-  uint32_t * offsets = gltang_string_offsets(s);
-  if (offsets) {
-    const uint32_t * xo = gltang_string_offsets(x);
-    const uint32_t * yo = gltang_string_offsets(y);
-    size_t xg = (size_t)x->grapheme_length;
-    size_t yg = (size_t)y->grapheme_length;
+  ConcatView c;
+  concat_view(exec, mark, &c);
+  if (c.offsets) {
+    size_t xg = (size_t)c.x->grapheme_length;
+    size_t yg = (size_t)c.y->grapheme_length;
     for (size_t i = 0; i < xg && poll == GLTANG_ST_OK; ++i) {
-      offsets[i] = xo ? xo[i] : (uint32_t)i;
+      c.offsets[i] = c.xo ? c.xo[i] : (uint32_t)i;
       if ((i & 1023u) == 1023u) {
         poll = pace(&pacer, 1024u * 4u);
+        concat_view(exec, mark, &c);
       }
     }
     for (size_t i = 0; i <= yg && poll == GLTANG_ST_OK; ++i) {
-      offsets[xg + i] = (uint32_t)(x->byte_length + (yo ? yo[i] : i));
+      c.offsets[xg + i] = (uint32_t)(c.x->byte_length + (c.yo ? c.yo[i] : i));
       if ((i & 1023u) == 1023u) {
         poll = pace(&pacer, 1024u * 4u);
+        concat_view(exec, mark, &c);
       }
     }
   }
-  char * dest = gltang_string_bytes(s);
-  const char * from_x = gltang_string_bytes(x);
-  const char * from_y = gltang_string_bytes(y);
-  for (size_t done = 0; done < x->byte_length && poll == GLTANG_ST_OK;) {
-    size_t n = (size_t)x->byte_length - done;
+  for (size_t done = 0; done < c.x->byte_length && poll == GLTANG_ST_OK;) {
+    size_t n = (size_t)c.x->byte_length - done;
     if (n > GLTANG_POLL_BYTES) {
       n = GLTANG_POLL_BYTES;
     }
-    memcpy(dest + done, from_x + done, n);
+    memcpy(c.dest + done, c.from_x + done, n);
     done += n;
     poll = pace(&pacer, n);
+    concat_view(exec, mark, &c);
   }
-  for (size_t done = 0; done < y->byte_length && poll == GLTANG_ST_OK;) {
-    size_t n = (size_t)y->byte_length - done;
+  for (size_t done = 0; done < c.y->byte_length && poll == GLTANG_ST_OK;) {
+    size_t n = (size_t)c.y->byte_length - done;
     if (n > GLTANG_POLL_BYTES) {
       n = GLTANG_POLL_BYTES;
     }
-    memcpy(dest + x->byte_length + done, from_y + done, n);
+    memcpy(c.dest + c.x->byte_length + done, c.from_y + done, n);
     done += n;
     poll = pace(&pacer, n);
+    concat_view(exec, mark, &c);
   }
-  gltang_vm_temp_pop(exec);
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark + 2u);
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
@@ -314,6 +354,25 @@ static GLTANG_Value empty_string(GLTANG_Execution * exec) {
   return gltang_vm_string_from_ascii(exec, "", 0, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
 }
 
+/** What a substring reads and writes, from its temporaries: the source at `mark`, the result at `mark + 1`. */
+typedef struct SubstringView {
+  const GLTANG_StringBlock * x;
+  GLTANG_StringBlock * s;
+  uint32_t * offsets;
+  const uint32_t * source_offsets;
+  char * dest;
+  const char * from;
+} SubstringView;
+
+static void substring_view(const GLTANG_Execution * exec, size_t mark, size_t byte_start, SubstringView * v) {
+  v->x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+  v->s = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
+  v->offsets = gltang_string_offsets(v->s);
+  v->source_offsets = gltang_string_offsets(v->x);
+  v->dest = gltang_string_bytes(v->s);
+  v->from = gltang_string_bytes(v->x) + byte_start;
+}
+
 /** A run of graphemes [start, start + count) with its segments, `count` >= 1. */
 static GLTANG_Value substring(GLTANG_Execution * exec, GLTANG_Value v, size_t start, size_t count) {
   const GLTANG_StringBlock * x = gltang_vm_string(v);
@@ -324,45 +383,53 @@ static GLTANG_Value substring(GLTANG_Execution * exec, GLTANG_Value v, size_t st
   size_t byte_start = gltang_string_byte_offset(x, start);
   size_t byte_end = gltang_string_byte_offset(x, end);
   size_t bytes = byte_end - byte_start;
+  // The source is held across the allocation, and across every poll after it.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   GLTANG_StringBlock * s;
   GLTANG_Status st = gltang_vm_string_alloc(exec, segments, bytes, count, &s);
   if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
+  x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
   uint64_t * out = gltang_string_segments(s);
   const uint64_t * in = gltang_string_segments(x);
   for (size_t i = 0; i < segments; ++i) {
     size_t from = GLTANG_SEGMENT_FIRST(in[first + i]);
     out[i] = GLTANG_SEGMENT_WORD(GLTANG_SEGMENT_TYPE(in[first + i]), i ? from - start : 0);
   }
-  GLTANG_Value result = gltang_value_of(s);
-  if (!gltang_vm_temp_push(exec, result)) {
+  if (!gltang_vm_temp_push(exec, gltang_value_of(s))) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
   Pacer pacer = GLTANG_PACER(exec, STRING_SUBSTRING);
   GLTANG_Status poll = GLTANG_ST_OK;
-  uint32_t * offsets = gltang_string_offsets(s);
-  const uint32_t * source_offsets = gltang_string_offsets(x);
-  if (offsets) {
+  SubstringView w;
+  substring_view(exec, mark, byte_start, &w);
+  if (w.offsets) {
     for (size_t i = 0; i <= count && poll == GLTANG_ST_OK; ++i) {
-      offsets[i] = (uint32_t)((source_offsets ? source_offsets[start + i] : start + i) - byte_start);
+      w.offsets[i] = (uint32_t)((w.source_offsets ? w.source_offsets[start + i] : start + i) - byte_start);
       if ((i & 1023u) == 1023u) {
         poll = pace(&pacer, 1024u * 4u);
+        substring_view(exec, mark, byte_start, &w);
       }
     }
   }
-  char * dest = gltang_string_bytes(s);
-  const char * from = gltang_string_bytes(x) + byte_start;
   for (size_t done = 0; done < bytes && poll == GLTANG_ST_OK;) {
     size_t n = bytes - done;
     if (n > GLTANG_POLL_BYTES) {
       n = GLTANG_POLL_BYTES;
     }
-    memcpy(dest + done, from + done, n);
+    memcpy(w.dest + done, w.from + done, n);
     done += n;
     poll = pace(&pacer, n);
+    substring_view(exec, mark, byte_start, &w);
   }
-  gltang_vm_temp_pop(exec);
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
@@ -384,6 +451,13 @@ GLTANG_Value gltang_vm_string_slice(GLTANG_Execution * exec, GLTANG_Value v, int
   if (step == 1) {
     return substring(exec, v, (size_t)start, (size_t)count);
   }
+  // The source is held for the whole of it, since both passes poll: its
+  // temporary is the one place to read it from. The result joins it after the
+  // allocation.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   const GLTANG_StringBlock * x = gltang_vm_string(v);
   // Pass one: how many bytes and how many segments the selection needs.
   size_t total = 0;
@@ -403,18 +477,22 @@ GLTANG_Value gltang_vm_string_slice(GLTANG_Execution * exec, GLTANG_Value v, int
       g += step;
     }
     if (pace(&pacer, 8u) != GLTANG_ST_OK) {
+      gltang_vm_temp_release(exec, mark);
       return GLTANG_V_UNWIND;
     }
+    x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
   }
   GLTANG_StringBlock * s;
   GLTANG_Status st = gltang_vm_string_alloc(exec, segments, total, (size_t)count, &s);
   if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
-  GLTANG_Value result = gltang_value_of(s);
-  if (!gltang_vm_temp_push(exec, result)) {
+  if (!gltang_vm_temp_push(exec, gltang_value_of(s))) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
+  x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
   uint64_t * out = gltang_string_segments(s);
   uint32_t * offsets = gltang_string_offsets(s);
   char * dest = gltang_string_bytes(s);
@@ -440,11 +518,18 @@ GLTANG_Value gltang_vm_string_slice(GLTANG_Execution * exec, GLTANG_Value v, int
       g += step;
     }
     poll = pace(&pacer, 8u + (to - from));
+    // The poll may have moved both: the source and the result are read again.
+    x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+    s = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
+    out = gltang_string_segments(s);
+    offsets = gltang_string_offsets(s);
+    dest = gltang_string_bytes(s);
   }
   if (offsets) {
     offsets[count] = (uint32_t)written;
   }
-  gltang_vm_temp_pop(exec);
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
@@ -460,40 +545,57 @@ GLTANG_Value gltang_vm_string_retag(GLTANG_Execution * exec, GLTANG_Value v, GLT
   if (x->segment_count == 1 && first_type(x) == type) {
     return v;
   }
+  size_t grapheme_length = (size_t)x->grapheme_length;
+  size_t byte_length = (size_t)x->byte_length;
+  // The source is held across the allocation and the polls after it; the
+  // result joins it.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   GLTANG_StringBlock * s;
-  GLTANG_Status st = gltang_vm_string_alloc(exec, 1, (size_t)x->byte_length, (size_t)x->grapheme_length, &s);
+  GLTANG_Status st = gltang_vm_string_alloc(exec, 1, byte_length, grapheme_length, &s);
   if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
   gltang_string_segments(s)[0] = GLTANG_SEGMENT_WORD(type, 0);
-  GLTANG_Value result = gltang_value_of(s);
-  if (!gltang_vm_temp_push(exec, result)) {
+  if (!gltang_vm_temp_push(exec, gltang_value_of(s))) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
   Pacer pacer = GLTANG_PACER(exec, STRING_RETAG);
   GLTANG_Status poll = GLTANG_ST_OK;
+  x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
   uint32_t * offsets = gltang_string_offsets(s);
-  if (offsets) {
-    const uint32_t * source = gltang_string_offsets(x);
-    for (size_t i = 0; i <= x->grapheme_length && poll == GLTANG_ST_OK; ++i) {
-      offsets[i] = source[i];
-      if ((i & 1023u) == 1023u) {
-        poll = pace(&pacer, 1024u * 4u);
-      }
+  const uint32_t * source = gltang_string_offsets(x);
+  for (size_t i = 0; offsets && i <= grapheme_length && poll == GLTANG_ST_OK; ++i) {
+    offsets[i] = source[i];
+    if ((i & 1023u) == 1023u) {
+      poll = pace(&pacer, 1024u * 4u);
+      x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+      s = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
+      offsets = gltang_string_offsets(s);
+      source = gltang_string_offsets(x);
     }
   }
   char * dest = gltang_string_bytes(s);
   const char * from = gltang_string_bytes(x);
-  for (size_t done = 0; done < x->byte_length && poll == GLTANG_ST_OK;) {
-    size_t n = (size_t)x->byte_length - done;
+  for (size_t done = 0; done < byte_length && poll == GLTANG_ST_OK;) {
+    size_t n = byte_length - done;
     if (n > GLTANG_POLL_BYTES) {
       n = GLTANG_POLL_BYTES;
     }
     memcpy(dest + done, from + done, n);
     done += n;
     poll = pace(&pacer, n);
+    x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+    s = gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u));
+    dest = gltang_string_bytes(s);
+    from = gltang_string_bytes(x);
   }
-  gltang_vm_temp_pop(exec);
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
@@ -605,6 +707,12 @@ bool gltang_vm_render_block(const GLTANG_StringBlock * s, char ** out, size_t * 
 GLTANG_Value gltang_vm_string_render(GLTANG_Execution * exec, GLTANG_Value v) {
   const GLTANG_StringBlock * x = gltang_vm_string(v);
   Pacer pacer = GLTANG_PACER(exec, STRING_RENDER);
+  // The source is held through both passes, which poll, and the result joins
+  // it when there is one: each is read again from its temporary after a poll.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   // Pass one: the size of the encoding.
   size_t length = 0;
   bool has_cr = false;
@@ -623,33 +731,39 @@ GLTANG_Value gltang_vm_string_render(GLTANG_Execution * exec, GLTANG_Value v) {
         has_cr = has_cr || scratch[0] == '\r';
       }
       if (pace(&pacer, chunk) != GLTANG_ST_OK) {
+        gltang_vm_temp_release(exec, mark);
         return GLTANG_V_UNWIND;
       }
+      x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+      bytes = gltang_string_bytes(x);
     }
   }
   if (length > UINT32_MAX) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
   bool direct = !gltang_string_has_offsets(x) && !has_cr;
   char * temp = NULL;
   GLTANG_StringBlock * s = NULL;
   char * dest;
-  GLTANG_Value result = GLTANG_V_NULL;
   if (direct) {
     GLTANG_Status st = gltang_vm_string_alloc(exec, 1, length, length, &s);
     if (st != GLTANG_ST_OK) {
+      gltang_vm_temp_release(exec, mark);
       return gltang_vm_failure_value(exec, st);
     }
     gltang_string_segments(s)[0] = GLTANG_SEGMENT_WORD(GLTANG_UNICODE_STRING_TYPE_TRUSTED, 0);
-    result = gltang_value_of(s);
-    if (!gltang_vm_temp_push(exec, result)) {
+    if (!gltang_vm_temp_push(exec, gltang_value_of(s))) {
+      gltang_vm_temp_release(exec, mark);
       return exec->roots[GLTANG_ROOT_OOM];
     }
+    x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
     dest = gltang_string_bytes(s);
   }
   else {
     temp = gcu_allocator_malloc(exec->allocator, length + 1u);
     if (!temp) {
+      gltang_vm_temp_release(exec, mark);
       return exec->roots[GLTANG_ROOT_OOM];
     }
     dest = temp;
@@ -669,12 +783,19 @@ GLTANG_Value gltang_vm_string_render(GLTANG_Execution * exec, GLTANG_Value v) {
         at += encode_byte(type, (unsigned char)bytes[b], dest + at);
       }
       poll = pace(&pacer, chunk);
+      x = gltang_vm_string(gltang_vm_temp_at(exec, mark));
+      bytes = gltang_string_bytes(x);
+      if (direct) {
+        dest = gltang_string_bytes(gltang_vm_string(gltang_vm_temp_at(exec, mark + 1u)));
+      }
     }
   }
   if (direct) {
-    gltang_vm_temp_pop(exec);
+    GLTANG_Value result = gltang_vm_temp_at(exec, mark + 1u);
+    gltang_vm_temp_release(exec, mark);
     return poll != GLTANG_ST_OK ? GLTANG_V_UNWIND : result;
   }
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     gcu_allocator_free(exec->allocator, temp);
     return GLTANG_V_UNWIND;
