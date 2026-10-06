@@ -68,6 +68,36 @@ void expect_same(const std::string & source) {
 
 }  // namespace
 
+TEST(Relocate, ArraysAndMapsThatGrowReadTheSameWhereverTheirStorageMoves) {
+  expect_same("x = [1, 2]; x[5] = 7; x as string;");
+  expect_same("m = {:}; for (i = 0; i < 40; i += 1) { m[\"k\" + (i as string)] = [i, i * 2]; } m as string;");
+  expect_same("m = {a: 1, b: 2, c: 3, d: 4}; m.e = [5]; m.f = {g: 6}; m as string;");
+}
+
+TEST(Relocate, AValueStoredBeyondTheEndOfTheArrayItIsGrownFromIsStillTheValueAfterTheGrowth) {
+  // The value is the array itself: it is moved by the growth that makes room.
+  expect_same("a = [1]; a[5] = a; a as string;");
+  expect_same("a = [1]; a[2] = a; a as string;");
+  // And a boxed integer, which is a heap object of its own.
+  expect_same("use random; r = random.seeded(123); xs = []; for (i = 0; i < 40; i += 1) { xs[i] = r.next_int; } xs as string;");
+}
+
+TEST(Relocate, AContainerStoredIntoItselfOrIntoAMapIsCopiedAndTheCopyIsWhatIsStored) {
+  expect_same("x = [1, 2]; x[0] = x; x as string;");
+  expect_same("m = {:}; m[\"k\"] = m; m as string;");
+  expect_same("d = {a: 1}; d.b = d; d.b.a;");
+  expect_same("d = {a: 1}; d.list = [1, [2, 3], {k: [4]}]; d.list[1][0] = 9; d as string;");
+}
+
+TEST(Relocate, TheRunIsDrivenByTheRelocatingHeapAndNotByAnOrdinaryOneThatLooksTheSame) {
+  // The controls: the ordinary heap really does not move, and the relocating one
+  // does, for the smallest program that allocates twice.
+  Outcome plain = run_program("x = [1, 2, 3]; x[7] = x; x as string;", false);
+  Outcome moved = run_program("x = [1, 2, 3]; x[7] = x; x as string;", true);
+  EXPECT_EQ(plain.moved, 0u);
+  EXPECT_GT(moved.moved, 0u);
+  EXPECT_EQ(plain.described, moved.described);
+}
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

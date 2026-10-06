@@ -93,18 +93,21 @@ GLTANG_Value gltang_vm_array_new(GLTANG_Execution * exec, size_t capacity) {
   }
   GLTANG_ArrayObject * array = object;
   array->kind = GLTANG_OBJ_ARRAY;
-  GLTANG_Value result = gltang_value_of(array);
-  if (!gltang_vm_temp_push(exec, result)) {
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, gltang_value_of(array))) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
   GLTANG_ArrayStore * store;
   st = array_store_alloc(exec, capacity, &store);
   if (st != GLTANG_ST_OK) {
-    gltang_vm_temp_pop(exec);
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
+  // The storage's allocation was a GC point: the array is where it is now.
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark);
+  array = gltang_vm_array(result);
   put_pointer(exec, array, &array->store.raw, store);
-  gltang_vm_temp_pop(exec);
+  gltang_vm_temp_release(exec, mark);
   return result;
 }
 
@@ -142,28 +145,42 @@ GLTANG_Value gltang_vm_array_grow(GLTANG_Execution * exec, GLTANG_Value array, s
   if (capacity < length) {
     capacity = length;
   }
+  size_t count = (size_t)a->length;
+  // The array is held across the allocation, and so is the new storage while
+  // it is filled: each can move at a GC point, so each is read again from its
+  // temporary (the array first, the storage next).
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, array)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   GLTANG_ArrayStore * store;
   GLTANG_Status st = array_store_alloc(exec, capacity, &store);
   if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
   // The new storage waits at polls while it is filled.
   if (!gltang_vm_temp_push(exec, gltang_value_of(store))) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
   }
   Pacer pacer = GLTANG_PACER(exec, ARRAY_GROW);
-  GLTANG_ArrayStore * old = a->store.typed;
   GLTANG_Status poll = GLTANG_ST_OK;
-  for (size_t i = 0; i < a->length && poll == GLTANG_ST_OK; ++i) {
-    put(exec, store, &store->slots[i], old->slots[i]);
+  for (size_t i = 0; i < count && poll == GLTANG_ST_OK; ++i) {
+    a = gltang_vm_array(gltang_vm_temp_at(exec, mark));
+    store = (GLTANG_ArrayStore *)gltang_object(gltang_vm_temp_at(exec, mark + 1u));
+    put(exec, store, &store->slots[i], a->store.typed->slots[i]);
     if ((i & 255u) == 255u) {
       poll = pace(&pacer, 256u);
     }
   }
-  gltang_vm_temp_pop(exec);
+  array = gltang_vm_temp_at(exec, mark);
+  store = (GLTANG_ArrayStore *)gltang_object(gltang_vm_temp_at(exec, mark + 1u));
+  gltang_vm_temp_release(exec, mark);
   if (poll != GLTANG_ST_OK) {
     return GLTANG_V_UNWIND;
   }
+  a = gltang_vm_array(array);
   put_pointer(exec, a, &a->store.raw, store);
   a->length = length;
   return array;
@@ -207,18 +224,21 @@ GLTANG_Value gltang_vm_map_new(GLTANG_Execution * exec, size_t capacity) {
   }
   GLTANG_MapObject * map = object;
   map->kind = GLTANG_OBJ_MAP;
-  GLTANG_Value result = gltang_value_of(map);
-  if (!gltang_vm_temp_push(exec, result)) {
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, gltang_value_of(map))) {
     return exec->roots[GLTANG_ROOT_OOM];
   }
   GLTANG_MapStore * store;
   st = map_store_alloc(exec, capacity, &store);
   if (st != GLTANG_ST_OK) {
-    gltang_vm_temp_pop(exec);
+    gltang_vm_temp_release(exec, mark);
     return gltang_vm_failure_value(exec, st);
   }
+  // The storage's allocation was a GC point: the map is where it is now.
+  GLTANG_Value result = gltang_vm_temp_at(exec, mark);
+  map = gltang_vm_map(result);
   put_pointer(exec, map, &map->store.raw, store);
-  gltang_vm_temp_pop(exec);
+  gltang_vm_temp_release(exec, mark);
   return result;
 }
 
@@ -279,22 +299,24 @@ GLTANG_Value gltang_vm_map_set(GLTANG_Execution * exec, GLTANG_Value map, GLTANG
   }
   if (m->count == m->store.typed->capacity) {
     size_t capacity = m->store.typed->capacity < 4 ? 4 : (size_t)m->store.typed->capacity * 2u;
-    // The allocation may collect, and the key and the value are held only by
-    // the caller's C variables: keep them alive across it.
-    if (!gltang_vm_temp_push(exec, key)) {
-      return exec->roots[GLTANG_ROOT_OOM];
-    }
-    if (!gltang_vm_temp_push(exec, v)) {
-      gltang_vm_temp_pop(exec);
+    // The allocation may collect, and the map, the key and the value are held
+    // only by the caller's C variables: hold them, and take them from here
+    // afterwards, since the collection may have moved them.
+    size_t mark = gltang_vm_temp_mark(exec);
+    if (!gltang_vm_temp_push(exec, map) || !gltang_vm_temp_push(exec, key) || !gltang_vm_temp_push(exec, v)) {
+      gltang_vm_temp_release(exec, mark);
       return exec->roots[GLTANG_ROOT_OOM];
     }
     GLTANG_MapStore * store;
     GLTANG_Status st = map_store_alloc(exec, capacity, &store);
-    gltang_vm_temp_pop(exec);
-    gltang_vm_temp_pop(exec);
+    map = gltang_vm_temp_at(exec, mark);
+    key = gltang_vm_temp_at(exec, mark + 1u);
+    v = gltang_vm_temp_at(exec, mark + 2u);
+    gltang_vm_temp_release(exec, mark);
     if (st != GLTANG_ST_OK) {
       return gltang_vm_failure_value(exec, st);
     }
+    m = gltang_vm_map(map);
     GLTANG_MapStore * old = m->store.typed;
     for (uint64_t i = 0; i < m->count; ++i) {
       put(exec, store, &store->slots[2u * i], old->slots[2u * i]);

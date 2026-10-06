@@ -697,6 +697,36 @@ static GLTANG_Value stored_value(GLTANG_Execution * exec, GLTANG_Value v, bool a
   return adopt && gltang_vm_is_container(v) ? gltang_vm_deep_copy(exec, v) : v;
 }
 
+/**
+ * Stores `v`, copied if `adopt` says so, at the string `key` of a map. The
+ * copy and the store are each a GC point, so the map, the key and the value
+ * are held across the first, and the stored value across the second, and each
+ * is read from its temporary afterwards. Answers the stored value, or the
+ * failure.
+ */
+static GLTANG_Value map_store(GLTANG_Execution * exec, GLTANG_Value map, GLTANG_Value key, GLTANG_Value v, bool adopt) {
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, map) || !gltang_vm_temp_push(exec, key) || !gltang_vm_temp_push(exec, v)) {
+    gltang_vm_temp_release(exec, mark);
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value stored = stored_value(exec, v, adopt);
+  map = gltang_vm_temp_at(exec, mark);
+  key = gltang_vm_temp_at(exec, mark + 1u);
+  v = gltang_vm_temp_at(exec, mark + 2u);
+  gltang_vm_temp_release(exec, mark);
+  if (stored == GLTANG_V_UNWIND || (gltang_vm_is_error(stored) && stored != v)) {
+    return stored;
+  }
+  if (!gltang_vm_temp_push(exec, stored)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value r = gltang_vm_map_set(exec, map, key, stored);
+  stored = gltang_vm_temp_at(exec, mark);
+  gltang_vm_temp_release(exec, mark);
+  return gltang_v_is_kind(r, GLTANG_OBJ_MAP) ? stored : r;
+}
+
 GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index, GLTANG_Value v, bool adopt) {
   switch (gltang_vm_kind(container)) {
     case GLTANG_KIND_ARRAY: {
@@ -711,15 +741,30 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
           return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
         }
       }
+      // The growth and the copy of a container are both GC points: the array
+      // and the value (which may be the array itself) are held across them and
+      // taken from the temporaries after each.
+      size_t mark = gltang_vm_temp_mark(exec);
+      if (!gltang_vm_temp_push(exec, container) || !gltang_vm_temp_push(exec, v)) {
+        gltang_vm_temp_release(exec, mark);
+        return exec->roots[GLTANG_ROOT_OOM];
+      }
       if (i >= n) {
         // An index at or past the end grows the array, filling with null
-        // (4.13). The slot being assigned is written after the growth.
+        // (4.13). The slot being assigned is written after the growth. The
+        // growth answers with the array as it is now.
         GLTANG_Value grown = gltang_vm_array_grow(exec, container, (size_t)i + 1u);
-        if (grown != container) {
+        if (!gltang_v_is_kind(grown, GLTANG_OBJ_ARRAY)) {
+          gltang_vm_temp_release(exec, mark);
           return grown;
         }
+        container = gltang_vm_temp_at(exec, mark);
+        v = gltang_vm_temp_at(exec, mark + 1u);
       }
       GLTANG_Value stored = stored_value(exec, v, adopt);
+      container = gltang_vm_temp_at(exec, mark);
+      v = gltang_vm_temp_at(exec, mark + 1u);
+      gltang_vm_temp_release(exec, mark);
       if (gltang_vm_is_error(stored) && stored != v) {
         return stored;
       }
@@ -733,12 +778,7 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
       if (!gltang_v_is_kind(index, GLTANG_OBJ_STRING)) {
         return MAKE_ERROR(GLTANG_ERROR_MAP_KEY_NOT_STRING);
       }
-      GLTANG_Value stored = stored_value(exec, v, adopt);
-      if (stored == GLTANG_V_UNWIND || (gltang_vm_is_error(stored) && stored != v)) {
-        return stored;
-      }
-      GLTANG_Value r = gltang_vm_map_set(exec, container, index, stored);
-      return r == container ? stored : r;
+      return map_store(exec, container, index, v, adopt);
     }
     default:
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
@@ -747,14 +787,8 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
 
 GLTANG_Value gltang_vm_op_set_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name, GLTANG_Value v, bool adopt) {
   switch (gltang_vm_kind(container)) {
-    case GLTANG_KIND_MAP: {
-      GLTANG_Value stored = stored_value(exec, v, adopt);
-      if (stored == GLTANG_V_UNWIND || (gltang_vm_is_error(stored) && stored != v)) {
-        return stored;
-      }
-      GLTANG_Value r = gltang_vm_map_set(exec, container, name, stored);
-      return r == container ? stored : r;
-    }
+    case GLTANG_KIND_MAP:
+      return map_store(exec, container, name, v, adopt);
     case GLTANG_KIND_ARRAY:
       // The error subscripting an array with a string would be.
       return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
