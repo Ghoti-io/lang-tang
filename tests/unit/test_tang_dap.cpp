@@ -693,12 +693,16 @@ struct Played {
   int status = -1;
 };
 
-// One scripted session: stop at line 11 (between the calls, f already compiled
-// when the JIT is on), set a breakpoint on line 5 inside f, continue into the
-// second call, step over twice, step out, and continue until the end.
+// One scripted session: stop at line 10, before the first call. Step in, to
+// the entry of f (a compiled f is entered here when the JIT is on, since
+// threshold 1 compiles it at its first poll), step over once inside it, and
+// step out, which finishes the print and stops at the breakpoint on line 11
+// (between the calls, f already compiled when the JIT is on). Set a breakpoint on line 5
+// inside f, continue into the second call, step over twice, step out, and
+// continue until the end.
 Played play_hot(const std::string & file, long jit_threshold) {
   Tang tang({"--script", "--dap", "--jit-threshold", std::to_string(jit_threshold), "--jit-stats", file});
-  tang.configure(file, {11});
+  tang.configure(file, {10, 11});
   Played out;
   auto stop = [&](const char * what) {
     std::string event = tang.event("stopped");
@@ -707,7 +711,13 @@ Played play_hot(const std::string & file, long jit_threshold) {
     out.transcript += std::string(what) + ": " + (event.find("\"reason\":\"breakpoint\"") != std::string::npos ? "breakpoint" : "step") + " line " +
         std::to_string(at.line) + " frames " + std::to_string(at.frames) + " " + tang.locals(at.id) + "\n";
   };
-  stop("first stop");
+  stop("before the first call");
+  for (const char * step : {"stepIn", "next", "stepOut"}) {
+    EXPECT_NE(tang.request(step, "{\"threadId\":1}").find("\"success\":true"), std::string::npos) << step;
+    stop(step);
+  }
+  // The step out ends the call and the print, and so lands on the breakpoint at
+  // line 11, between the two calls: that is the first stop of the older script.
   std::string reply = tang.request("setBreakpoints", "{\"source\":{\"path\":\"" + file + "\"},\"breakpoints\":[{\"line\":5}]}");
   EXPECT_NE(reply.find("\"success\":true"), std::string::npos) << reply;
   EXPECT_NE(tang.request("continue", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
@@ -751,7 +761,13 @@ TEST(TangDap, ABreakpointInCompiledCodeStopsAtTheRightLineWithTheRightLocalsAndS
   if (std::getenv("GLTANG_DAP_VERBOSE")) {
     std::printf("%s", compiled.transcript.c_str());
   }
-  EXPECT_NE(compiled.transcript.find("first stop: breakpoint line 11 frames 1"), std::string::npos) << compiled.transcript;
+  // Step in goes into f, at its entry and one frame deeper, interpreted and
+  // compiled alike; a step over there is its next statement, and a step out
+  // finishes the call and the print and stops at the breakpoint on line 11.
+  EXPECT_NE(compiled.transcript.find("before the first call: breakpoint line 10 frames 1"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("stepIn: step line 1 frames 2"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("next: step line 2 frames 2"), std::string::npos) << compiled.transcript;
+  EXPECT_NE(compiled.transcript.find("stepOut: breakpoint line 11 frames 1"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("inside f: breakpoint line 5 frames 2"), std::string::npos) << compiled.transcript;
   EXPECT_NE(compiled.transcript.find("\"name\":\"n\",\"value\":\"4\""), std::string::npos) << compiled.transcript;
   // The output is the plain run's, on stderr with the JIT line after it.
