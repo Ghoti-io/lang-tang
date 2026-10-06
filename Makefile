@@ -779,16 +779,17 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 ####################################################################
 # The tier-up tests fail, not skip, without a backend (story 19, item 5)
 #
-# tools/check-backend-required.sh runs the testJit executable as built and again
-# with GLTANG_TEST_FORCE_NO_BACKEND=1, and requires the second run to fail in
-# every test that uses GLTANG_REQUIRE_JIT_BACKEND. It needs the JIT, so it is
-# not in the JIT=no arm.
+# tools/check-backend-required.sh runs testJit, testProfile, testRetention and
+# testObserver as built and again with GLTANG_TEST_FORCE_NO_BACKEND=1, and
+# requires the second run to fail: in testJit, in exactly the tests that use
+# GLTANG_REQUIRE_JIT_BACKEND. It needs the JIT, so it is not in the JIT=no arm.
 ####################################################################
 
-check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) ## Fail if the tier-up tests skip, rather than fail, when the backend is forced off
 ifeq ($(JIT),yes)
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR)/testJit$(EXE_EXTENSION) tests/unit/test_jit.cpp
+check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) $(APP_DIR)/testProfile$(EXE_EXTENSION) $(APP_DIR)/testRetention$(EXE_EXTENSION) $(APP_DIR)/testObserver$(EXE_EXTENSION) ## Fail if the tests that need a backend skip, or check less, when it is forced off
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR) tests/unit
 else
+check-backend-required: ## Skipped under JIT=no
 	@printf 'check-backend-required: skipped, JIT=no (there is no JIT to lose a backend)\n'
 endif
 
@@ -886,7 +887,7 @@ TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile
 # of its own, running the whole unit suite, the command's test, the examples and
 # the gates that apply; it does not repeat the torture modes, which exercise
 # the loop it shares with the JIT arm.
-NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates check-vscode examples cli-test fuzz-replay
+NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates check-vscode check-oracle-absent examples cli-test fuzz-replay
 JIT_THRESHOLD_ENV := GLTANG_TEST_JIT_THRESHOLD=1
 
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests

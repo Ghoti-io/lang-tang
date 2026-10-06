@@ -251,6 +251,7 @@ TEST(Profile, TheReportIsExactlyWhatAnIndependentWalkAtEverySampleSaysOnEveryTie
   EXPECT_EQ(describe(interpreted.report), describe(compiled.report));
   EXPECT_EQ(interpreted.output, compiled.output);
 #ifdef GLTANG_WITH_JIT
+  GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
   if (jit_backend_present()) {
     EXPECT_GE(compiled.stats.functions_compiled, 1u) << "the JIT arm must not be vacuous";
   }

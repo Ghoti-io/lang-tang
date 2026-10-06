@@ -1,44 +1,37 @@
 #!/bin/sh
 #
-# Show that the tier-up tests FAIL, and do not skip, when a target that has a
-# native code backend has none.
+# Show that the tests that need a native code backend FAIL, and do not skip or
+# quietly check less, when a target that has a backend has none.
 #
 # tests/unit/test_jit.cpp starts every tier-up test with
 # GLTANG_REQUIRE_JIT_BACKEND(). On Linux x86-64, Linux arm64 and Windows x86-64
-# that macro asserts the backend exists; elsewhere it skips, by name. A macro
-# that quietly skipped everywhere would turn all of the tests into passes over
-# nothing, and a clean run cannot tell the two apart. So this runs the suite
-# twice:
+# that macro asserts the backend exists; elsewhere it skips, by name. And
+# test_profile, test_retention and test_observer guard their "the JIT arm is not
+# vacuous" checks with `if (jit_backend_present())`, after
+# GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET(). A clean run cannot tell a macro
+# that quietly skips or a guard that quietly switches checks off from the real
+# thing, so each suite runs twice:
 #
 #   control   as built: it must pass
 #   planted   with GLTANG_TEST_FORCE_NO_BACKEND=1, which makes
 #             jit_backend_present() answer false as a missing backend would:
-#             it must exit non-zero, and every test that uses the macro must
-#             be among the failures
+#             it must exit non-zero
 #
-# On a target without a backend the planted run must instead skip every one of
-# them and exit zero, and the script says so by name.
+# For testJit the set of failed test names must also equal the set of tests that
+# use the macro, both read as names (from `TEST(Suite, Name)` and the gtest
+# failure lines), so that a test added without the macro, or one that loses it,
+# changes what is expected.
 #
-# Usage: tools/check-backend-required.sh <testJit executable> <test source>
+# On a target without a backend the planted runs must instead exit zero, and the
+# script says so by name.
+#
+# Usage: tools/check-backend-required.sh <apps directory> <tests/unit directory>
 # LD_LIBRARY_PATH is the caller's.
 
 set -u
 
-exe="$1"
-src="$2"
-
-if [ ! -x "$exe" ]; then
-  printf 'check-backend-required: %s is not built\n' "$exe" >&2
-  exit 1
-fi
-
-# The number of tests that use the macro, counted in the source, so that a test
-# added without it, or the macro removed from one, changes what is expected.
-want="$(grep -c '^  GLTANG_REQUIRE_JIT_BACKEND();' "$src")"
-if [ "$want" -lt 1 ]; then
-  printf 'check-backend-required: no test in %s uses GLTANG_REQUIRE_JIT_BACKEND, so this checks nothing\n' "$src" >&2
-  exit 1
-fi
+apps="$1"
+unit="$2"
 
 # Whether this target is one with a backend: the same three targets as
 # GLTANG_TEST_BACKEND_GATED in tests/test_helpers.h.
@@ -47,30 +40,63 @@ case "$(uname -s)-$(uname -m)" in
   *) gated=no ;;
 esac
 
-out="$("$exe" --gtest_brief=1 2>&1)"
-rc=$?
-if [ "$rc" -ne 0 ]; then
-  printf 'check-backend-required: the control run (backend as built) failed:\n%s\n' "$out" >&2
+fail() {
+  printf 'check-backend-required: %s\n' "$*" >&2
   exit 1
+}
+
+# run <executable> <forced>: the output; sets rc.
+run() {
+  if [ "$2" = yes ]; then
+    out="$(GLTANG_TEST_FORCE_NO_BACKEND=1 "$1" --gtest_brief=1 2>&1)"
+  else
+    out="$("$1" --gtest_brief=1 2>&1)"
+  fi
+  rc=$?
+}
+
+for suite in Jit Profile Retention Observer; do
+  exe="$apps/test$suite"
+  [ -x "$exe" ] || fail "$exe is not built"
+  run "$exe" no
+  [ "$rc" -eq 0 ] || fail "the control run of test$suite (backend as built) failed:
+$out"
+done
+
+if [ "$gated" != yes ]; then
+  for suite in Jit Profile Retention Observer; do
+    run "$apps/test$suite" yes
+    [ "$rc" -eq 0 ] || fail "on a target without a backend the forced run of test$suite must pass or skip, and it failed:
+$out"
+  done
+  printf 'check-backend-required: this target has no native code backend, so the tier-up tests skip, by name (nothing to fail)\n'
+  exit 0
 fi
 
-out="$(GLTANG_TEST_FORCE_NO_BACKEND=1 "$exe" --gtest_brief=1 2>&1)"
-rc=$?
-if [ "$gated" = yes ]; then
-  failed="$(printf '%s\n' "$out" | sed -n 's/^\[  FAILED  \] \(Jit\.[^ ,]*\).*/\1/p' | sort -u | wc -l)"
-  if [ "$rc" -eq 0 ]; then
-    printf 'check-backend-required: with the backend forced off the tier-up tests PASSED (or skipped): they cannot fail\n%s\n' "$out" >&2
-    exit 1
-  fi
-  if [ "$failed" -lt "$want" ]; then
-    printf 'check-backend-required: with the backend forced off %s tests failed, but %s use GLTANG_REQUIRE_JIT_BACKEND\n%s\n' "$failed" "$want" "$out" >&2
-    exit 1
-  fi
-  printf 'check-backend-required: ok: backend forced off, %s of %s tier-up tests fail; as built, the suite passes\n' "$failed" "$want"
-else
-  if [ "$rc" -ne 0 ]; then
-    printf 'check-backend-required: on a target without a backend the forced run must skip, and it failed:\n%s\n' "$out" >&2
-    exit 1
-  fi
-  printf 'check-backend-required: this target has no native code backend, so the tier-up tests skip, by name (nothing to fail)\n'
+# The tests that use the macro: the name of the TEST above each use, one per line.
+wanted="$(awk '
+  /^TEST\(/ { s = $0; sub(/^TEST\(/, "", s); sub(/\).*/, "", s); gsub(/[ \t]/, "", s); sub(/,/, ".", s); name = s }
+  /^[ \t]*GLTANG_REQUIRE_JIT_BACKEND[ \t]*\(\)/ { print name }
+' "$unit/test_jit.cpp" | sort -u)"
+want_count="$(printf '%s\n' "$wanted" | grep -c .)"
+[ "$want_count" -ge 1 ] || fail "no test in $unit/test_jit.cpp uses GLTANG_REQUIRE_JIT_BACKEND, so this checks nothing"
+
+run "$apps/testJit" yes
+[ "$rc" -ne 0 ] || fail "with the backend forced off the tier-up tests PASSED (or skipped): they cannot fail
+$out"
+failed="$(printf '%s\n' "$out" | sed -n 's/^\[ *FAILED *\] *\([A-Za-z0-9_]*\.[A-Za-z0-9_]*\).*/\1/p' | sort -u)"
+if [ "$failed" != "$wanted" ]; then
+  fail "with the backend forced off, the tests that failed are not the tests that use GLTANG_REQUIRE_JIT_BACKEND
+  only in the macro's users:
+$(printf '%s\n' "$wanted" | grep -vxF "$failed" | sed 's/^/    /')
+  only in the failures:
+$(printf '%s\n' "$failed" | grep -vxF "$wanted" | sed 's/^/    /')"
 fi
+
+for suite in Profile Retention Observer; do
+  run "$apps/test$suite" yes
+  [ "$rc" -ne 0 ] || fail "with the backend forced off test$suite passed: its \"JIT arm is not vacuous\" checks switch themselves off instead of failing
+$out"
+done
+
+printf 'check-backend-required: ok: backend forced off, the %s tier-up tests that use the macro fail by name, and testProfile, testRetention and testObserver each fail; as built, all four pass\n' "$want_count"

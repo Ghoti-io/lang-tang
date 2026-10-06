@@ -104,6 +104,21 @@ inline bool jit_backend_present() {
 /// Linux arm64, Windows x86-64) the backend must exist, so a test that cannot
 /// run there fails. Elsewhere (Windows arm64, macOS) the backend must say it is
 /// absent, and the test is reported as skipped, naming the target.
+/// For a test that does not skip but checks that the JIT arm "is not vacuous"
+/// only where compiled code can run: on a gated target the backend must be
+/// there, so a lost backend fails the test instead of switching its checks off.
+/// Elsewhere it does nothing. Used inside `#ifdef GLTANG_WITH_JIT`, before the
+/// `if (jit_backend_present())` that guards the checks.
+#if GLTANG_TEST_BACKEND_GATED
+#define GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET()                                                   \
+  EXPECT_TRUE(jit_backend_present()) << "the native code backend is unavailable on a target that "    \
+                                        "has one (the JIT arm of this test would be vacuous)"
+#else
+#define GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET() \
+  do {                                              \
+  } while (0)
+#endif
+
 #ifdef GLTANG_WITH_JIT
 #if GLTANG_TEST_BACKEND_GATED
 #define GLTANG_REQUIRE_JIT_BACKEND()                                                                  \

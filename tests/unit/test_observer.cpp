@@ -411,6 +411,7 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
   // path where the observer was watching, and some of them paused the run.
   // Where there is no native backend the JIT runs are the interpreter's, and
   // there is no compiled code to have entered.
+  GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
   if (jit_backend_present()) {
     EXPECT_GT(jit_entries, 100u) << "the JIT runs entered compiled code";
     EXPECT_GT(jit_slow_polls, 100u) << "polls inside compiled code took the slow path";
