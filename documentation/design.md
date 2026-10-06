@@ -1203,11 +1203,71 @@ breaks nothing as not caught. Observed:
 | 10 jit-missed-write-back | the guest frame is not copied back into the compiled frame after a poll | the write-back test (`testJit`): a poll handler overwrites a local, as a moving collector would | the two runs print different sums |
 | 11 host-pointer-no-hook | the template type has no snapshot hook, so its payload keeps the address of the library member | the address scan of every blob of a snapshot (`testSnapshot`) | `an address is in the runtime-heap blob` |
 | 12 skipped-output-capture | the snapshot is written as if the output so far were empty | the output-so-far test and the corpus sweep (`testSnapshot`) | the restored output starts from nothing, and the sweep names the first program whose output differs |
+| 13 temporaries-through-a-copy | the execution reports each temporary root through a copy, so it is visited and never updated | the relocation arm: `testExecute_simple` under `GRHEAP_RELOCATE=1` with torture (and, with relocation off, the same build passes) | a poisoned read in an array operation, or a result that differs |
+| 14 array-storage-through-a-copy | an array's trace function reports its storage pointer through a copy | the same | the same |
 
 `make test` runs 03 to 12 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all twelve.
+runs all twelve. 13 and 14 are run by `make check-planted-relocate`, which the
+relocation arm (below) calls: they need a runtime-heap that moves objects, and
+the script also runs each caught case with torture and without relocation,
+where it must pass, which is what shows relocation to be the instrument.
+
+### Relocation: the engine against a heap that moves
+
+Everything above runs against a collector that never moves an object, so it
+cannot say whether a reference the engine hands the collector is one the
+collector may *rewrite* (AD-12). runtime-heap has a test-only build option for
+that (`RELOCATE=yes`; its `design.md`, "Relocation torture"): every collection
+moves every unpinned object to a new cell, rewrites every reference it was shown
+and poisons the old cell, so a value or a pointer into an object that is kept in
+a C variable across a GC point reads poison. `make test-relocate
+RELOCATE_PREFIX=<prefix>` is the arm that runs this library against it; it
+takes the prefix that heap was installed in (a private one, under the same
+package name), and with that named `make test` runs it too.
+
+**The arm.** It builds in a tree of its own (`release-reloc`) against that
+prefix and first runs `tools/check-relocation-required.sh`, which asks the
+installed library whether it has the mode and shows a collection moving an
+object, and **fails, never skips,** when it does not (run against a normal heap
+it exits 1, naming it). Then every unit suite runs with `GRHEAP_RELOCATE=1`, and
+the engine-driving suites (`TORTURE_BOUNDED`) again with torture and verify, so
+that a move happens at every allocation and every poll; with the JIT built, the
+same again with every function compiled at its first poll. `testRelocate` (built
+in this arm only) runs a set of programs on an ordinary heap and on a relocating
+one and requires the same result, output and error list, and that objects really
+moved. Last, `check-planted-relocate` plants two defects (13 and 14, a
+reference visited and not updated) and requires each to be caught.
+
+**What it found, and the rule that followed.** The engine was written for a heap
+that does not move, and its rule (`vm_internal.h`) said an object reachable from
+a root could be kept in a C variable. It cannot: a collection rewrites the root
+and not the variable. Every operation that allocates or polls more than once, or
+loops over a string or an array with a poll in the loop, held a value or a pointer
+into an object across a GC point and read it afterwards. Fixed, one commit for
+each family, each with a test in `testRelocate`: growing an array or a map
+(`array_new`, `array_grow`, `map_new`, `map_set`, and the stores that call them:
+a value stored beyond the end of an array that is itself the value, a boxed
+integer stored while the array grows); the deep copy and the comparison of
+containers; the operators that build arrays (concatenation, repetition, slicing,
+`+` with a string); every string operation that copies in chunks (concatenation,
+substring, slice, retag, render); the sinks (printing and rendering a container
+or a string into the output, which can only move at a poll, and a poll collects
+only when the memory budget asks it to reclaim, so no test of the arm reaches
+that change: it follows the rule and is read, not run); and a native bound to a
+value. The rule is now: a value held across a GC point is pushed as a
+temporary (`gltang_vm_temp_push`) and read again from it (`gltang_vm_temp_at`),
+and a pointer into an object is derived again after every poll. The interpreter's
+own loop already did this (it reloads the frame after every GC point) and the
+baseline JIT's poll copies the guest frame back after the collector has rewritten
+it, so neither needed a change. No address is used as a key anywhere in the
+engine.
+
+**Limits.** The arm proves the paths the suites run; a path no suite reaches is
+not shown. A test that keeps an address in a C variable across a run (the
+retention tests, which name an object by its address) turns relocation off for
+its context (`Config::relocate`); everything else runs moved.
 
 ### What runs where
 
