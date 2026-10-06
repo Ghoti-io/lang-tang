@@ -1,0 +1,18 @@
+# 14 an array's storage pointer reported through a copy
+# defect: the array's trace function reports its storage through a copy of the slot, so the storage is kept alive and the array's own pointer to it is never updated when it moves
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testExecute_simple); invisible without relocation
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -37,7 +37,10 @@
+ 
+ static void array_trace(GRHEAP_Tracer * tracer, void * payload) {
+   GLTANG_ArrayObject * array = payload;
+-  grheap_trace_slot(tracer, &array->store.raw);
++  /* planted: the storage pointer is reported through a copy, so it is visited
++     (the storage stays alive) and never updated when the storage moves */
++  void * planted_copy = array->store.raw;
++  grheap_trace_slot(tracer, &planted_copy);
+ }
+ 
+ // Every slot, used or not: the unused ones are zero, which is null, which the

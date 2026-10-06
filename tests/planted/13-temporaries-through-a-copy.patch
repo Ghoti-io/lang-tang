@@ -1,0 +1,19 @@
+# 13 the temporaries reported through a copy
+# defect: the execution's temporary roots are visited but the slots the code reads them back from are never written, so a value held across a GC point goes stale when its object moves
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testExecute_simple); invisible without relocation
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -359,7 +359,11 @@
+     visitor->slot(visitor->user, &exec->roots[i]);
+   }
+   for (size_t i = 0; i < exec->temp_count; ++i) {
+-    visitor->slot(visitor->user, &exec->temps[i]);
++    /* planted: each temporary is reported through a copy, so the collector
++       sees it (and keeps its object) and never writes the slot the code reads
++       it from again: a reference that is visited and not updated */
++    GLTANG_Value planted_copy = exec->temps[i];
++    visitor->slot(visitor->user, &planted_copy);
+   }
+   // Every running program: its result, and (for a template call) its own
+   // variables. The main program's variables are in `roots`.

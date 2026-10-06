@@ -22,6 +22,17 @@
 #   10 a missed write-back at a poll   the write-back test    (testJit)
 #   11 a host pointer left in a type's payload with no hook   the address scan of a snapshot (testSnapshot)
 #   12 a skipped output-buffer capture   the output-so-far test and the corpus sweep    (testSnapshot)
+#   13 the temporaries reported through a copy   the relocation arm   (testExecute_simple, GRHEAP_RELOCATE+TORTURE)
+#   14 an array's storage pointer reported through a copy   the relocation arm   (testExecute_simple, GRHEAP_RELOCATE+TORTURE)
+#
+# Cases 13 and 14 (`--relocate`) are caught only by runtime-heap's relocation
+# torture, which moves every unpinned object at every collection: a reference
+# that is visited and not updated is a defect nothing else can see, because the
+# collector never moves anything otherwise. They are built and run against the
+# runtime-heap of PLANTED_RELOC_PREFIX, which must be a relocation build, and a
+# planted case that is caught is also run with torture but without relocation,
+# where it must PASS: that is what shows relocation, and not the torture it rides
+# with, to be the instrument.
 #
 # The copy is of the working tree (sources, tests, corpus, documentation) and
 # nothing in the working tree is modified. Each patch is applied with `patch
@@ -29,10 +40,13 @@
 # a patch that applies to nothing fails the script instead of reading as a gate
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
-# Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all] [--selftest] [case...]
+# Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
 #   --quick     the cases that finish in about a minute (03 to 12); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
+#   --relocate  cases 13 and 14, against PLANTED_RELOC_PREFIX and
+#               PLANTED_RELOC_LIBDIR (a relocation runtime-heap); `make
+#               test-relocate` runs these
 #   --selftest  prove the script itself: a patch that applies to nothing fails
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
@@ -81,14 +95,30 @@ for arg in "$@"; do
     --quick) MODE=quick ;;
     --slow) MODE=slow ;;
     --all) MODE=all ;;
+    --relocate) MODE=relocate ;;
     --selftest) SELFTEST=1 ;;
     -*) printf 'check-planted: unknown option %s\n' "$arg" >&2; exit 2 ;;
     *) NAMED="$NAMED $arg" ;;
   esac
 done
 
+# The cases that need a runtime-heap that moves objects.
+RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy"
+# What a relocation case runs under: relocation and torture together (a move at
+# every GC point). The "relocation is the instrument" check removes the first.
+RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
 QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back 11-host-pointer-no-hook 12-skipped-output-capture"
 SLOW="01-missing-root 02-missing-gc-store"
+
+if [ "$MODE" = relocate ]; then
+  PREFIX="${PLANTED_RELOC_PREFIX:-}"
+  LIBDIR="${PLANTED_RELOC_LIBDIR:-}"
+  if [ -z "$PREFIX" ] || [ -z "$LIBDIR" ]; then
+    printf 'check-planted: --relocate needs PLANTED_RELOC_PREFIX and PLANTED_RELOC_LIBDIR (the prefix of a runtime-heap built with RELOCATE=yes, and its library directory)\n' >&2
+    exit 2
+  fi
+  PREFIX_ARG="PREFIX=$PREFIX"
+fi
 
 cleanup() {
   if [ "${PLANTED_KEEP:-0}" != 1 ]; then
@@ -110,6 +140,7 @@ target_of() {
     11-*|12-*) echo "build/linux/$TREE/apps/testSnapshot" ;;
     04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
     06-*|07-*) echo "build/linux/$TREE/apps/oracle/oracle_ctang build/linux/$TREE/apps/testOracle" ;;
+    13-*|14-*) echo "build/linux/$TREE/apps/testExecute_simple" ;;
     selftest) echo "build/linux/$TREE/apps/testObserver" ;;
   esac
 }
@@ -132,6 +163,9 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.OutputSoFar*:SnapshotCorpus.EveryProgram*') ;;
     04-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testNative_gate --gtest_brief=1) ;;
+    13-*|14-*)
+      # shellcheck disable=SC2086
+      (cd "$WORK" && env -u GRHEAP_TORTURE -u GRHEAP_RELOCATE $RELOC_ENV LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testExecute_simple --gtest_brief=1) ;;
     06-*|07-*)
       (cd "$WORK" && env GLTANG_ORACLE_RUNNER="$APPS/oracle/oracle_ctang" LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testOracle --gtest_brief=1) ;;
   esac
@@ -147,6 +181,7 @@ name_of_test() {
     04-*) echo "testNative_gate" ;;
     11-*) echo "testSnapshot (the address scan)" ;;
     12-*) echo "testSnapshot (the output-so-far test and the corpus sweep)" ;;
+    13-*|14-*) echo "testExecute_simple under relocation torture" ;;
     06-*|07-*) echo "testOracle" ;;
   esac
 }
@@ -223,6 +258,23 @@ run_case() {
       rc=1
     else
       printf '  caught by %s (exit %s): %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")"
+      case "$case_name" in
+        13-*|14-*)
+          # Relocation is the instrument: with torture on and relocation off the
+          # same patched build passes.
+          saved="$RELOC_ENV"
+          RELOC_ENV="GRHEAP_TORTURE=1"
+          out="$(run_test "$case_name" 2>&1)"
+          status=$?
+          RELOC_ENV="$saved"
+          if [ "$status" -ne 0 ]; then
+            printf '  FAIL: with the defect in place and relocation off, %s still failed (exit %s), so relocation is not what found it: %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")" >&2
+            rc=1
+          else
+            printf '  and passes with relocation off: relocation is the instrument\n'
+          fi
+          ;;
+      esac
     fi
   fi
   # The control: the same copy with the patch taken out.
@@ -306,6 +358,7 @@ case "$MODE" in
   quick) CASES="$QUICK" ;;
   slow) CASES="$SLOW" ;;
   all) CASES="$SLOW $QUICK" ;;
+  relocate) CASES="$RELOCATE_CASES" ;;
 esac
 if [ -n "$NAMED" ]; then
   CASES="$NAMED"
