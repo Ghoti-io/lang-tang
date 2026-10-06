@@ -89,15 +89,6 @@ TEST(Relocate, AContainerStoredIntoItselfOrIntoAMapIsCopiedAndTheCopyIsWhatIsSto
   expect_same("d = {a: 1}; d.list = [1, [2, 3], {k: [4]}]; d.list[1][0] = 9; d as string;");
 }
 
-TEST(Relocate, TheRunIsDrivenByTheRelocatingHeapAndNotByAnOrdinaryOneThatLooksTheSame) {
-  // The controls: the ordinary heap really does not move, and the relocating one
-  // does, for the smallest program that allocates twice.
-  Outcome plain = run_program("x = [1, 2, 3]; x[7] = x; x as string;", false);
-  Outcome moved = run_program("x = [1, 2, 3]; x[7] = x; x as string;", true);
-  EXPECT_EQ(plain.moved, 0u);
-  EXPECT_GT(moved.moved, 0u);
-  EXPECT_EQ(plain.described, moved.described);
-}
 TEST(Relocate, CopyingAndComparingNestedContainersGivesTheSameAnswersWhereverTheyMove) {
   expect_same("x = [[1, [2, 3]], {k: [4, 5]}, \"s\"]; y = x; x[0][1][0] = 9; ((x == y) as string) + (y as string);");
   expect_same("x = [[1, [2, 3]], [4]]; y = [[1, [2, 3]], [4]]; (x == y) as string;");
@@ -125,6 +116,20 @@ TEST(Relocate, PrintingAndRenderingContainersAndLongStringsGiveTheSameOutput) {
   expect_same("x = [1, [2, [3, [4, [5]]]]]; (x as string) + (x[1] as string);");
 }
 
+TEST(Relocate, ANativeBoundToAValueKeepsTheValueItIsBoundTo) {
+  expect_same("use random; r = random.seeded(5); f = r.set_seed; f(7); r.next_int;");
+  expect_same("use random; r = random.seeded(5); a = r.next_int; r.set_seed(9); (a as string) + (r.next_int as string);");
+}
+
+TEST(Relocate, TheRunIsDrivenByTheRelocatingHeapAndNotByAnOrdinaryOneThatLooksTheSame) {
+  // The controls: the ordinary heap really does not move, and the relocating one
+  // does, for the smallest program that allocates twice.
+  Outcome plain = run_program("x = [1, 2, 3]; x[7] = x; x as string;", false);
+  Outcome moved = run_program("x = [1, 2, 3]; x[7] = x; x as string;", true);
+  EXPECT_EQ(plain.moved, 0u);
+  EXPECT_GT(moved.moved, 0u);
+  EXPECT_EQ(plain.described, moved.described);
+}
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

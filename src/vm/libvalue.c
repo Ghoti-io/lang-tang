@@ -67,8 +67,16 @@ static GLTANG_Value library_value(GLTANG_Execution * exec, const GLTANG_Library 
 }
 
 static GLTANG_Value native_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member, GLTANG_BuiltinId builtin, GLTANG_Value bound) {
+  // The value it is bound to is a parameter, held by nothing the collector
+  // reads: hold it across the allocation and take it from there afterwards.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, bound)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
   void * object;
   GLTANG_Status st = gltang_vm_alloc(exec, &gltang_type_native, sizeof(GLTANG_NativeObject), &object);
+  bound = gltang_vm_temp_at(exec, mark);
+  gltang_vm_temp_release(exec, mark);
   if (st != GLTANG_ST_OK) {
     return gltang_vm_failure_value(exec, st);
   }
