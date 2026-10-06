@@ -104,6 +104,11 @@ TEST(Relocate, CopyingAndComparingNestedContainersGivesTheSameAnswersWhereverThe
   expect_same("x = [[1, [2, 3]], [4]]; y = [[1, [2, 4]], [4]]; (x == y) as string;");
 }
 
+TEST(Relocate, TheOperatorsThatBuildArraysFromArraysGiveTheSameArrays) {
+  expect_same("x = [[1], [2, 3], \"s\"]; y = x + x; z = x * 3; w = z[1:7]; (y as string) + (z as string) + (w as string);");
+  expect_same("x = [1, [2, 3], 4, [5], 6, 7]; (x[::2] as string) + (x[1:5] as string) + (x[::-1] as string);");
+}
+
 
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);

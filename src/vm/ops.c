@@ -172,11 +172,15 @@ static GLTANG_Value compare(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Va
 // Arrays built from arrays
 // ---------------------------------------------------------------------------
 
-/** Appends copies of every element of `source` to `dest`. */
-static GLTANG_Status append_copies(GLTANG_Execution * exec, GLTANG_Value dest, GLTANG_Value source, Pacer * pacer, GLTANG_Value * failure) {
-  size_t n = (size_t)gltang_vm_array(source)->length;
+/**
+ * Appends copies of every element of the array held at temporary `source` to
+ * the array held at temporary `dest`. Both are read from their temporaries each
+ * time round, because copying an element and polling can move either.
+ */
+static GLTANG_Status append_copies(GLTANG_Execution * exec, size_t dest, size_t source, Pacer * pacer, GLTANG_Value * failure) {
+  size_t n = (size_t)gltang_vm_array(gltang_vm_temp_at(exec, source))->length;
   for (size_t i = 0; i < n; ++i) {
-    GLTANG_Value element = gltang_vm_array(source)->store.typed->slots[i];
+    GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, source))->store.typed->slots[i];
     if (gltang_vm_is_container(element)) {
       element = gltang_vm_deep_copy(exec, element);
       if (element == GLTANG_V_UNWIND) {
@@ -191,7 +195,7 @@ static GLTANG_Status append_copies(GLTANG_Execution * exec, GLTANG_Value dest, G
       // The copy is held only by this variable until it is pushed; no
       // allocation happens in between.
     }
-    gltang_vm_array_push(exec, dest, element);
+    gltang_vm_array_push(exec, gltang_vm_temp_at(exec, dest), element);
     GLTANG_Status st = pace(pacer, 1);
     if (st != GLTANG_ST_OK) {
       *failure = GLTANG_V_UNWIND;
@@ -203,20 +207,27 @@ static GLTANG_Status append_copies(GLTANG_Execution * exec, GLTANG_Value dest, G
 
 static GLTANG_Value array_concat(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b) {
   size_t total = (size_t)gltang_vm_array(a)->length + (size_t)gltang_vm_array(b)->length;
-  GLTANG_Value result = gltang_vm_array_new(exec, total);
-  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY)) {
-    return result;
-  }
-  if (!gltang_vm_temp_push(exec, result)) {
+  // The operands are held across the allocation and every copy after it, and
+  // the result joins them: they are read from the temporaries (mark, mark + 1,
+  // mark + 2).
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
+    gltang_vm_temp_release(exec, mark);
     return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value result = gltang_vm_array_new(exec, total);
+  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) || !gltang_vm_temp_push(exec, result)) {
+    gltang_vm_temp_release(exec, mark);
+    return gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) ? exec->roots[GLTANG_ROOT_OOM] : result;
   }
   Pacer pacer = GLTANG_PACER(exec, ARRAY_CONCAT);
   GLTANG_Value failure = GLTANG_V_NULL;
-  GLTANG_Status st = append_copies(exec, result, a, &pacer, &failure);
+  GLTANG_Status st = append_copies(exec, mark + 2u, mark, &pacer, &failure);
   if (st == GLTANG_ST_OK) {
-    st = append_copies(exec, result, b, &pacer, &failure);
+    st = append_copies(exec, mark + 2u, mark + 1u, &pacer, &failure);
   }
-  gltang_vm_temp_pop(exec);
+  result = gltang_vm_temp_at(exec, mark + 2u);
+  gltang_vm_temp_release(exec, mark);
   return st == GLTANG_ST_OK ? result : failure;
 }
 
@@ -235,20 +246,24 @@ static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_
     return MAKE_ERROR(GLTANG_ERROR_OUT_OF_MEMORY);
   }
   size_t total = length * (size_t)count;
-  GLTANG_Value result = gltang_vm_array_new(exec, total);
-  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY)) {
-    return result;
-  }
-  if (!gltang_vm_temp_push(exec, result)) {
+  // The operand is held (mark) and the result joins it (mark + 1).
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, a)) {
     return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value result = gltang_vm_array_new(exec, total);
+  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) || !gltang_vm_temp_push(exec, result)) {
+    gltang_vm_temp_release(exec, mark);
+    return gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) ? exec->roots[GLTANG_ROOT_OOM] : result;
   }
   Pacer pacer = GLTANG_PACER(exec, ARRAY_REPEAT);
   GLTANG_Value failure = GLTANG_V_NULL;
   GLTANG_Status st = GLTANG_ST_OK;
   for (int64_t k = 0; k < count && st == GLTANG_ST_OK; ++k) {
-    st = append_copies(exec, result, a, &pacer, &failure);
+    st = append_copies(exec, mark + 1u, mark, &pacer, &failure);
   }
-  gltang_vm_temp_pop(exec);
+  result = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   return st == GLTANG_ST_OK ? result : failure;
 }
 
@@ -288,15 +303,29 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
         if (a_string && b_string) {
           return gltang_vm_string_concat(exec, a, b);
         }
+        // Converting the other side is a GC point, and the operands are held
+        // only by this function's parameters: hold both, and take them from
+        // the temporaries afterwards.
+        size_t mark = gltang_vm_temp_mark(exec);
+        if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
+          gltang_vm_temp_release(exec, mark);
+          return exec->roots[GLTANG_ROOT_OOM];
+        }
         GLTANG_Value text = gltang_vm_to_string(exec, other);
         if (!gltang_v_is_kind(text, GLTANG_OBJ_STRING)) {
+          gltang_vm_temp_release(exec, mark);
           return text;
         }
+        a = gltang_vm_temp_at(exec, mark);
+        b = gltang_vm_temp_at(exec, mark + 1u);
+        // The converted text is held too, so that it outlives the collection
+        // the concatenation's own allocation may make.
         if (!gltang_vm_temp_push(exec, text)) {
+          gltang_vm_temp_release(exec, mark);
           return exec->roots[GLTANG_ROOT_OOM];
         }
         GLTANG_Value r = a_string ? gltang_vm_string_concat(exec, a, text) : gltang_vm_string_concat(exec, text, b);
-        gltang_vm_temp_pop(exec);
+        gltang_vm_temp_release(exec, mark);
         return r;
       }
       if (gltang_vm_is_number(a) && gltang_vm_is_number(b)) {
@@ -652,19 +681,24 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   if (is_string) {
     return gltang_vm_string_slice(exec, container, start, count, numbers[2]);
   }
-  GLTANG_Value result = gltang_vm_array_new(exec, (size_t)count);
-  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY)) {
-    return result;
-  }
-  if (!gltang_vm_temp_push(exec, result)) {
+  // The source is held (mark) and the result joins it (mark + 1): the copies
+  // and the polls after them can move either, so each is read from its
+  // temporary every time round.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, container)) {
     return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value result = gltang_vm_array_new(exec, (size_t)count);
+  if (!gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) || !gltang_vm_temp_push(exec, result)) {
+    gltang_vm_temp_release(exec, mark);
+    return gltang_v_is_kind(result, GLTANG_OBJ_ARRAY) ? exec->roots[GLTANG_ROOT_OOM] : result;
   }
   Pacer pacer = GLTANG_PACER(exec, ARRAY_SLICE);
   GLTANG_Value failure = GLTANG_V_NULL;
   GLTANG_Status st = GLTANG_ST_OK;
   int64_t i = start;
   for (int64_t k = 0; k < count && st == GLTANG_ST_OK; ++k) {
-    GLTANG_Value element = gltang_vm_array(container)->store.typed->slots[i];
+    GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, mark))->store.typed->slots[i];
     if (gltang_vm_is_container(element)) {
       GLTANG_Value copy = gltang_vm_deep_copy(exec, element);
       if (copy == GLTANG_V_UNWIND) {
@@ -679,7 +713,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
       }
       element = copy;
     }
-    gltang_vm_array_push(exec, result, element);
+    gltang_vm_array_push(exec, gltang_vm_temp_at(exec, mark + 1u), element);
     if (k + 1 < count) {
       i += numbers[2];
     }
@@ -688,7 +722,8 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
       failure = GLTANG_V_UNWIND;
     }
   }
-  gltang_vm_temp_pop(exec);
+  result = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
   return st == GLTANG_ST_OK ? result : failure;
 }
 
