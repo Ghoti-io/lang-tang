@@ -802,7 +802,7 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 
 ifeq ($(JIT),yes)
 check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) $(APP_DIR)/testProfile$(EXE_EXTENSION) $(APP_DIR)/testRetention$(EXE_EXTENSION) $(APP_DIR)/testObserver$(EXE_EXTENSION) ## Fail if the tests that need a backend skip, or check less, when it is forced off
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR) tests/unit
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR) tests/unit $(EXE_EXTENSION)
 else
 check-backend-required: ## Skipped under JIT=no
 	@printf 'check-backend-required: skipped, JIT=no (there is no JIT to lose a backend)\n'

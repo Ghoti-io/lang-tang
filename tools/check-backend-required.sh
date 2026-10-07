@@ -25,13 +25,15 @@
 # On a target without a backend the planted runs must instead exit zero, and the
 # script says so by name.
 #
-# Usage: tools/check-backend-required.sh <apps directory> <tests/unit directory>
+# Usage: tools/check-backend-required.sh <apps directory> <tests/unit directory> [<executable extension>]
+# The extension is ".exe" on Windows, where a program is not found without it.
 # LD_LIBRARY_PATH is the caller's.
 
 set -u
 
 apps="$1"
 unit="$2"
+ext="${3:-}"
 
 # Whether this target is one with a backend: the same three targets as
 # GLTANG_TEST_BACKEND_GATED in tests/test_helpers.h.
@@ -56,7 +58,7 @@ run() {
 }
 
 for suite in Jit Profile Retention Observer; do
-  exe="$apps/test$suite"
+  exe="$apps/test$suite$ext"
   [ -x "$exe" ] || fail "$exe is not built"
   run "$exe" no
   [ "$rc" -eq 0 ] || fail "the control run of test$suite (backend as built) failed:
@@ -65,7 +67,7 @@ done
 
 if [ "$gated" != yes ]; then
   for suite in Jit Profile Retention Observer; do
-    run "$apps/test$suite" yes
+    run "$apps/test$suite$ext" yes
     [ "$rc" -eq 0 ] || fail "on a target without a backend the forced run of test$suite must pass or skip, and it failed:
 $out"
   done
@@ -81,7 +83,7 @@ wanted="$(awk '
 want_count="$(printf '%s\n' "$wanted" | grep -c .)"
 [ "$want_count" -ge 1 ] || fail "no test in $unit/test_jit.cpp uses GLTANG_REQUIRE_JIT_BACKEND, so this checks nothing"
 
-run "$apps/testJit" yes
+run "$apps/testJit$ext" yes
 [ "$rc" -ne 0 ] || fail "with the backend forced off the tier-up tests PASSED (or skipped): they cannot fail
 $out"
 failed="$(printf '%s\n' "$out" | sed -n 's/^\[ *FAILED *\] *\([A-Za-z0-9_]*\.[A-Za-z0-9_]*\).*/\1/p' | sort -u)"
@@ -94,7 +96,7 @@ $(printf '%s\n' "$failed" | grep -vxF "$wanted" | sed 's/^/    /')"
 fi
 
 for suite in Profile Retention Observer; do
-  run "$apps/test$suite" yes
+  run "$apps/test$suite$ext" yes
   [ "$rc" -ne 0 ] || fail "with the backend forced off test$suite passed: its \"JIT arm is not vacuous\" checks switch themselves off instead of failing
 $out"
 done
