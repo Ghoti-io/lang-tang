@@ -24,7 +24,7 @@
 # itself, in its own tree (test-nojit), and the WITH_DEBUG=no arm is its own
 # job (test-nodebug). The arm64 backend runs under qemu and the Windows
 # backend's compiled-code tests under wine; those need containers and are run
-# by tools/m1-prerelease.sh in the workspace, not here.
+# by suite/tools/m1-prerelease.sh in the workspace, not here.
 #
 # This file has never run on a runner: there is none where it was written. It
 # was checked offline - valid YAML, every make target it names exists, and
