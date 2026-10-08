@@ -346,7 +346,7 @@ jobs:
   # child with fork and poll, so `test-oracle` is skipped on Windows by name
   # and ctang is not built here; everything lang-tang does alone with the
   # corpus runs. The JIT is the Windows x86-64 backend of runtime-jit; the
-  # stack has run under wine (tools/xwin/m1-run.sh in the workspace) and never
+  # stack has run under wine (suite/tools/xwin/m1-run.sh in the workspace) and never
   # on a Windows machine, so this job's first run is the first time it is
   # built and run natively. bison and flex are the MSYS packages: the
   # generators run in the MSYS shell, the compiler is MinGW's.

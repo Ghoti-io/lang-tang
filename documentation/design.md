@@ -2053,7 +2053,7 @@ behind is usable by a consumer that includes only the umbrella.
 
 CI exists (`.github/workflows/ci.yml`, commit `91bc6fd`) and has never run on a
 runner: GitHub Actions is disabled for cost, so no workflow fires on a push. A
-local `make test` (plus `tools/xarch` and `tools/xwin` for other targets) is the
+local `make test` (plus `suite/tools/xarch` and `suite/tools/xwin` for other targets) is the
 whole gate, and a claim about a result names where it ran.
 
 ## Benchmarks

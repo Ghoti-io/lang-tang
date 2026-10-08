@@ -198,7 +198,7 @@ expect_fail 'edges/planted-relative' 'lang-tang -> tang' \
 
 printf 'check-edges --links\n'
 # The .dll arm (objdump -p is the reader there) has run under wine, cross-built
-# (tools/xwin in the workspace); it has not run on a Windows machine.
+# (suite/tools/xwin in the workspace); it has not run on a Windows machine.
 # EXE is the suffix the compiler puts on a program whatever -o was told: without
 # it the fixtures were built and then not found under the names they were given.
 case "$(uname -s)" in
