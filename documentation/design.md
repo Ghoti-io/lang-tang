@@ -405,8 +405,9 @@ template-call case (107.5 to 111.1 us) and 3% on the polling loop (67.6 to 69.8
 us). On with nothing pending, the poll's unarmed fast path (flush the fuel,
 save the frame, `grcore_stack_poll`) costs about 16 ns a statement: the
 four-statement loop body of `run-statements-1000-polls-*` goes from about 65 us
-to about 130 us, about 4,000 statements. Both numbers are in the table under
-"Benchmarks". No budget is asserted (AD-26).
+to about 130 us, about 4,000 statements. (These are that story's figures, on its own
+machine and compiler; the table under "Benchmarks" has the cases re-taken on 2026-10-09,
+where the poll is about 12 ns a statement.) No budget is asserted (AD-26).
 
 **Rejected alternatives.**
 
@@ -1650,6 +1651,22 @@ walk and the chain rebuild). `lang-tang`'s observable behaviour is the
 same on both tiers, by construction and by test: no divergence-ledger row exists
 for the JIT, and none may be added.
 
+**Calls, and where the protocol is written (CAP-6).** The call protocol is built across
+five libraries and written once in each, for its own part, with a pointer to the others.
+`runtime-jit` has the convention between compiled functions, the call sequence and the
+hooks' contract ("Calls between compiled functions"); `runtime-core` has the walk of a
+chain, the rebuild of all of it, the native stack in bytes and the entry slot's refusal
+("A, part 5"); `runtime-heap` has what the collector does under a compiled chain and
+the relocation torture that proves it ("Calls"); `runtime-debug` has the pause over a
+chain ("Calls"); and this section has the engine's side: which calls are compiled,
+the hooks, the exits and the discard limit, and the figures ("Calls, measured").
+**Calls as deopt exits were milestone 1's defect** (Corey, 2026-10-05): the baseline
+treated every `CALL` as an exit, so a compiled function left compiled code at each call
+and its callee re-entered its own code, which made call-heavy code slower with the JIT
+than without it. The rule behind it ("no JIT frame calls a JIT frame") was story 15's,
+not the spine's. The alternatives this library rejected are under "Why this and not
+something else", below.
+
 ### How it works
 
 **Hotness.** `POLL` bumps one counter per function in a per-execution table
@@ -1948,15 +1965,35 @@ First measurements (`make bench` on an Intel Core 7 150U, gcc 14.2 -O2, release,
 | a poll with nothing pending, from the two loops | the loop skeleton (a poll, a comparison and a jump) costs 26 ns interpreted and 6.4 ns compiled, and a statement `i = i + 1` 9.9 ns interpreted and 4.7 ns compiled. A compiled poll is a call of the fuel helper, a load of the request word and a branch; the interpreter's is the fuel flush, `SAVE`, `SYNC`, the call of `grcore_stack_poll` and a reload |
 | a typical small function (a comparison, a branch, a 3-iteration loop), run once | 0.52 us interpreted; 76.4 us with a threshold of one, which is the compile and the entry of two functions (the top level and `f`), about 38 us each |
 | what the JIT's presence costs a run that never tiers up (the same case, `JIT=yes` with the default threshold against `JIT=no`, alternating) | loops and string and array building: +2 to +5% (a counter on each poll of a function that is not the main program's top level, and the registration of the tier-up handler at creation); native calls, `use` and the error list within the noise |
-| `fib(15)`, 1,973 calls, and `fib(22)`, 57,313 | **Milestone 1's defect, and its repair (spec-runtime-calls story 8).** With every `CALL` an exit (milestone 1) the JIT cost: story 15 measured `fib(15)` 12% slower than interpreted and `fib(22)` 1.2% slower. With compiled calls (the `fib-15-*` and `fib-22-*` cases of `bench/`, best of a thousand and of a hundred runs inside the case, five repetitions of the whole set, minimum of the repetitions, on the EVO-X2, AMD Ryzen AI MAX+ 395, GCC 14 -O2 release, load 0.1 before the run, interpreted, compiled and compiled-with-calls-off cases of one binary in turn; the check of the result (610, 17,711) is in the case): `fib(15)` **interpreted 146.4 us (spread over the five repetitions 9.0), compiled 129.9 us (10.6)**, 11% faster, and 170.0 us with no call site compiled (the milestone-1 behaviour: 16% slower than interpreted on the EVO-X2; the 12% above is story 15's figure from the Intel Core 7 150U, a different machine, so the two are not one measurement); `fib(22)` **interpreted 4,252 us (462), compiled 2,664 us (183)**, 37% faster, and 4,311 us with no call site compiled. The bar of the story, "faster by more than the larger spread", holds for both (16.5 us against 10.6, 1,588 us against 462). `fib(15)` pays the compile once, inside the figure (about 25 us). The counters of the run: 1,764 compiled calls for `fib(15)` and 57,096 for `fib(22)` (the first call of each, and the callee entered from the interpreter, are not compiled calls), no call exit of any reason, no compile at a call (the interpreter's tier-up compiled `fib` first), deepest chain 12 and 19, no hook handed an argument it refuses. The per-call cost: 4,252 us over 57,313 calls is 74 ns a call interpreted and 46 ns compiled, a compiled call being 62% of an interpreted one; the expectation of a third to a half was not met and is not a bar. What a compiled call pays: two hook calls (push, with the stack push, the header and the argument writes; pop), a read of the slot, the entry's stack check, one flush of the fuel at the entry poll and the guard on the callee value. Whether the protocol or the baseline's code (no register allocator, every register a frame slot) is the limit is not claimed: that is the next measurement (a profile with `tools/callgrind-bucket.py`) and it was not made here |
+| `fib(15)`, 1,973 calls, and `fib(22)`, 57,313 | **Milestone 1's defect, and its repair (spec-runtime-calls story 8).** With every `CALL` an exit the JIT cost: story 15 measured `fib(15)` 12% slower than interpreted and `fib(22)` 1.2% slower. Compiled calls reverse that; the figures, with their instrument, machine and date, are recorded once in "Calls, measured", below, and are not repeated here |
 
-The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start, and calls between declared functions. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason. What a template-heavy program costs: a template call is an exit, so the interpreter runs the template and enters its function 0 compiled only when the threshold covers it; nothing here is measured for it, and it is the cost the spec recorded as accepted.
+The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start, and calls between declared functions. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason. What a template-heavy program costs: a template call is an exit, so the interpreter runs the template and enters its function 0 compiled only when the threshold covers it; that is the cost the spec recorded as accepted, and "Calls, measured" has the figure of a template called 200 times.
+
+### Calls, measured (spec-runtime-calls, CAP-6, AD-26)
+
+This is the one place the call-heavy figures are recorded. The other libraries point here: `runtime-core`, `runtime-heap` and `runtime-debug` keep their own micro-benchmarks, and `runtime-jit` has no interpreter, so its "Benchmarks" section holds the micro-figures of a compiled call and points here for `fib`.
+
+**The instrument and the machine.** `bench/bench.c` (the `fib-15-*`, `fib-22-*`, `jit-native-call-1M-*`, `run-native-call-1000` and `run-template-call-200` cases; an engine case's unit is one run of a fixed program, and the result of each `fib` run is checked inside the case: 610 and 17,711). Built in the build image (`ghoti-build:gcc16`: GCC 16.2.0, `-O2 -g -std=c17`, release, `JIT=yes`) from lang-tang `209c8fd`, run on the EVO-X2 (AMD Ryzen AI MAX+ 395, Linux 7.2.9) through `tools/evo`, with the box otherwise idle (load 0.24 before the run, 1.21 after). The harness takes the best of 1,000 runs inside a `fib(15)` case and of 100 inside a `fib(22)` case, and the whole set was run five times in turn; the figure is the **minimum of the five**, with the **spread** (maximum less minimum) in brackets. Date: 2026-10-09. To reproduce: `make -C libs/lang-tang build/linux/release/apps/bench/bench PREFIX=<prefix>` and `build/linux/release/apps/bench/bench`, or `--only fib-` for these cases; it prints the calibration first (1.17 ns a step in this run) and, after each `fib` case, the call statistics below.
+
+| Case | Interpreted | Compiled | Compiled, calls off (milestone 1) |
+| --- | --- | --- | --- |
+| `fib(15)`, 1,973 calls | 147.0 us (10.9) | **132.3 us (9.8)** | 171.9 us (10.0) |
+| `fib(22)`, 57,313 calls | 4,178.9 us (402.1) | **2,682.8 us (248.3)** | 4,240.6 us (379.9) |
+| a million library calls in a loop of one function (`jit-native-call-1M-*`; "off" is natives switched off) | 59.3 ms (6.3) | **41.9 ms (4.2)** | 61.6 ms (5.3) |
+| a template called 200 times, three prints each (`run-template-call-200`) | 88.4 us (5.4): a template call is an exit, so the template runs in the interpreter and this is the figure | n/a | n/a |
+| a native called 1,000 times (`run-native-call-1000`), interpreter | 60.9 us (6.2) | n/a | n/a |
+
+**Compiled `fib` is faster than interpreted, and the call between compiled functions is not an exit.** `fib(15)` is **10% faster** compiled (132.3 against 147.0 us; the gain, 14.7 us, is larger than the larger spread, 10.9 us) and `fib(22)` **36% faster** (2,682.8 against 4,178.9 us; 1,496 us against a spread of 402). With no call site compiled, which is what milestone 1 did, `fib(15)` is 17% slower than interpreted and `fib(22)` 1.5% slower, within its spread. `fib(15)` pays the compile once, inside the figure. The per-call cost: 4,178.9 us over 57,313 calls is 73 ns a call interpreted and 47 ns compiled, a compiled call being 64% of an interpreted one. The statistics the harness prints after each `fib` case, the same in all five runs: `fib(15)` 1,764 compiled calls and `fib(22)` 57,096 (the first call of each, and the callee entered from the interpreter, are not compiled calls), **call exits 0** in all four classes (remembered, push refused, callee guard, native stack), no compile at a call (the interpreter's tier-up compiled `fib` first), deepest chain 12 and 19, no hook handed an argument it refuses. The success signal's "no exit at any call between compiled functions" is asserted, not only printed: `JitCalls.ALongCompiledRunOfFib...` in `tests/unit/test_jit_calls.cpp` requires `exits(stats)` to be zero at `fib(22)` (`fib(14)` under the heavy instruments), and planted defect 31 (the push hook refuses once the chain is eight deep, which changes no output and only the count) fails it, with the control passing. "Faster compiled than interpreted" is a recorded figure, not an asserted budget; no numeric budget is asserted in a test. The other two halves of the success signal have tests of their own and are not duplicated: the pause fifty compiled frames down that resumes on another thread (`JitCalls.AChainPausedFiftyFramesDownResumesOnAnotherThread`, with the single-thread `...APauseFiftyFramesDown...`, in `test_jit_calls.cpp`) and the frame differential at every poll over the call-heavy corpus (`test_observer.cpp`).
+
+**Against the figures recorded before (story 8, GCC 14, the same machine, five runs).** `fib(15)` interpreted 146.4 us (spread 9.0), compiled 129.9 (10.6), calls off 170.0; `fib(22)` interpreted 4,252 us (462), compiled 2,664 (183), calls off 4,311. Now: 147.0, 132.3, 171.9 and 4,179, 2,683, 4,241. Every difference is inside the spread of the run it is compared with (the largest, `fib(15)` compiled, is 2.4 us against 10.6), so none is a change; the compiler is the one variable that moved (GCC 14 then, GCC 16.2 now), and that compiled `fib(15)` reads 10% faster here against 11% there is the same finding. The 12% and 1.2% of milestone 1 (story 15) are from an Intel Core 7 150U, a different machine: on the EVO-X2 the same behaviour (calls off) is 17% and 1.5% slower than interpreted, so the two machines are not one measurement.
+
+**Library calls (story 9).** A function calling a host function that adds one, a million times in a loop of one function called once (compiled at its first poll by a threshold of one): 59 ns an iteration interpreted, 42 ns compiled (29% faster; the gain, 17.4 ms, is 2.8 times the larger spread), and 62 ns with natives switched off, which is what a compiled function paid before story 9 (the interpreter's cost plus the exit). The compiled run makes 1,000,000 native calls and one member load, and no exit at those sites. Story 9 recorded 62.6 (2.6), 45.9 (0.7) and 64.4 (3.0) ms on this machine with three repetitions; the interpreted and off figures are now 5% lower and the compiled one 9% lower, which is more than that run's spread of the compiled case (0.7) and less than this one's (4.2), so the two are not told apart. What a compiled call still pays is the shared wrapper (a record opened and left in the core, the copy of the callee and arguments, the keyed lookup of the execution and the hand-back of the JIT record's unit): a callgrind profile of the compiled loop put about two thirds of it in the core's `grcore_activation_enter` and `leave`, the depth accounting and the wrapper itself, and the generated code a third.
+
+**The interpreter's native call, with the JIT off (carried item: the reliable figure).** `gltang_vm_call_native` (the wrapper every native call goes through, interpreted or compiled) was measured by instructions, not time, with callgrind on `run-native-call-1000 --smoke` (5 runs of 1,000 calls = 5,000 calls; x86-64, **GCC 14.2.0**, `-O2 -g` release, on the development machine, 2026-10-09, `valgrind --tool=callgrind build/linux/<tree>/apps/bench/bench --only run-native-call-1000 --smoke` and `callgrind_annotate --inclusive=yes`). **On the `JIT=no` build it costs 604 instructions a call**, inclusive of the native itself (3,021,870 for the 5,000), of which the core's record enter is 230 and leave 114; on the JIT build it costs **630** (3,151,870): the 26 extra are the check that lends the JIT records' units back, paid by an interpreted call in a JIT build and not at all by `JIT=no`. The whole `native_call_run` is 7.87 million instructions on `JIT=no` and 8.34 million with the JIT. These replace the 610 and 636 recorded by the review of story 9 (a 1% difference in the same method, a compiler or tree change). **The earlier "about 29% more instructions than before the story" (8.73 against 11.25 million for 35,000 calls) is removed as unreproduced:** the tree before the story was not rebuilt for it, the totals include setup that no longer matches, and the method that produced the two totals is not recorded, so the figure is not quoted. What can be said is the cost as it stands: one record and one budget unit per native call in both tiers, 344 instructions of it the core's enter and leave. **Native depth now limits interpreted programs:** every native call, interpreted or compiled, opens a record that costs a unit of the native-depth budget, so a program that nests natives (a native that re-enters guest code that calls a native) is refused at the same nesting level in both tiers, with the recursion-limit error, where before the interpreter had no such bound.
 
 **Retired code, measured (the claim to test).** Compiled code a discard retires stays on the context's retired list until no JIT record is open, so the claim is that the list is bounded by the functions of the program: each is discarded at most once and never compiled again. Read with `grcore_code_retired_peak` on the EVO-X2 (the figures in this paragraph are from the EVO-X2; `make test` runs the same test with 40 functions, 12 under torture or a moving stack, and the 1,000 are `GLTANG_LONG_RUN_FUNCTIONS=1000`): a generated program of 1,000 functions, each called from a compiled loop with a guard that fails eight times, all in one run, discards all 1,000 and the peak of the retired list is **0** (a discard is applied after the entry's record is left, so core releases the retired reference at once); 26 ranges are registered at the end (the program's 25 drivers and its top level); and `fib(30)`, 2,692,536 compiled calls and no call exit, retires nothing (peak 0) and keeps its two ranges registered. The bound holds with room (0 against twice the 1,000 discarded), and it holds because of where the discard is made, not because of a bound in core: a discard made while a record is open (a nested activation) is the case below.
 
-**Retired code with a nested record open (story 9): an open risk, owned by core's epoch.** The same thrashing program run so that the discards are made under an open JIT record: a compiled function calls the driver of each group through a native that re-enters guest code (the `reenter` test native), so each function is discarded at its eighth failed guard while the compiled caller's record is open, and core cannot free what it retires until that record is left. The retired peak is exactly twice the discards, at every size measured (x86-64, GCC 14, `GLTANG_LONG_RUN_FUNCTIONS` = 1, 5, 40, 200, 1,000, `testNative_calls`): **2, 10, 80, 400, 2,000** for 1, 5, 40, 200 and 1,000 discarded, with 3, 3, 3, 7 and 27 ranges registered at the end. A discard retires two references, the registry's range and the slot's code, and both wait. So the result that the list is bounded by twice the functions discarded (story 8's claim, which the test asserts) **sits on its bound, it does not hold with room**, and the growth is linear in the discards made under one open record, released all at once when the outermost record is left. What bounds it here is that a function is discarded once and never compiled again (`discard` in `jit.c` marks it never-compile), so the number of discards is at most the number of functions; one function cannot be discarded repeatedly to grow the list, and the repeated thing is the count across functions. A thrashing run that stays inside one record for a long time, with a program of many functions, therefore holds code in proportion to its size and nothing frees it, and a bound or an epoch for retired code (free what no open record can reach, not only when none is open) is core's design: it is not decided or done here, and the test would not catch a regression that kept the list at exactly twice.
-
-**Library calls from compiled code (story 9).** `jit-native-call-1M-*` in `bench/`: a function calling a host function that adds one, a million times in a loop of one function called once (compiled at its first poll by threshold 1; EVO-X2, GCC 16 -O2 release in the build image, best of three repetitions of the whole set, spread in brackets, the box otherwise idle): **interpreted 62.6 ms (2.6), compiled 45.9 ms (0.7), compiled with natives switched off 64.4 ms (3.0)**: 63 ns an iteration interpreted, 46 ns compiled (27% faster; the spread is a tenth of the gain), and the case with natives off, which is what a compiled function paid before, is the interpreter's cost plus the exit. The compiled run makes 1,000,000 native calls and one member load and no exit at those sites. On a Raspberry Pi 4 (real arm64, one repetition) the same cases are 514, 360 and 512 ms. What a compiled call still pays is the shared wrapper (a record opened and left in the core, the copy of the callee and arguments, the keyed lookup of the execution and the hand-back of the JIT record's unit): a callgrind profile of the compiled loop puts about two thirds of it in the core's `grcore_activation_enter`, `leave` and the depth accounting and the wrapper itself, and the generated code a third. The same wrapper made the interpreter's native call dearer: `run-native-call-1000` counted 8.73 million instructions before the story and 11.25 million after (35,000 calls, about 72 instructions, a record's enter and leave and the copy, about 29% on that case), which is the price of one record and one budget in both tiers. Measured again for the review with callgrind on the smoke run (5,000 calls; x86-64, GCC 14, `--only run-native-call-1000 --smoke`), the wrapper `gltang_vm_call_native` costs 610 instructions a call inclusive of the native itself on the **`JIT=no` build** (3,051,870 for the 5,000; the core's record enter 230 and leave 117 of them) and 636 on the JIT build (3,181,870): the 26 extra are the check that lends the JIT records' units back, paid by an interpreted call in a JIT build and not at all by `JIT=no`. The whole case is 8.48 million instructions on `JIT=no` and 9.01 million with the JIT. This is not the earlier method (different total, a different machine and compiler, no pre-story tree to compare), so the 29% is not re-derived; the figures give the cost of a call as it stands. **Native depth now limits interpreted programs:** every native call, interpreted or compiled, opens a record that costs a unit of the native-depth budget, so a program that nests natives (a native that re-enters guest code that calls a native) is refused at the same nesting level in both tiers, with the recursion-limit error, where before the interpreter had no such bound.
+**Retired code with a nested record open (story 9): an open risk, owned by core's epoch.** The same thrashing program run so that the discards are made under an open JIT record: a compiled function calls the driver of each group through a native that re-enters guest code (the `reenter` test native), so each function is discarded at its eighth failed guard while the compiled caller's record is open, and core cannot free what it retires until that record is left. The retired peak is exactly twice the discards, at every size measured (x86-64, GCC 14, `GLTANG_LONG_RUN_FUNCTIONS` = 1, 5, 40, 200, 1,000, `testNative_calls`): **2, 10, 80, 400, 2,000** for 1, 5, 40, 200 and 1,000 discarded, with 3, 3, 3, 7 and 27 ranges registered at the end. A discard retires two references, the registry's range and the slot's code, and both wait. So the result that the list is bounded by twice the functions discarded (story 8's claim, which the test asserts) **sits on its bound, it does not hold with room**, and the growth is linear in the discards made under one open record, released all at once when the outermost record is left. What bounds it here is that a function is discarded once and never compiled again (`discard` in `jit.c` marks it never-compile), so the number of discards is at most the number of functions; one function cannot be discarded repeatedly to grow the list, and the repeated thing is the count across functions. A thrashing run that stays inside one record for a long time, with a program of many functions, therefore holds code in proportion to its size and nothing frees it, and a bound or an epoch for retired code (free what no open record can reach, not only when none is open) is core's design: it is not done here, and the test would not catch a regression that kept the list at exactly twice. **Decided (Corey, 2026-10-09): accepted and documented**, here and in runtime-core's `design.md`, as an open risk. It should be looked at again when a long-lived record outlives many discards (a host that keeps one nested activation open across a long run of a large, thrashing program); `deferred-work.md` names that condition and what would settle it (an epoch in the core).
 
 **A compiled call site, as emitted** (`fib`, `return fib(n - 1) + fib(n - 2)`, the IR printed with `grjit_function_print` and the code disassembled with `objdump -D -b binary -mi386:x86-64`, from a scratch build with a print statement added):
 
@@ -2324,50 +2361,56 @@ of its tree, compile of both) and the engine (a tight integer loop, a recursive
 resumed every 500 units of fuel). An engine case's unit is one run of a fixed
 program, timed from `grcore_run` to its return. `make test` runs it once with a
 tiny workload; `make bench` runs it in full. No numeric budget is asserted. The
-first measurement, on the development machine (gcc -O2, best of seven), for
-reading future figures against the calibration beside them:
+figures below were re-taken on 2026-10-09, all of the cases in one run of the harness (the
+instrument, the machine and the compiler are those of "Calls, measured": the EVO-X2, AMD
+Ryzen AI MAX+ 395, GCC 16.2.0 `-O2 -g` release, lang-tang `209c8fd`, through
+`tools/evo`; the minimum of five runs of the whole harness, each itself the best of its
+repeats), for reading future figures against the calibration beside them. They replace the
+first measurement, which was taken on an Intel Core 7 150U with GCC 14 and is in the
+history of this file: its `fib(15)` row said 181 us, and said the JIT cost 12%. Both
+were true of that machine and of milestone 1's JIT, which left compiled code at every call;
+neither is true of this one, and the call-heavy cases are in "Calls, measured".
 
 | Case | Figure |
 | --- | --- |
-| calibration | 1.4 ns per xorshift step |
-| parse of the small script | about 4.5 us |
-| parse of a 1 MiB template (about 11,000 rows) | about 46 ms |
-| destroy of that tree | about 19 ms |
-| compile of the small script | about 1.4 us |
-| compile of the 1 MiB template | about 7 ms |
-| run: 1,000-iteration integer loop | about 65 us (65 ns per iteration, about a dozen instructions) |
-| run: `fib(15)` (1,973 calls) | about 181 us (about 92 ns per call) |
-| run: 200 string appends | about 40 us |
-| run: 1,000 array element stores | about 82 us |
-| run: the loop paused and resumed every 500 fuel | about 69 us (the pauses add about 6%) |
-| run: `use math; s += math.pi` 200 times | about 35 us (about 180 ns for a `use`, a member access and an add) |
-| run: a native function called 1,000 times | about 59 us (about 59 ns a call, the loop included) |
-| run: a template call, 200 times (three prints each) | about 107 us (about 535 ns a call: the activation, the scope's open and close, the prints and the output string) |
-| run: 2,000 swallowed errors, the list full after 1,024 | about 208 us (about 100 ns an error; the 976 past the cap are only counted) |
-| run: `random.global.next_int % 7` 1,000 times | about 123 us (about 120 ns an iteration, a boxed integer or two included) |
-| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 65 us (the `LINE` instruction is executed and does nothing) |
-| run: the same, statement polls on with nothing pending | about 130 us (about 16 ns a poll on the unarmed fast path) |
-| start from scratch: a context made and run until it pauses right after a heavy prologue | about 2.80 ms |
-| start from a snapshot: a context made and the snapshot of that pause restored into it | about 0.234 ms (see below) |
+| calibration | 1.17 ns per xorshift step |
+| parse of the small script | about 3.4 us |
+| parse of a 1 MiB template (about 11,000 rows) | about 41.6 ms |
+| destroy of that tree | about 19.4 ms |
+| compile of the small script | about 0.79 us |
+| compile of the 1 MiB template | about 10.6 ms |
+| run: 1,000-iteration integer loop | about 40.7 us (41 ns per iteration, about a dozen instructions) |
+| run: `fib(15)` (1,973 calls), the default configuration | about 131.4 us (about 67 ns per call). The JIT is built and the threshold is the default, so `fib` tiers up after 200 polls and most of the run is compiled; the interpreted figure, 147.0 us, is in "Calls, measured" |
+| run: 200 string appends | about 26.2 us |
+| run: 1,000 array element stores | about 58.3 us |
+| run: the loop paused and resumed every 500 fuel | about 47.3 us (the pauses add about 16%; the first measurement said 6%, and the spread of the loop beside it is 4.3 us, so this is the less certain of the two) |
+| run: `use math; s += math.pi` 200 times | about 24.8 us (about 124 ns for a `use`, a member access and an add) |
+| run: a native function called 1,000 times | about 60.9 us (about 61 ns a call, the loop included) |
+| run: a template call, 200 times (three prints each) | about 88.4 us (about 442 ns a call: the activation, the scope's open and close, the prints and the output string) |
+| run: 2,000 swallowed errors, the list full after 1,024 | about 151.0 us (about 76 ns an error; the 976 past the cap are only counted) |
+| run: `random.global.next_int % 7` 1,000 times | about 91.0 us (about 91 ns an iteration, a boxed integer or two included) |
+| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 44.3 us (the `LINE` instruction is executed and does nothing) |
+| run: the same, statement polls on with nothing pending | about 92.9 us (about 12 ns a poll on the unarmed fast path) |
+| start from scratch: a context made and run until it pauses right after a heavy prologue | about 2.17 ms |
+| start from a snapshot: a context made and the snapshot of that pause restored into it | about 0.154 ms (see below) |
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
-are where they were, within the noise of the machine. (With the JIT built, the
-default threshold costs a run that never tiers up 2 to 5%, and `fib(15)` 12%, most of it the
-compile; see "The
-baseline JIT", which also has the cases that measure the compiled loop.)
+are where they were, within the noise of the machine. With the JIT built, the
+default threshold costs a run that never tiers up 2 to 5% (see "The baseline JIT",
+which also has the cases that measure the compiled loop and the calls).
 
 **The statement-boundary instruction (story 13).** `LINE` is executed even with
 statement polls off, so the cases above that run statements are slower than they
-were before it existed: re-measured from the tree before it (83c1fac) and from
+were before it existed (figures of that story, on its Intel Core 7 150U with GCC 14, and
+not those of the table above; `fib(15)` there is milestone 1's, with every call an exit):
+re-measured from the tree before it (83c1fac) and from
 this one, alternating, the loop is 64.6 us before and 66.7 us after (+3%),
 `fib(15)` 181 us and 192 us (+6%), the template call 107.5 us and 111.1 us (+3%)
 and the polling loop 67.6 us and 69.8 us (+3%). The calibration case moved by
-under 3% between the same runs, so the figures are good to about that. The
-table's rows are the figures before the opcode, re-taken on the machine of this
-measurement (the template call was about 101 us when first recorded). That is the price of making a statement a place a host may ask to stop at without
+under 3% between the same runs, so the figures are good to about that. That is the price of making a statement a place a host may ask to stop at without
 patching a shared program; the alternatives are listed under "Statement polls".
 
-**Profiling (story 17, CAP-12).** `profile-loop-10M-off` and `profile-loop-10M-1ms` run the same interpreted ten-million-iteration loop without a profiler and with one whose timer posts every millisecond: 353 ms and 352 ms, the difference being inside the run-to-run noise. A sample is a frame walk (about 100 ns at depth one and 30 ns for each frame more, measured in `runtime-core`'s `profile-sample-*` cases), so a 1 kHz timer takes on the order of a ten-thousandth of the run.
+**Profiling (story 17, CAP-12).** `profile-loop-10M-off` and `profile-loop-10M-1ms` run the same interpreted ten-million-iteration loop without a profiler and with one whose timer posts every millisecond: 353 ms and 352 ms on that story's machine (234 and 240 ms on the EVO-X2 on 2026-10-09, minimum of five runs, spreads 25 and 23 ms), the difference being inside the run-to-run noise. A sample is a frame walk (about 100 ns at depth one and 30 ns for each frame more, measured in `runtime-core`'s `profile-sample-*` cases), so a 1 kHz timer takes on the order of a ten-thousandth of the run.
 
 **Snapshots (story 16, CAP-11).** The two `start-*` cases measure the same
 thing two ways: the time from creating a context (group, context, heap and
