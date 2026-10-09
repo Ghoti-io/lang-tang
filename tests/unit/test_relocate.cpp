@@ -70,6 +70,7 @@ Outcome run_program(const std::string & source, bool relocating, bool slow_polls
   EXPECT_TRUE(compiled.ok()) << source << ": " << compiled.error.message;
   Context context(compiled.program, config);
   EXPECT_TRUE(context.ok()) << source;
+  context.add_native_library();
   std::unique_ptr<SlowPolls> slow;
   if (slow_polls) {
     slow = std::make_unique<SlowPolls>(context.context);
@@ -149,6 +150,25 @@ TEST(Relocate, PrintingAndRenderingContainersAndLongStringsGiveTheSameOutput) {
 TEST(Relocate, ANativeBoundToAValueKeepsTheValueItIsBoundTo) {
   expect_same("use random; r = random.seeded(5); f = r.set_seed; f(7); r.next_int;");
   expect_same("use random; r = random.seeded(5); a = r.next_int; r.set_seed(9); (a as string) + (r.next_int as string);");
+}
+
+/// The engine's test natives (story 9): one that allocates and reads its argument afterwards (the
+/// copy of an argument the shared wrapper pins, planted defect 27), one that re-enters guest code as a
+/// nested activation while the references below it are held by the caller's frames, and a chain of
+/// frames holding references that a native collects under. Run interpreted, and with every function
+/// compiled in the arm's threshold-1 modes, where the native is called from compiled code.
+TEST(Relocate, NativesThatAllocateAndReenterReadTheSameWhereverTheObjectsTheyAreGivenMove) {
+  expect_same("use alloc_ref; a = [1, 2]; b = alloc_ref(a); c = alloc_ref(b); (c[0][0][1] as string) + (a[0] as string);");
+  expect_same(
+      "function leaf(x) { use alloc_n; r = alloc_n(5); return x + 1; }\n"
+      "use reenter; use alloc_ref; a = [3]; b = alloc_ref(a); (reenter(leaf, 4) as string) + (b[0][0] as string);");
+  expect_same(
+      "function deep(n, a, b) { use alloc_ref; if (n == 0) { r = alloc_ref(a); k = 0; while (k < 3) { k = k + 1; } return r[0]; } r = deep(n - 1, b, a); return r; }\n"
+      "a = [1]; b = [2]; x = deep(30, a, b); (x[0] as string) + (a[0] as string) + (b[0] as string);");
+  expect_same(
+      "function leaf(x) { use alloc_n; r = alloc_n(4); return x + 1; }\n"
+      "function deep(n, a, b) { use reenter; if (n == 0) { t = reenter(leaf, 1); return a; } r = deep(n - 1, b, a); return r; }\n"
+      "a = [1]; b = [2]; x = deep(20, a, b); (x[0] as string) + (a[0] as string) + (b[0] as string);");
 }
 
 /// With every poll a collecting one, the loops that copy in chunks and poll
