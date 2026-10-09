@@ -1,0 +1,19 @@
+# 31 a call made deep in a compiled chain is an exit
+# defect: the push hook refuses once the compiled chain is eight calls deep, so
+# every call below that depth leaves compiled code for the interpreter; the
+# output, the fuel and the frames stay the same, and only the count of call exits
+# shows it
+# caught by: the long compiled run of fib, which asserts zero call exits (testJit_calls)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -87,6 +87,9 @@
+   if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+     return refuse_push(jit);
+   }
++  if (jit->chain >= 8u) {
++    return refuse_push(jit); /* planted: no such test */
++  }
+   GRCORE_Stack * stack = grcore_context_stack(context);
+   GRCORE_FrameRef frame;
+   if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {

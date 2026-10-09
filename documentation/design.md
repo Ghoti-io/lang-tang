@@ -1270,10 +1270,10 @@ breaks nothing as not caught. Observed:
 | 29 unwind-status-read-as-ok | the library-call thunk answers "continue" for the value a runtime poll returns when it orders the run to stop | the run that runs out of budget inside a native's answer (`testNative_calls`) | the plain and compiled runs differ |
 | 30 member-load-by-name-not-charged | the thunk of a compiled `.name` on a library adds nothing to the pending fuel | the loops of `use m.inc as f` and `m.inc(s)` over a sub-library (`testNative_calls`) | the plain and compiled runs' fuel differ |
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 30 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 31 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all twenty-nine but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
+runs all thirty but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.

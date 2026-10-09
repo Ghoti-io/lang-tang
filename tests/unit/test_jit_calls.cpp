@@ -1100,6 +1100,11 @@ TEST(JitCalls, ALongCompiledRunOfFibRetiresNothingAndKeepsEveryCompiledRangeRegi
   EXPECT_EQ(jit.stats.functions_discarded, 0u);
   EXPECT_EQ(jit.retired_peak, 0u) << "nothing was replaced or discarded, so nothing was retired";
   EXPECT_EQ(jit.registered, jit.stats.functions_compiled);
+  // The success signal of spec-runtime-calls: no exit at any call between compiled
+  // functions, of any of the four classes. Planted defect 31 refuses the push of
+  // a call made deep in a chain, so a call becomes an exit and the output stays
+  // the same; only this count shows it.
+  EXPECT_EQ(exits(jit.stats), 0u) << "fib(" << depth << "): a call between two compiled functions left compiled code";
   std::printf("  fib(%d): %llu compiled calls, %llu call exits, retired peak %llu\n", depth, (unsigned long long)jit.stats.calls,
       (unsigned long long)exits(jit.stats), (unsigned long long)jit.retired_peak);
 }
