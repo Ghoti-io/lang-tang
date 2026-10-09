@@ -16,6 +16,7 @@
 
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ghoti.io/runtime-core/runtime-core.h>
@@ -134,16 +135,20 @@ std::string args_of(int n, const char * base) {
   return s;
 }
 
-TEST(NativeCalls, ANativeOfEveryArityFromZeroToFifteenIsCalledFromCompiledCode) {
+TEST(NativeCalls, ANativeOfEveryArityFromZeroToSixteenIsCalledFromCompiledCodeUpToFifteenAndIsAnExitAtSixteen) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  for (int n = 0; n <= 15; ++n) {
+  // runtime-jit's native call takes the callee and fifteen arguments at most (sixteen
+  // words): a call of sixteen arguments is an exit, and gives the interpreter's value.
+  for (int n = 0; n <= 16; ++n) {
     Scenario sc = native_scenario(
         "function run() { use sum; s = 0; i = 0; while (i < 20) { s = s + sum(" + args_of(n, "i") + "); i = i + 1; } return s; }\n"
         "print(run()); print(run());\n");
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
-    expect_clean_natives(jit);
-    EXPECT_EQ(jit.stats.native_calls, 40u) << n << " arguments";
+    if (n <= 15) {
+      expect_clean_natives(jit);
+    }
+    EXPECT_EQ(jit.stats.native_calls, n <= 15 ? 40u : 0u) << n << " arguments";
     EXPECT_EQ(jit.stats.native_call_exits_guard + jit.stats.native_exits_stack, 0u) << n << " arguments";
     if (HasFailure()) {
       ADD_FAILURE() << "with " << n << " arguments";
@@ -208,6 +213,7 @@ TEST(NativeCalls, AChainOfSixtyCompiledFramesHoldingReferencesSurvivesANativeTha
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.raw, "112");
   EXPECT_GE(jit.stats.deepest_chain, 60u);
+  EXPECT_GT(jit.stack_moves, 0u) << "the guest stack started small and grew under the chain: a capacity probe that did not probe nothing";
   EXPECT_GE(jit.stats.native_calls, 1u);
   EXPECT_GE(jit.stats.member_loads, 61u) << "every level `use`s the native: each load allocates";
   expect_clean_natives(jit);
@@ -356,6 +362,7 @@ TEST(NativeCalls, EveryCompiledFrameBelowANestedActivationSeesItsReferencesUpdat
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.raw, "112");
+  EXPECT_GT(jit.stack_moves, 0u) << "the guest stack grew under the chain";
   EXPECT_GE(jit.stats.deepest_chain, 40u);
   EXPECT_GE(jit.stats.native_calls, 2u + 2u * 1u);
   expect_clean_natives(jit);
@@ -393,6 +400,7 @@ TEST(NativeCalls, ANativeDepthBudgetSweptFromOneUpRefusesTheSameReentryAtTheSame
   // the same poll, with the same fuel total, whichever tier runs it.
   uint64_t refused = 0;
   uint64_t completed = 0;
+  uint64_t refused_compiled = 0;
   for (uint64_t budget = 1; budget <= 24; ++budget) {
     Scenario sc = native_scenario(
         "function r(n) { use reenter; if (n == 0) { return 0; } return reenter(r, n - 1) + 1; }\n"
@@ -404,6 +412,7 @@ TEST(NativeCalls, ANativeDepthBudgetSweptFromOneUpRefusesTheSameReentryAtTheSame
     EXPECT_EQ(jit.native_depth, 0u) << "budget " << budget;
     refused += plain.raw != "8";
     completed += plain.raw == "8";
+    refused_compiled += jit.stats.native_enters_refused;
     if (HasFailure()) {
       ADD_FAILURE() << "with a native-depth budget of " << budget;
       return;
@@ -411,6 +420,10 @@ TEST(NativeCalls, ANativeDepthBudgetSweptFromOneUpRefusesTheSameReentryAtTheSame
   }
   EXPECT_GT(refused, 3u);
   EXPECT_GT(completed, 3u);
+  // A compiled call whose run was entered is never refused its record: the entry was allowed
+  // because the interpreter-equivalent depth had room, and the wrapper hands the JIT records' units
+  // back before it asks for its own. (A refused record is counted when memory, not depth, refuses.)
+  EXPECT_EQ(refused_compiled, 0u);
 }
 
 TEST(NativeCalls, AResumableNativeIsReachedOnlyThroughAnExitAndTheInterpreterRunsAndResumesIt) {
@@ -526,11 +539,18 @@ TEST(NativeCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsWhenTheDiscard
     }
     source += "  return s; }\n";
   }
-  source += "for (k = 0; k < 12; k += 1) {\n";
+  // `outer` is compiled at its first poll and calls the natives from compiled code, so its JIT
+  // record is open for the whole of the loop: the nested drivers are discarded under it.
+  source += "function outer(M) { global reenter; ";
   for (int g = 0; g < kGroups; ++g) {
-    source += "  reenter(drive" + std::to_string(g) + ", M);\n";
+    source += "global drive" + std::to_string(g) + "; ";
   }
-  source += "}\nprint(reenter(drive0, 1));\n";
+  source += "k = 0; while (k < 12) {\n";
+  for (int g = 0; g < kGroups; ++g) {
+    source += "  t = reenter(drive" + std::to_string(g) + ", M);\n";
+  }
+  source += "  k = k + 1; }\n return 0; }\n";
+  source += "outer(M); print(reenter(drive0, 1));\n";
   Scenario sc = native_scenario(source);
   sc.fuel = 2000000000;
   Outcome plain = run(sc, 0);
@@ -538,11 +558,13 @@ TEST(NativeCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsWhenTheDiscard
   ASSERT_TRUE(jit.finished) << "the thrashing program runs to its end";
   EXPECT_EQ(plain.key(), jit.key());
   EXPECT_GE(jit.stats.functions_discarded, static_cast<uint64_t>(kFunctions) / 2);
+  EXPECT_GT(jit.retired_peak, 0u) << "the discards were made under an open record, so the retired list did hold code: a measure of zero here would measure nothing";
   EXPECT_LE(jit.retired_peak, 2u * jit.stats.functions_discarded)
       << "the retired list stays within twice the discarded functions (peak " << jit.retired_peak << " for " << jit.stats.functions_discarded << " discarded)";
   EXPECT_EQ(jit.stats.native_status_unwinds + jit.stats.rebuild_failures, 0u);
-  std::printf("  thrashing program in nested activations: %d functions, %llu discarded, retired peak %llu, %llu ranges registered at the end\n", kFunctions,
-      (unsigned long long)jit.stats.functions_discarded, (unsigned long long)jit.retired_peak, (unsigned long long)jit.registered);
+  std::printf("  thrashing program in nested activations: %d functions, %llu discarded, retired peak %llu, %llu ranges registered at the end, %llu native calls, %llu entries\n", kFunctions,
+      (unsigned long long)jit.stats.functions_discarded, (unsigned long long)jit.retired_peak, (unsigned long long)jit.registered, (unsigned long long)jit.stats.native_calls,
+      (unsigned long long)jit.stats.entries);
 }
 
 TEST(NativeCalls, TheExitsAtLibraryCallSitesCountTowardTheDiscardLimitOnlyForTheGuard) {
@@ -576,6 +598,60 @@ TEST(NativeCalls, ALibraryCallWithTooManyArgumentsOrACalleeNothingNamesStaysAnEx
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(plain.raw, "10" "1496" "5") << "sum of 1..16 weighted by position is 1496";
   EXPECT_EQ(jit.stats.native_calls, 10u) << "only the calls of `good` are compiled: sixteen arguments and a parameter's value are exits";
+}
+
+
+TEST(NativeCalls, AContextPausedBetweenLibraryCallsAndInsideAResumableNativeResumesOnAnotherThreadWithTheSameOutput) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The compiled code is gone from the native stack at a pause (the guest frames hold
+  // everything: the chain was rebuilt, and a resumable native's continuation is a value in
+  // the caller's frame), so the context moves to another thread; under TSan the hand-over
+  // is checked for a race.
+  const char * source =
+      "function g() { k = 0; while (k < 6) { k = k + 1; } return k; }\n"
+      "function run(n) { use inc; use sum; use resumable; s = 0; i = 0; while (i < n) { s = sum(inc(s), i, 1); i = i + 1; } return s + resumable(g); }\n"
+      "t = 0; for (m = 0; m < 12; m += 1) { t = t + run(30) % 11; print(t); }\n";
+  Compiled compiled(source, Mode::Script, "hop.tang");
+  ASSERT_TRUE(compiled.ok());
+  Config reference_config;
+  reference_config.jit_threshold = 0;
+  Context reference(compiled.program, reference_config);
+  ASSERT_TRUE(reference.ok());
+  reference.add_native_library();
+  ASSERT_TRUE(reference.execute());
+  Config config;
+  config.fuel = 300;
+  config.jit_threshold = 1;
+  Context context(compiled.program, config);
+  ASSERT_TRUE(context.ok());
+  context.add_native_library();
+  ASSERT_FALSE(context.execute());
+  ASSERT_TRUE(context.paused());
+  int hops = 0;
+  bool finished = false;
+  while (!finished) {
+    ASSERT_EQ(grcore_context_release(context.context), GRCORE_OK);
+    GRCORE_Result acquired = GRCORE_ERR_INTERNAL;
+    std::thread t([&]() {
+      acquired = grcore_context_acquire(context.context);
+      if (acquired != GRCORE_OK) {
+        return;
+      }
+      grcore_context_set_fuel(context.context, grcore_context_fuel_used(context.context) + 350);
+      finished = context.resume();
+      grcore_context_release(context.context);
+    });
+    t.join();
+    ASSERT_EQ(acquired, GRCORE_OK);
+    ASSERT_EQ(grcore_context_acquire(context.context), GRCORE_OK);
+    ASSERT_LT(++hops, 2000);
+  }
+  EXPECT_GT(hops, 5);
+  EXPECT_EQ(context.raw(), reference.raw());
+  EXPECT_EQ(context.describe(), reference.describe());
+  EXPECT_GT(context.jit_stats().native_calls, 100u) << "library calls were made from compiled code on the way";
+  EXPECT_GT(context.jit_stats().refused_pauses, 2u) << "pauses were taken inside compiled code, between library calls";
+  EXPECT_EQ(context.jit_stats().functions_discarded, 0u);
 }
 
 TEST(NativeCalls, AMemberLoadThatYieldsNothingCompiledStaysAnExit) {
@@ -626,7 +702,7 @@ TEST(NativeCallsNoJit, ANativeThatReentersGuestCodeAndAResumableOneRunInTheInter
   EXPECT_EQ(context.raw(), "4215");
   GLTANG_JitStats stats = context.jit_stats();
   EXPECT_EQ(stats.native_calls + stats.member_loads + stats.native_call_exits_guard + stats.native_exits_stack + stats.native_status_deopts +
-                stats.native_status_unwinds + stats.native_sites_unsupported,
+                stats.native_status_unwinds + stats.native_sites_unsupported + stats.native_enters_refused,
       0u);
 }
 

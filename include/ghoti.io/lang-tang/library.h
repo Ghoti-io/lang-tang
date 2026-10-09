@@ -65,7 +65,11 @@
  * ::GLTANG_ERR_INVALID, the runtime calls with ::GRCORE_ERR_INVALID, and
  * ::gltang_execution_destroy does nothing. A native
  * costs fuel like any call, plus one unit per ::GLTANG_WORK_BYTES_PER_FUEL
- * bytes it returns.
+ * bytes it returns. Each call runs under an activation record of its own, which
+ * draws one unit on the context's native-depth budget
+ * (`grcore_options_set_native_depth`) for as long as it runs: a call the budget
+ * refuses is not made and is the recursion-limit error, whether the program is
+ * interpreted or compiled. The arguments the call object reads are a copy.
  *
  * **Templates.** A template member holds a compiled program (the library
  * retains it) with its own budget scope. `use sidebar;` binds a function value

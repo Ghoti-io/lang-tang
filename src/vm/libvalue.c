@@ -544,6 +544,9 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
   GLTANG_Value result;
   if (entered != GRCORE_OK) {
+#ifdef GLTANG_WITH_JIT
+    exec->jit_stats.native_enters_refused += compiled;
+#endif
     result = gltang_vm_native_refused_value(exec, entered);
   }
   else {

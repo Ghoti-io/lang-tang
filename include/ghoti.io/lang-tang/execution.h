@@ -321,6 +321,7 @@ typedef struct GLTANG_JitStats {
   uint64_t native_exits_stack;  ///< Exits before a library call or member load because the native stack would have run out (not counted toward the discard limit).
   uint64_t native_status_deopts; ///< Exits after a native asked compiled code to leave (the interpreter goes on after the call).
   uint64_t native_status_unwinds; ///< Exits after a native or a member load reported that the run is unwinding.
+  uint64_t native_enters_refused; ///< Calls of a library native from compiled code whose activation record the native-depth or memory budget refused (the call's value is the error; the interpreter's call is refused the same).
   uint64_t native_sites_unsupported; ///< Library call and member load sites left as exits because natives cannot be called from compiled code here (a backend that refuses them, or no table).
 } GLTANG_JitStats;
 
@@ -344,6 +345,15 @@ typedef struct GLTANG_JitStats {
  * nothing to measure it against, so every `CALL` stays an exit to the interpreter.
  * Recursion that needs more than the budget leaves compiled code once, at the
  * call, and the interpreter finishes with the same output.
+ *
+ * A call of a library native (a host function the program `use`s, or reads from a
+ * library with `.name`) and the load of the member are calls to the engine's own
+ * operations from compiled code, with no exit: the interpreter's `CALL` and compiled
+ * code enter the native through the same function, which opens an activation record
+ * for it (so it draws on the native-depth budget, `grcore_options_set_native_depth`,
+ * in both tiers alike: a call the budget refuses is an error value, the recursion
+ * limit, in both). A host function is still opaque (it cannot pause or call guest
+ * code).
  *
  * Stability: like the rest of this header, `free` (tools/check-labels.sh keeps
  * `execution.h` with the engine's other headers). The story that added it asked
