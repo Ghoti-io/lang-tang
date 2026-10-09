@@ -6,8 +6,8 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -214,7 +214,7 @@
-           if (call_site_at(jc, fr.identity.offset)) {
+@@ -251,7 +251,7 @@
+           else if (call_site_at(jc, fr.identity.offset)) {
              // An exit at a call site. Whoever refused recorded why, and none of
              // these counts toward a discard limit except the callee-value guard.
 -            counts = false;
