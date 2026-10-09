@@ -1573,13 +1573,16 @@ is clean.
 
 ## The baseline JIT
 
-A small baseline JIT (story 15, CAP-10, AD-9) behind a build option, `JIT=yes|no`.
+A small baseline JIT (story 15, CAP-10, AD-9; calls between compiled functions,
+spec-runtime-calls story 8, AD-28) behind a build option, `JIT=yes|no`.
 It tiers up a function that is hot, compiles the part of it that is cheap and
-exact to machine code through `runtime-jit`, and leaves compiled code for the
-interpreter, in the same guest frame, whenever it meets anything else. It is the
-first client of `runtime-jit` and of the two things `runtime-core` gained for it
-(`a/code.h`, reference-counted compiled code, and `a/deopt.h`, a reader and writer
-of a native frame by its metadata). `lang-tang`'s observable behaviour is the
+exact to machine code through `runtime-jit`, calls other compiled functions
+directly, and leaves compiled code for the interpreter, in the guest frame
+(rebuilt, for a chain), whenever it meets anything else. It is the
+first client of `runtime-jit` and of what `runtime-core` gained for it (`a/code.h`,
+reference-counted compiled code; `a/deopt.h`, a reader and writer of a native frame
+by its metadata; and, for calls, the registry of code, entry slots, the precise
+walk and the chain rebuild). `lang-tang`'s observable behaviour is the
 same on both tiers, by construction and by test: no divergence-ledger row exists
 for the JIT, and none may be added.
 
@@ -1598,124 +1601,222 @@ execution is created (a registration is refused while the context runs), and a
 failure to make it is not a failure to create the execution: the threshold is then
 0 and the interpreter runs alone.
 
-**Entry.** Compiled code is entered only right after a function's entry `POLL`
-(bytecode offset 0) has returned continue in the interpreter: the compiled
-function starts "after the entry poll", at index 1 with an empty operand stack and
-the frame's locals as its parameters. The guest frame was pushed by the interpreter
-exactly as for any call, and it is the frame a pause shows. Entering records a
-`GRCORE_ACTIVATION_JIT` activation, which draws on the native-depth budget (AD-21):
-if the budget is full the function is simply not entered this time, the interpreter
-runs it and the budget is untouched. Each entry retains the code for the call, so
-a function discarded during a run is freed only after the call ends. The tier-up
-that compiled the function in this very poll is entered in the same invocation.
+**A compiled function is callable (AD-28).** It takes the callee's parameters as
+references and one hidden trailing flag, has an internal entry that other compiled
+functions call, and is registered with the context (`grcore_code_register`) from
+the moment it is installed. Every function the execution has named has one entry
+slot (`GRCORE_EntrySlot`), made when the function is first named (by a caller's
+compile or by its own) and kept for the execution; the slot's state mirrors the
+function's: empty while it is cold, its code once it is compiled
+(`grjit_entry_slot_install`, which refuses code built for another token or another
+parameter count), refused once it can never be (declined, failed or discarded).
+The token is the function word and the count is `parameter_count + 1`.
+
+**Entry from the interpreter.** Compiled code is entered right after a function's
+entry `POLL` (bytecode offset 0) has returned continue in the interpreter, with the
+flag 1: the function starts "after the entry poll", at index 1 with an empty
+operand stack. The guest frame was pushed by the interpreter exactly as for any
+call and is the frame a pause shows. A tier-up in that very poll is entered in
+that invocation (documented behaviour of `gltang_execution_set_jit_threshold`; it
+is what makes a threshold of 1 cover the top level). Entering records a
+`GRCORE_ACTIVATION_JIT` record, which draws on the native-depth budget (AD-21): if
+that is full the function is not entered this time. A compiled call enters the
+callee with the flag 0, and the callee's prologue then makes its own entry poll
+(one body, one compare: the prologue branches on the flag), so exactly one entry
+poll is made per activation, by the tier that made the call.
+
+**A call.** `CALL n` compiles to a call when its callee operand was produced, on
+every path to it, by one `LOAD_GLOBAL g` or one `LOAD_LOCAL s` (the stack analysis
+tracks the producing instruction of each operand position and refuses a merge of
+two), when the declaration scan names that slot's function `k` (the triple `FUNC
+k; STORE_GLOBAL g; POP` in function 0 of the program, or the same with
+`STORE_LOCAL s` in the same function: the shapes the compiler emits for a
+declaration), and when `k` takes `n` parameters and its frame fits a compiled
+function. The site loads the callee value, guards it equal to the function value
+`k` (a mismatch is a guard exit, counted against the caller), and makes one
+`CALL_SLOT` through `k`'s slot with the token and the `n` operands plus the flag 0.
+Everything else stays an exit, with the same discard accounting as any exit: a
+native, a template, a value the scan cannot name (a parameter, an array element, a
+global with no declaration), an argument-count mismatch, a callee with more than
+fifteen parameters or too many slots. A context with no native-stack byte budget
+compiles no call site at all: recursion measured in bytes has nothing to be
+measured against, and a fault is never an acceptable result.
+
+**The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
+names a function of a loaded program, the count `parameter_count + 1`, the flag 0;
+anything else is refused and counted in `hook_argument_errors`), tests the guest
+depth at the interpreter's condition, pushes the callee's guest frame (the
+frame-push GC point; it fires no `CALL_REFUSED` of its own: the interpreter makes
+the refused call after the exit and fires it once), reads its arguments **after**
+the push, writes the header (function, `pc` 0, `sp`, flags = the activation's
+depth), the arguments and zeros, sets the callee's identity to `{function, 0}` and
+adds the `CALL`'s fuel. *pop* pops the frame. *compile* compiles the callee at its
+first call from compiled code, installs it and returns zero; a function that is
+declined or fails is marked never-compile, its slot is refused and the call site
+exits, remembered. *deopt* walks the chain, sets the identity of every caller's
+guest frame from its call site (the interpreter does that at each call; the rebuild
+does not), classifies the exit, and calls `grcore_compiled_rebuild`, which writes
+every compiled frame of the chain into its existing guest frame. Nothing is
+inserted, so no offset moves; each frame then returns `DEOPTED` and nothing else
+runs in compiled code. For an unwind verdict the rebuild is told to skip every
+compiled frame (compiled code opens no scope, so all of them are inside the one
+that is unwinding) and still marks the record rebuilt so that it can be left.
+
+**Exits and the discard limit.** An exit at a call site because the callee is
+remembered refused, because the push was refused (guest depth, memory) or because
+the native stack would run out is not counted toward any function's discard limit:
+the callee or the budget caused it. A failed guard, the callee-value guard, an
+unconditional exit and a poll's pause or unwind are counted against the function
+whose frame is innermost, and at the eighth that function is discarded: its slot
+is refused (so its callers' calls become remembered exits), its range is
+unregistered and the cache's reference is dropped. The code is never destroyed
+directly: the registry and the slot retire their references and `runtime-core`
+frees the code when no JIT record is open, so a frame waiting in a chain still
+returns into it. The discard is applied after the entry's record is left.
 
 **What is compiled.** Inline: `POLL`, `LINE`, `POP`, `DUP`, `NULL`, `TRUE`,
-`FALSE`, `CONST` (a small integer only), `LOAD_LOCAL`, `STORE_LOCAL`, `NEG`,
-`NOT`, `ADD`, `SUB`, `MUL`, `LT`, `LE`, `GT`, `GE`, `EQ`, `NE`, `JMP`, `JMP_FALSE`,
-`JMP_TRUE`, `AND`, `OR` and `RET`. Each step mirrors the interpreter's own inline
-path: both operands carry the integer tag or a guard fails; `ADD`, `SUB` and `NEG`
-check the result against the small-integer range; `MUL` needs both untagged
-operands inside -2^29..2^29-1 so the product cannot leave the range; the operand
-of `NOT`, the jumps, `AND` and `OR` must be a boolean. Everything else (`DIV`,
-`MOD`, `CALL`, globals, casts, indexing, attributes, slices, the `SET_*`, `ADOPT`,
-`ARRAY`, `MAP`, `PRINT*`, `ITER_*`, `DISCARD`, `SET_RESULT`, `USE`, `FUNC`, `HALT`
-and any other constant) is an unconditional deoptimization exit at that
-operation. A tagged value is computed on through `GRJIT_OP_BITCAST` (a `REF`
-reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
+`FALSE`, `CONST` (a small integer only), `LOAD_LOCAL`, `STORE_LOCAL`,
+`LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `LT`, `LE`, `GT`, `GE`,
+`EQ`, `NE`, `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above.
+Each step mirrors the interpreter's own inline path: both operands carry the
+integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
+small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
+the product cannot leave the range; the operand of `NOT`, the jumps, `AND` and `OR`
+must be a boolean. Everything else (`DIV`, `MOD`, casts, indexing, attributes,
+slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `PRINT*`, `ITER_*`,
+`DISCARD`, `SET_RESULT`, `USE`, `HALT` and any other constant) is an unconditional
+exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
+(a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
 
-**The guard and the exit.** A guard that fails, or an unconditional exit, returns
-from compiled code with a frame state in the guest frame's own slot order: the
-function word, the pc, the sp, the flags (dead: the frame keeps its own), one slot
-per local, one per operand-stack position and last the fuel the compiled code had
-counted and not charged. The deoptimizer writes pc, sp, the locals and the stack
-into the guest frame, adds the fuel to the execution's pending fuel, and the
-interpreter resumes at the operation, which it re-executes whole: an operation that
-deopts has not been charged, because its guard is tested before its cost is added.
-A function that deoptimizes eight times is discarded and never compiled again in
-that execution (`functions_discarded`); one whose first operation after its entry
-poll is an unconditional exit is not compiled at all.
+**Frame states are exactly the guest frame.** `frame_slots` slots in the guest
+frame's own order and no more: the function, `pc` and `sp` are constants, the flags
+word is a register holding the activation's depth (loaded once, in the prologue),
+a local is its register, an operand slot below the depth is its register, and a
+slot above it is a register that holds zero typed as a reference, so it reads as
+the zero value slot the interpreter's frame holds (a `DEAD` location reads as a raw
+zero, which would be a different frame). The abstract frame reads a compiled frame
+by its site, and the descriptor reads every slot through `grcore_frame_slot`, so
+a stack trace, a debugger's locals and the frame differential see the same chain
+whichever tier made it; that needed `runtime-core` to ask the engine for the scopes
+of a compiled frame that stands for a guest frame (it said none).
 
-**Polls, and the frame at a GC point.** Compiled code never pushes or pops a
-frame, and calls no allocating, polling or guest-calling helper. Its only calls
-out are the two fuel helpers (no GC point) and the poll helper. A compiled poll
-is one call of the fuel helper (every poll charges and flushes fuel, as the
-interpreter's does), then a load of the request word and a branch; the poll helper
-is called only when something is pending.
-The slow path calls `gltang_jit_poll`, which finds the compiled frame through its
-own frame-pointer chain (the JIT module is built with `-fno-omit-frame-pointer`, a
-stamped Makefile flag), reads the frame state of the site with
-`grcore_deopt_read`, writes pc, sp, the locals and the stack into the top guest
-frame, polls with the same identity as the interpreter's own poll, reloads the
-guest frame (the stack may have moved), and on continue copies the slots back with
-`grcore_deopt_write_back`, so that a collector that updated a reference in place is
-honoured. A pause or an unwind returns from compiled code with the verdict and the
-guest frame already current: the interpreter returns paused or jumps to `unwound`
-exactly as for its own poll. The poll helper is the one GC point, and at it the
-guest frame is current, so a collection, a pause, the debugger and the frame
-differential all see an ordinary interpreter frame, and no native frame is ever
-scanned by the collector (AD-17).
+**Fuel (AD-21)** is the same on every tier and lives in the execution: compiled
+code adds each straight run's cost directly to `exec->pending_fuel`, before
+anything that can observe it or leave (a guard, a call, a poll, a branch, `RET`),
+and flushes it to the context before every poll (`gltang_jit_flush`), as the
+interpreter's `POLL` does. A frame state carries no fuel, so an exit and a chain
+deopt lose nothing. A guard is tested before its operation's cost is added, so an
+operation that deoptimizes has not been charged and the interpreter charges it
+when it runs it; a `CALL`'s own cost is added by the push hook once the push has
+succeeded, so a refused push charges nothing and a poll in the callee already sees
+the call's cost. A budget therefore pauses or unwinds at the same poll with the
+same total on both tiers, which the fuel-parity tests check for every budget from
+1 to 120 over a three-deep call chain.
 
-**Fuel (AD-21)** is the same on every tier. Compiled code counts each executed
-bytecode's cost in a register and flushes it to the execution before every poll
-(`gltang_jit_flush`, which also flushes to the context, as the interpreter's `POLL`
-does), on `RET`, and in the deoptimizer on exit. A budget therefore pauses or
-unwinds at the same poll with the same total on both tiers, which the fuel-parity
-test checks over four programs and three budgets.
+**Polls, and the frame at a GC point.** A compiled poll is a flush of the fuel (a
+call of a helper that is not a GC point), a load of the request word and a branch;
+the poll helper `gltang_jit_poll` is called only when something is pending. It
+sets the execution's current location, polls with the same identity as the
+interpreter's own poll, and answers 0, 1 (pause) or 2 (unwind). It finds nothing through
+its own frame pointer (the JIT module is no longer built with `-fno-omit-frame-pointer`,
+and the stamped Makefile flag is gone): the callable function's poll stub stores the
+walk start before it calls the helper. **It does not touch
+the guest frame**: the polling frame is paired with its guest frame, the collector
+updates the compiled frame's references through its stack map and does not scan the
+guest frame, so a write-back of the guest copy would put stale references over
+updated ones. A pause or an unwind arrives at the entry as `GRJIT_EXIT_DEOPT` with
+the cause (1 or 2) in `out[0]`, after the chain has been rebuilt (a pause) or
+skipped (an unwind). `GRJIT_EXIT_REBUILD_FAILED` is an error of its own: nothing
+was rebuilt, so the run ends as the run's own unwind with every guest frame it
+pushed popped and nothing interpreted on them, and it is counted
+(`rebuild_failures`).
 
 **`LINE`** loads the execution's `statement_polls` byte at every execution, so a
-host that turns the switch on mid-run (a test flips it from a poll handler) gets a
-poll at the next compiled `LINE`, and with it clear a `LINE` costs a load and a
-branch and no fuel. The engine never asks whether a debugger is attached: a
-breakpoint in compiled code is a `LINE` poll whose vote the debugger casts, the
-frame is written, and stepping resumes in the interpreter. A later call of the
-function enters compiled code again.
+host that turns the switch on mid-run gets a poll at the next compiled `LINE`, and
+with it clear a `LINE` costs a load and a branch and no fuel.
 
-**Ownership.** Compiled code is context-specialised in this story (it bakes in the
-program-and-function word and the execution's own addresses) and owned by its
-execution's cache; its pages come from the context's counting page provider, so
-they are on the context's meter and a memory budget can refuse them. A compile
-refused by memory, by a limit or by `protect`, marks the function never-compile,
-is counted (`compile_failures`) and the run goes on in the interpreter. `a/code.h`
-holds the count: the cache owns one reference and each entry takes one.
+**Ownership.** Compiled code is context-specialised (it bakes in the function word
+and the execution's own addresses) and owned by its execution's cache; its pages
+come from the context's counting page provider, so they are on the context's meter
+and a memory budget can refuse them. A compile refused by memory, by a limit or by
+`protect` marks the function never-compile, is counted (`compile_failures`) and the
+run goes on in the interpreter. The execution's teardown clears every slot,
+unregisters every range and releases the reservation (the reservation each call
+extends by the callee's converting locations, which lang-tang's frames do not have:
+no derived pointer and no converting representation, which a test asserts of the
+emitted metadata) before its own state goes.
 
 ### Why this and not something else
 
-- **The guest frame is pushed first and compiled code updates it, vs rebuilding
-  the frame on a pause.** The shadow frame makes four problems disappear without a
-  new core feature: a push can fail only where the interpreter already handles it,
-  a pause finds only interpreter frames (AD-8), a collection at a poll sees every
-  reference as an ordinary slot, and the frame differential compares an interpreter
-  frame with an interpreter frame. Rebuilding on a pause would put a frame builder
-  in the pause path and make the debugger's view a function of the JIT. The price
-  is that the guest frame is stale between polls, which is harmless because
-  compiled code has no GC point between them.
-- **The frame is written at every poll's slow path, vs a precise native walk of
-  compiled frames.** A precise walk would let compiled code call allocating
-  helpers and hold references across them, which is what a wider supported set
-  needs, and it needs the collector's root source to read native frames, which
-  `runtime-core` does not have. Writing the frame is cheap where it happens (only
-  when something is pending) and the walk is the next step.
+- **Every guest call pushes the callee's guest frame, and compiled code keeps its
+  values in its own native frame, vs a shadow frame the compiled code writes at
+  each poll (milestone 1).** The first design wrote the guest frame at every
+  poll's slow path and kept it current there; it was right while a compiled
+  function called nothing, and it makes a chain impossible: a collection at a poll
+  would have to find every compiled frame, and the guest frames of the callers are
+  stale. Now the guest frame exists (so the depth, the memory and the budget scopes
+  count as the interpreter's do, and a pause finds only interpreter frames, AD-8)
+  and is written only when the chain is rebuilt; between, the walk pairs each
+  compiled frame with its guest frame, the collector reads the compiled frame
+  through its stack map and does not read the stale guest frame.
+- **The poll helper no longer makes the guest frame current, and certainly does
+  not copy it back.** In milestone 1 no collector saw a compiled frame, so the
+  helper wrote the guest frame, polled, and wrote the guest frame back into the
+  compiled one. With the frame walked and paired, the copy back puts the stale
+  guest references over the ones the collector just updated (planted defect 20,
+  caught by the relocation arm only: it is invisible until an object moves). A
+  reader who finds a reason for the helper to read a frame should read it as a
+  reason that hazard is back.
+- **A call through the callee's entry slot, guarded on the callee value, vs a table
+  of slots indexed by the callee value.** runtime-jit binds a call to one callee:
+  the slot is made for a token and a parameter count, and a call through a code
+  pointer must name the same two. A callee that is a run-time value could only be
+  dispatched by a table if every function had one token and one count, which would
+  make a caller pass the largest. The guest has no closures and declares functions
+  by a fixed triple, so the common call (a named function) is known when the caller
+  is compiled; the guard makes the one assumption that can change (the variable
+  holds something else: a declaration that was skipped) an exit and not a wrong
+  call. Calls the scan cannot name are exits, until an optimizing tier has
+  feedback.
+- **The pending fuel lives in the execution, vs in a register copied at each call.**
+  A frame state must be exactly the guest frame, and the vreg for the count already
+  lives in a stack slot (there is no register allocator), so an add to memory costs
+  one more load of the execution's address, and nothing at a chain exit has to
+  carry a count. Summing a straight run's cost into one add (what is done) takes
+  most of the cost back. A trailing guest-frame slot for the count was rejected: it
+  changes the frame layout, the snapshots and the descriptor.
+- **The entry poll belongs to the callee's activation.** It cannot move into the
+  push hook (a poll that paused there would have no way to rebuild the chain) and
+  cannot be made by the caller before the push (every handler would see the caller
+  as the top frame). One body with a hidden flag is the cheapest way to keep the
+  interpreter's "after the poll" entry (a tier-up in that poll is entered, so a
+  threshold of 1 still covers the top level, the documented behaviour) and the
+  compiled call's "before the poll" one. Entering compiled code before the
+  interpreter's entry poll would have stopped a tier-up in that poll from being
+  entered.
+- **Identities are set when a chain is rebuilt, from the call sites, vs at every
+  call.** The interpreter sets a caller's identity at each call and the walk of a
+  rebuilt frame reads it; setting it per call would cost on the path this exists to
+  make fast, and a rebuild knows every site.
+- **No caller is recompiled when its callee tiers up.** The slot makes it
+  unnecessary: the callee's code is installed into the slot, by the interpreter's
+  tier-up or by the compile-at-call hook, and every caller calls through it.
+- **The guest-depth test is the hook's, once, at the interpreter's condition, vs a
+  depth count in compiled code.** The same condition gives the same verdict at the
+  same call (the guard on the push by `grcore_stack_push` backs it up, so a hook
+  that tested one level late would be invisible; one that tests one level early
+  makes a compiled call exit one call too soon, which only the number of compiled
+  calls shows, and a test counts them, planted defect 17).
 - **Tier-up in ACT with entry after the entry poll, vs on-stack replacement.**
   Entering at a function's start needs the state at one place, with an empty stack.
   Replacing a running interpreter frame at a loop's back-edge needs a mapping from
   every loop head's interpreter state to compiled registers and an entry point at
   each. A loop that is hot in a function called once stays in the interpreter for
-  that call: the first measurement shows what that costs and the next step is to
-  say whether it matters (AD-26).
+  that call.
 - **A counter on `POLL` vs call counts.** A poll is the interpreter's one common
   place for entry and back-edge, so one counter sees a hot loop that a call count
   would miss. The cost is one load, one increment and one compare per poll when
   tier-up is on.
-- **Helper calls for fuel vs inline.** Two helper calls are two places where the
-  count is added to an execution field, and the baseline keeps every register in a
-  frame slot anyway. An inline add of the running count to `pending_fuel` would be
-  a store the poll's fast path does not need, and the interpreter already charges
-  where it charges. Every poll costs that one call whether or not anything is pending; the poll helper costs more and runs only when something is.
-- **The small supported set vs a wider one.** Every operation compiled inline is
-  one with no GC point, no allocation and nothing to restore on a failure but its
-  operands. A wider set (calls, globals, containers) needs a precise native walk,
-  the call protocol between compiled frames, and barrier code the engine passes in;
-  each is a story.
 - **The `LINE` flag read at every execution vs forcing the interpreter when
   statement polls are on.** Forcing the interpreter would make a debugger detach a
   function from the JIT, so a breakpoint test would test the interpreter; reading
@@ -1739,20 +1840,63 @@ First measurements (`make bench` on an Intel Core 7 150U, gcc 14.2 -O2, release,
 | a poll with nothing pending, from the two loops | the loop skeleton (a poll, a comparison and a jump) costs 26 ns interpreted and 6.4 ns compiled, and a statement `i = i + 1` 9.9 ns interpreted and 4.7 ns compiled. A compiled poll is a call of the fuel helper, a load of the request word and a branch; the interpreter's is the fuel flush, `SAVE`, `SYNC`, the call of `grcore_stack_poll` and a reload |
 | a typical small function (a comparison, a branch, a 3-iteration loop), run once | 0.52 us interpreted; 76.4 us with a threshold of one, which is the compile and the entry of two functions (the top level and `f`), about 38 us each |
 | what the JIT's presence costs a run that never tiers up (the same case, `JIT=yes` with the default threshold against `JIT=no`, alternating) | loops and string and array building: +2 to +5% (a counter on each poll of a function that is not the main program's top level, and the registration of the tier-up handler at creation); native calls, `use` and the error list within the noise |
-| `fib(15)`, 1,973 calls | story 15 measured 180 us without the JIT and 220 us with it (+22%). Re-measured on the same tree (the `fib-15-*` and `fib-22-*` cases of `bench/`, best of a thousand and of a hundred runs): 201.8 us without the JIT and 236 us with it (+17%); `fib(22)`, 57,313 calls, 5.86 ms and 6.15 ms (+5%). Two costs, only one of them avoidable. **Per call:** every entry poll of a function the JIT had already given up on still called the counting function and the entry function, about 5 ns a call; a function that has settled (discarded or refused) is now remembered in `jit_settled_fword` and costs one compare. After that change: `fib(15)` 225 us (+12%), `fib(22)` 5.93 ms (+1.2%). **Once:** `fib` is compiled after 200 polls (about 25 us here), every call enters compiled code and leaves it at the `CALL`, and after eight such exits the code is discarded. Keeping a compiled caller's calls inside compiled code would remove that, and is what the story's guardrail forbids (no JIT frame calls a JIT frame: AD-8, AD-17, a collector never scans a native frame). A rule against compiling loop-free functions was considered and not taken: it would also stop compiling a straight-line arithmetic function called a million times, which the 200-poll threshold already prices correctly. A call-heavy function remains what a baseline without calls inside compiled code is worst at |
+| `fib(15)`, 1,973 calls, and `fib(22)`, 57,313 | **Milestone 1's defect, and its repair (spec-runtime-calls story 8).** With every `CALL` an exit (milestone 1) the JIT cost: story 15 measured `fib(15)` 12% slower than interpreted and `fib(22)` 1.2% slower. With compiled calls (the `fib-15-*` and `fib-22-*` cases of `bench/`, best of a thousand and of a hundred runs inside the case, five repetitions of the whole set, minimum of the repetitions, on the EVO-X2, AMD Ryzen AI MAX+ 395, GCC 14 -O2 release, load 0.1 before the run, interpreted, compiled and compiled-with-calls-off cases of one binary in turn; the check of the result (610, 17,711) is in the case): `fib(15)` **interpreted 146.4 us (spread over the five repetitions 9.0), compiled 129.9 us (10.6)**, 11% faster, and 170.0 us with no call site compiled (the milestone-1 behaviour: 16% slower than interpreted, the +12% above on another machine); `fib(22)` **interpreted 4,252 us (462), compiled 2,664 us (183)**, 37% faster, and 4,311 us with no call site compiled. The bar of the story, "faster by more than the larger spread", holds for both (16.5 us against 10.6, 1,588 us against 462). `fib(15)` pays the compile once, inside the figure (about 25 us). The counters of the run: 1,764 compiled calls for `fib(15)` and 57,096 for `fib(22)` (the first call of each, and the callee entered from the interpreter, are not compiled calls), no call exit of any reason, no compile at a call (the interpreter's tier-up compiled `fib` first), deepest chain 12 and 19, no hook handed an argument it refuses. The per-call cost: 4,252 us over 57,313 calls is 74 ns a call interpreted and 46 ns compiled, a compiled call being 62% of an interpreted one; the expectation of a third to a half was not met and is not a bar. What a compiled call pays: two hook calls (push, with the stack push, the header and the argument writes; pop), a read of the slot, the entry's stack check, one flush of the fuel at the entry poll and the guard on the callee value. `design.md` does not claim the protocol, and not the baseline's code (no register allocator, every register a frame slot), is the limit: that is the next measurement (a profile with `tools/callgrind-bucket.py`) and it was not made here |
 
-The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason.
+The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start, and calls between declared functions. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason. What a template-heavy program costs: a template call is an exit, so the interpreter runs the template and enters its function 0 compiled only when the threshold covers it; nothing here is measured for it, and it is the cost the spec recorded as accepted.
+
+**Retired code, measured (the claim to test).** Compiled code a discard retires stays on the context's retired list until no JIT record is open, so the claim is that the list is bounded by the functions of the program: each is discarded at most once and never compiled again. Read with `grcore_code_retired_peak` on the EVO-X2: a generated program of 1,000 functions, each called from a compiled loop with a guard that fails eight times, all in one run, discards all 1,000 and the peak of the retired list is **0** (a discard is applied after the entry's record is left, so core releases the retired reference at once); 26 ranges are registered at the end (the program's 25 drivers and its top level); and `fib(30)`, 2,692,536 compiled calls and no call exit, retires nothing (peak 0) and keeps its two ranges registered. The bound holds with room (0 against twice the 1,000 discarded), and it holds because of where the discard is made, not because of a bound in core: a discard made while a record is open (a nested activation, story 9's) is the case this does not measure.
+
+**A compiled call site, as emitted** (`fib`, `return fib(n - 1) + fib(n - 2)`, the IR printed with `grjit_function_print` and the code disassembled with `objdump -D -b binary -mi386:x86-64`, from a scratch build with a print statement added):
+
+```
+b10:  ...                                   the argument: n - 1, its guards charged before the cost
+      v16 = cmp.eq v11, #19                 the callee value (v2, loaded from the globals) is the function value 1
+      br_if v16, b11, b12                   a mismatch is b12: a note for the deopt hook, then a guard exit
+b11:  v2 = call.slot slot(1) callee=1(v3, #0)
+        state      fn=1 off=14 [#1, #15, #5, v7, v0, v6, v6, v6, v6]     while the callee runs
+        exit state fn=1 off=14 [#1, #14, #7, v7, v0, v2, v3, v6, v6]     before the call: pc at the CALL, callee and argument pushed
+```
+
+The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 5 as constants, the flags register `v7`, the one local `v0`, and the four operand slots as the zero register `v6` (the callee and the argument are popped). Its machine code, past the argument:
+
+```
+ 6ef  movabs rax, <slot>          ; the callee's entry slot
+ 6f9  mov    rax, [rax]
+ 6fc  cmp    rax, 1               ; empty (0): the compile hook; refused (1): exit
+ 700  jbe    ...
+ 706  mov    [rbp-0xd0], rax      ; the entry, kept across the hook
+ 70d  mov    rax, [rbp-0x38]      ; the argument, into the arguments area
+ ...
+ 724  lea    rax, [rip+0x32]      ; the walk start: this frame's base and the return address
+ 72f  mov    [rcx+0xf0], rbp      ;   stored in the context before the hook (a GC point)
+ 736  mov    [rcx+0xf8], rax
+ 73d  mov    rdi, rcx             ; context
+ 740  mov    esi, 1               ; the callee's token
+ 745  lea    rdx, [rbp-0xc8]      ; the arguments area (in the stack map)
+ 74c  mov    ecx, 2               ; argument count: the argument and the flag
+ 751  call   <push hook>
+ 762  jne    ...                  ; refused: an exit
+ 768  mov    rdi, [rbp-0xc8]      ; the arguments, in registers
+ 76f  mov    rsi, [rbp-0xc0]
+ 776  mov    r10, [rbp-0x8]       ; the context
+ 77a  mov    rax, [rbp-0xd0]
+ 781  call   rax                  ; the internal entry
+ 783  test   rdx, rdx             ; DEOPTED: the chain was rebuilt, return it
+ 786  jne    ...
+ 78c  mov    [rbp-0x30], rax      ; the result
+ 794  call   <pop hook>
+```
 
 ### What is not done
 
-- **Calls inside compiled code: a defect of milestone 1, not a choice.** A
-  `CALL` is a deoptimization exit; the interpreter makes the call and the callee
-  enters its own compiled code at its entry. JIT frames do not call JIT frames,
-  so call-heavy code runs slower with the JIT on (`fib(15)` +12%, "Measured").
-  Leaving calls out was a bug (Corey, 2026-10-05), and the spine's AD-9 now
-  says a baseline without them is incomplete. It has its own spec,
-  `planning/specs/spec-runtime-calls/`, and nothing here claims it is done.
-  Floating point in compiled code is the same kind of defect:
+- **Calls inside compiled code** were a defect of milestone 1 (Corey,
+  2026-10-05: leaving them out was a bug), closed by spec-runtime-calls story 8;
+  "Measured" has the figures. Still exits: a call of a native or a template (story
+  9 and the spec's decision: a template runs in the interpreter, and its function
+  0 can be compiled when it enters it), of a value the declaration scan cannot
+  name (a parameter, an array element, a global with no declaration), and with the
+  wrong number of arguments. Tang has no tail call and none is added. Floating
+  point in compiled code is the same kind of defect:
   `planning/specs/spec-runtime-float/`.
 - **On-stack replacement into a running loop.** Compiled code is entered at a
   function's entry only; a loop that gets hot in a function called once runs in
@@ -1777,8 +1921,6 @@ The gain is where the supported set is: a hot loop over small integers and boole
   exits, and the interpreter does them.
 - **Hardening** of the generated code (guard pages, randomised layout, constant
   blinding): the pages are never writable and executable at once, and that is all.
-- **A precise native-frame walk for roots.** Not needed here, and what a wider
-  supported set would need first.
 - **Compile-time limits tuned to a benchmark.** The supported set, the threshold
   of 200 polls and the eight-deoptimization rule are the story's figures, taken as
   given; nothing was tuned (AD-26).

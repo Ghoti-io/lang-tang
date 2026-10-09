@@ -32,10 +32,16 @@ a **baseline JIT** behind a build option (`JIT=yes`, the default): a function th
 is hot is compiled, through [runtime-jit](../runtime-jit), to machine code for
 small-integer and boolean work, entered right after its entry poll, and left for
 the interpreter, in the same frame, at the first guard that fails or the first
-operation it does not compile. The output, the errors, the fuel and the polls are
-the interpreter's, which a frame differential (`tests/observer.h`, interpreter
-against JIT, at every poll), a fuel-parity test and a scripted debugger session
-with a breakpoint in compiled code each check; `JIT=no` builds the
+operation it does not compile. A call of a declared function from compiled code is
+a call between compiled functions, through the callee's entry slot and behind a
+guard on the callee value, with the chain of compiled frames described to the
+collector, the debugger and the frame differential and rebuilt into its guest
+frames on a pause, a guard or a budget (a context with no native-stack byte budget
+compiles no call; `tang --native-stack BYTES`, 1 MiB by default, sets it). The
+output, the errors, the fuel and the polls are the interpreter's, which a frame
+differential (`tests/observer.h`, interpreter against JIT, at every poll, chains
+included), a fuel-parity test and a scripted debugger session with a breakpoint in a
+compiled callee each check; `JIT=no` builds the
 interpreter-only engine and links nothing of it. A paused or new execution can be
 frozen into a **snapshot** and restored into a fresh context on any thread to
 finish exactly as an uninterrupted run does
@@ -136,7 +142,7 @@ this library:
 | `test-relocate` | the relocation arm: every unit suite against a runtime-heap built with `RELOCATE=yes` (`RELOCATE_PREFIX` names the prefix it is installed in), in which every collection moves every unpinned object and poisons the old cell, interpreted and with the JIT at threshold 1, the engine suites again with torture and verify so that a move happens at every GC point, and the two planted relocation defects; it fails, never skips, when that heap has no relocation mode (`tools/check-relocation-required.sh`); with `RELOCATE_PREFIX` given, `test` runs it |
 | `test-oracle` | parse and then run every file of `tests/corpus`, and 440 generated programs, with lang-tang and with ctang (in a child process, with a wall-clock kill and an address-space bound) and fail on any difference in the parse verdict, the rendered output or the final result that the ledger does not record; `ORACLE_PC` names the ctang package |
 | `fuzz-diff` | `make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S`: a campaign of N generated programs from seed S, both modes; a divergence prints its seed and the whole program |
-| `check-planted` | build a throwaway copy of the library, plant twelve defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner, and the JIT's three: a wrong tag on a compiled `ADD`, a skipped fuel charge, a missed write-back at a poll, and the two of snapshots: a host pointer left in a type's payload with no hook, and a skipped output-buffer capture) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script; cases 13 and 14 (a reference visited and not updated) need a heap that moves objects and are run by `check-planted-relocate`, which `test-relocate` calls |
+| `check-planted` | build a throwaway copy of the library, plant twenty-three defects one at a time (a missing root, a missing `gc_store`, an order-dependent DECIDE handler, a native that never polls, a wrong frame slot, a wrong operator, a silent oracle runner, the JIT's two: a wrong tag on a compiled `ADD` and a skipped fuel charge, the ten of compiled calls: a push hook that reads its arguments before the push, omits the `CALL`'s fuel or tests the depth one level early, a deopt hook that does not set the callers' identities or ignores a failed rebuild, a poll helper that copies the guest frame back, an uncompilable callee whose slot is not refused or whose exits count against its caller, a call that passes the entry flag as 1, and a discard that destroys the code directly, and the two of snapshots: a host pointer left in a type's payload with no hook, and a skipped output-buffer capture) and require the instrument named for each to fail and, with the patch out, to pass; `check-planted-quick` is part of `test`, `check-planted-slow` of `test-torture`, `check-planted-selftest` proves the script; cases 13, 14, 15 and 20 (a reference visited and not updated, or put back stale) need a heap that moves objects and are run by `check-planted-relocate`, which `test-relocate` calls |
 | `check-labels` | fail if a public header has no `@stability` label, or the wrong one (`stable` for the C interface, `free` for the syntax tree's node classes) |
 | `check-edges` | fail on any `#include` or shared-object dependency on a Ghoti library other than `cutil`, `unicode`, `runtime-core`, `runtime-heap` and this one (and `runtime-jit` under `JIT=yes`, in `src/jit/` only; under `JIT=no` nothing of it at all) - ctang above all - and on any include of `binary.h`; `runtime-debug` and `text` are allowed only in `src/tang.c` and `examples/web_server.c` (includes) and in the `tang` and `web_server` programs (NEEDED), never in the library |
 | `check-gates` | run each gate against a planted defect and a control, and against an empty tree, and fail unless each behaves |
@@ -197,6 +203,7 @@ tang --seed 5 -e 'use random; print(random.global.next_int);'  # a fixed master 
 tang --errors -e 'print(1 / 0);'         # the error list, to stderr: main:<evaluate>:1: Divide by zero
 tang --halt-on-error -e 'print("a"); print(1 / 0); print("b");'   # prints a, exit status 8
 tang --jit-threshold 1 --jit-stats -s hot.tang   # compile every function at its first poll; the JIT's counters go to stderr
+tang --native-stack 4194304 -s deep.tang  # the native stack compiled code may use (default 1 MiB; 0: no limit, and then no call between compiled functions is compiled)
 ```
 
 A syntax or compile error is `name:line:column: message` on stderr and exit
