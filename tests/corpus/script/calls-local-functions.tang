@@ -1,0 +1,10 @@
+// Functions declared inside a function are locals of it, and a call of one is
+// named by the declaration the compiler emits for it.
+function outer(n) {
+  function half(k) { return k - 1; }
+  function inc(k) { return k + 2; }
+  return half(n) + inc(n) + half(inc(n));
+}
+s = 0;
+for (i = 0; i < 12; i += 1) { s = s + outer(i); }
+print(s);

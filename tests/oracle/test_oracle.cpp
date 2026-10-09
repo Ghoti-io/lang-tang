@@ -199,6 +199,24 @@ TEST(Oracle, LangTangAndCtangRunEveryCorpusFileToTheSameOutputAndResultOrALedger
     ADD_FAILURE() << f;
   }
 
+  // The same files again with every function compiled at its first poll (the
+  // calls between compiled functions included): the compiled run must agree with
+  // ctang exactly as the interpreted one does, under the same ledger.
+  {
+    std::vector<oracle::Entry> compiled;
+    for (const auto & e : entries) {
+      bool script = e.file.compare(0, 7, "script/") == 0;
+      oracle::Entry c = e;
+      c.lang_tang = oracle::lang_tang_run(read_file(kCorpus + "/" + e.file), script, oracle::kDifferentialFuel, 1);
+      compiled.push_back(c);
+    }
+    oracle::Judgement jc = oracle::judge(compiled, ledger);
+    for (const auto & f : jc.failures) {
+      ADD_FAILURE() << "compiled at the first poll: " << f;
+    }
+    EXPECT_EQ(jc.agreed, j.agreed) << "the compiled run agrees with ctang on exactly the files the interpreted one does";
+  }
+
   // A row's files must be run by this differential; otherwise it could never
   // be seen to go stale.
   std::set<std::string> ran;

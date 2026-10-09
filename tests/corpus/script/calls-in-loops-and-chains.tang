@@ -1,0 +1,7 @@
+// Calls in loops, a chain of three, and a result used by the caller after each.
+function leaf(n) { s = n * 2; return s + 1; }
+function mid(n) { t = leaf(n); return t + 1; }
+function top(n) { u = mid(n); return u + 1; }
+total = 0;
+for (k = 0; k < 40; k += 1) { total = total + top(k); }
+print(total); print(" "); print(top(1000));

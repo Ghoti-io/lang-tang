@@ -1,0 +1,4 @@
+// A call tree: fib calls itself twice, so with the JIT on every call but the
+// first is a call between compiled functions.
+function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }
+print(fib(14)); print(" "); print(fib(10)); print(" "); print(fib(1));

@@ -133,6 +133,45 @@ TEST(FuzzDiff, FixedBatchOfGeneratedProgramsAgreesOnBothEngines) {
   std::printf("  fuzz-diff fixed batch: 440 programs (seeds 1 to 220, both modes), %zu agree\n", agreed);
 }
 
+TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFirstPoll) {
+  const char * runner = runner_or_null();
+  ASSERT_NE(runner, nullptr);
+  std::string dir = work_dir(runner);
+  size_t agreed = 0, killed = 0, shown = 0;
+  // FUZZ_DIFF_CALL_GRAPHS=N runs N programs from FUZZ_DIFF_SEED (the campaign on the EVO).
+  const char * count_text = std::getenv("FUZZ_DIFF_CALL_GRAPHS");
+  const char * seed_text = std::getenv("FUZZ_DIFF_SEED");
+  const uint64_t kCount = count_text && *count_text ? std::strtoull(count_text, nullptr, 10) : 300;
+  const uint64_t kFirst = seed_text && *seed_text ? std::strtoull(seed_text, nullptr, 10) : 1;
+  for (uint64_t seed = kFirst; seed < kFirst + kCount; ++seed) {
+    gen::Program program = gen::generate_calls(seed);
+    std::string path = dir + "/c-" + std::to_string(seed) + ".tang";
+    {
+      std::ofstream f(path, std::ios::binary);
+      f << program.source;
+    }
+    oracle::Verdict theirs = oracle::ctang_run_verdict(runner, "run-script", path, kCtangTimeoutMs);
+    std::remove(path.c_str());
+    killed += theirs.kind == oracle::Kind::Killed;
+    bool ok = true;
+    for (long threshold : {0L, 1L}) {
+      oracle::Verdict ours = oracle::lang_tang_run(program.source, true, oracle::kDifferentialFuel, threshold);
+      if (!oracle::agree(ours, theirs)) {
+        ok = false;
+        if (shown++ < 3) {
+          ADD_FAILURE() << "DIVERGENCE at call-graph seed " << seed << (threshold ? " (compiled at the first poll)" : " (interpreted)") << ": "
+                        << oracle::difference(ours, theirs) << "\n--- program ---\n" << program.source << "--- end of seed " << seed << " ---";
+        }
+      }
+    }
+    agreed += ok;
+  }
+  EXPECT_EQ(agreed, kCount);
+  EXPECT_EQ(killed, 0u);
+  std::printf("  fuzz-diff call graphs: %llu programs (seeds %llu to %llu), interpreted and compiled, %zu agree with ctang\n",
+      (unsigned long long)kCount, (unsigned long long)kFirst, (unsigned long long)(kFirst + kCount - 1), agreed);
+}
+
 TEST(FuzzDiff, APlantedDivergenceIsReportedWithItsSeedAndProgram) {
   const char * runner = runner_or_null();
   ASSERT_NE(runner, nullptr);

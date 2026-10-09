@@ -872,6 +872,101 @@ TEST(TangDap, ABreakpointInCompiledCodeStopsAtTheRightLineWithTheRightLocalsAndS
   EXPECT_NE(interpreter.err.find("compiled 0, failed 0, discarded 0, entries 0,"), std::string::npos) << interpreter.err;
 }
 
+namespace {
+
+// A chain of three calls, compiled at their first calls: the breakpoint is in the
+// innermost, so a stop there has three compiled frames under it.
+const char * const kChain =
+    "function leaf(n) {\n"        // 1
+    "  s = n * 2;\n"              // 2
+    "  return s + 1;\n"           // 3
+    "}\n"                         // 4
+    "function mid(n) {\n"         // 5
+    "  t = leaf(n);\n"            // 6
+    "  return t + 1;\n"           // 7
+    "}\n"                         // 8
+    "function top(n) {\n"         // 9
+    "  u = mid(n);\n"             // 10
+    "  return u + 1;\n"           // 11
+    "}\n"                         // 12
+    "total = 0;\n"                // 13
+    "for (k = 0; k < 6; k += 1) { total = total + top(k); }\n"  // 14
+    "print(total);\n";            // 15
+
+// The whole stack at a stop: every frame's name, line and local variables, as the
+// client reads them.
+std::string whole_stack(Tang & tang) {
+  std::string trace = tang.request("stackTrace", "{\"threadId\":1}");
+  std::string out = trace + "\n";
+  size_t at = 0;
+  while ((at = trace.find("\"id\":", at)) != std::string::npos) {
+    long id = number_after(trace.substr(at), "\"id\":");
+    out += "  frame " + std::to_string(id) + ": " + tang.locals(id) + "\n";
+    at += 5;
+  }
+  return out;
+}
+
+std::string play_chain(const std::string & file, long jit_threshold, std::string * err) {
+  Tang tang({"--script", "--dap", "--jit-threshold", std::to_string(jit_threshold), "--jit-stats", file});
+  tang.configure(file, {2});
+  std::string transcript;
+  auto stop = [&](const char * what) {
+    std::string event = tang.event("stopped");
+    EXPECT_FALSE(event.empty()) << what;
+    transcript += std::string(what) + ": " + (event.find("\"reason\":\"breakpoint\"") != std::string::npos ? "breakpoint" : "step") + "\n" + whole_stack(tang);
+  };
+  stop("inside leaf");
+  // Out of leaf and out of mid: each stop is in the caller, which was a compiled
+  // frame and is now an interpreter frame, on the line after its call.
+  for (const char * step : {"stepOut", "stepOut"}) {
+    EXPECT_NE(tang.request(step, "{\"threadId\":1}").find("\"success\":true"), std::string::npos) << step;
+    stop(step);
+  }
+  // The next call of the chain stops at the breakpoint again, and the next one
+  // finishes a step over inside the callee.
+  EXPECT_NE(tang.request("continue", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
+  stop("second call, inside leaf");
+  EXPECT_NE(tang.request("next", "{\"threadId\":1}").find("\"success\":true"), std::string::npos);
+  stop("next");
+  std::string reply = tang.request("setBreakpoints", "{\"source\":{\"path\":\"" + file + "\"},\"breakpoints\":[]}");
+  EXPECT_NE(reply.find("\"success\":true"), std::string::npos) << reply;
+  tang.request("continue", "{\"threadId\":1}");
+  transcript += "then: " + tang.next_stop_or_end() + "\n";
+  tang.request("disconnect");
+  Result result = tang.finish();
+  EXPECT_EQ(result.status, 0) << result.err;
+  *err = result.err;
+  return transcript;
+}
+
+}  // namespace
+
+TEST(TangDap, ABreakpointInACompiledCalleeShowsTheWholeChainFrameForFrameAndStepOutStopsInTheCompiledCaller) {
+  TempDir dir;
+  std::string file = dir.write("chain.tang", kChain);
+  std::string interpreter_err, compiled_err;
+  std::string interpreter = play_chain(file, 0, &interpreter_err);
+  std::string compiled = play_chain(file, 1, &compiled_err);
+  // The same session, stop for stop and frame for frame: names, lines and locals.
+  EXPECT_EQ(compiled, interpreter);
+  if (std::getenv("GLTANG_DAP_VERBOSE")) {
+    std::printf("%s", compiled.c_str());
+  }
+  // It is the stack it should be: leaf, mid, top and the program, four frames
+  // deep, with the locals of each; and a step out lands in the caller.
+  EXPECT_NE(compiled.find("inside leaf: breakpoint"), std::string::npos) << compiled;
+  EXPECT_NE(compiled.find("\"totalFrames\":4"), std::string::npos) << compiled;
+  EXPECT_NE(compiled.find("\"name\":\"n\",\"value\":\"0\""), std::string::npos) << compiled;
+  EXPECT_NE(compiled.find("stepOut: step"), std::string::npos) << compiled;
+  EXPECT_NE(compiled.find("\"totalFrames\":3"), std::string::npos) << "a step out of leaf stops in mid, one frame less: " << compiled;
+  EXPECT_NE(compiled.find("\"totalFrames\":2"), std::string::npos) << "and a second one in top: " << compiled;
+  // The compiled run's chain was really compiled, and a stop inside it was a pause.
+  EXPECT_EQ(compiled_err.find("calls 0,"), std::string::npos) << compiled_err;
+  EXPECT_EQ(compiled_err.find("pauses 0,"), std::string::npos) << compiled_err;
+  EXPECT_EQ(compiled_err.substr(0, compiled_err.find("jit:")), interpreter_err.substr(0, interpreter_err.find("jit:")));
+}
+
 #endif  // GLTANG_WITH_JIT
 
 #endif  // _WIN32

@@ -126,9 +126,10 @@ struct LangTangRun {
 };
 
 /// Compiles and runs `source` on lang-tang, as the corpus and the generator do.
-/// `config` carries the fuel; a run that spends it, or is unwound with the
-/// limit, is `paused`. A program that does not compile is `reject`.
-inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t fuel = kDifferentialFuel) {
+/// `fuel` is the budget and `jit_threshold` the tier-up threshold (-1: the
+/// environment's, then the library's, 0: off, 1: every function at its first
+/// poll); a run that spends the fuel, or is unwound with the limit, is `paused`. A program that does not compile is `reject`.
+inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t fuel = kDifferentialFuel, long jit_threshold = -1) {
   tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
   if (compiled.result == GLTANG_ERR_FORMAT) {
     return Verdict::reject();
@@ -139,6 +140,7 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
   }
   tt::Config config;
   config.fuel = fuel;
+  config.jit_threshold = jit_threshold;  // -1: the environment's, then the library's
   tt::Context context(compiled.program, config);
   if (!context.ok()) {
     throw std::runtime_error("lang-tang could not make a context");

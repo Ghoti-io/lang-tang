@@ -1,0 +1,8 @@
+// A call through a parameter or an array element names no function the compiler
+// can see, so it stays an exit in compiled code, with the interpreter's value.
+function inc(x) { return x + 1; }
+function apply(f, x) { return f(x); }
+function viaarray(i) { fs = [inc, inc]; return fs[i % 2](i); }
+t = 0;
+for (k = 0; k < 20; k += 1) { t = t + apply(inc, k) + viaarray(k); }
+print(t);

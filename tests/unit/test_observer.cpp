@@ -304,6 +304,59 @@ std::vector<Case> generated_cases(uint64_t seeds) {
   return cases;
 }
 
+/// Call-heavy programs for the frame differential of compiled calls: chains of
+/// compiled frames at every poll (a pause at the bottom of a chain is a chain
+/// rebuilt), references and wide argument lists down a chain, a guard that fails
+/// three frames down, a callee that is null, a local function, recursion to the
+/// depth budget, and generated call graphs (tests/fuzz/gen.h).
+std::vector<Case> call_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step) {
+    Case c;
+    c.name = "calls/" + name;
+    c.source = source;
+    c.parts = std::move(parts);
+    c.step = step;
+    cases.push_back(c);
+  };
+  add("fib", "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }\nprint(fib(9));", {}, 37);
+  add("a wide callee",
+      "function s6(a, b, c, d, e, f) { return a + b + c + d + e + f; }\n"
+      "function mid(x) { return s6(x, 1, 2, 3, 4, 5) + s6(1, x, 2, 3, 4, 5); }\n"
+      "function top(n) { t = 0; for (i = 0; i < n; i += 1) { t = t + mid(i); } return t; }\n"
+      "print(top(12));", {}, 29);
+  add("references down a chain",
+      "function pass(a, b) { k = 0; while (k < 3) { k = k + 1; } return b; }\n"
+      "function wrap(a, b) { r = pass(b, a); s = pass(a, b); return r; }\n"
+      "x = wrap([1], [2]); print(x[0]);", {}, 11);
+  add("a guard three frames down",
+      "function g(n, x) { if (n == 0) { return x + x; } return g(n - 1, x) + 1; }\n"
+      "M = 576460752303423487;\nprint(g(2, M)); print(g(2, 3)); print(g(3, M));", {}, 17);
+  add("a callee that is null",
+      "flag = false;\nif (flag) { function f(x) { return x + 1; } }\n"
+      "function call(i) { return f(i); }\nt = 0; for (k = 0; k < 5; k += 1) { v = call(k); t = t + 1; } print(t);", {}, 19);
+  add("local functions",
+      "function outer(n) { function half(k) { return k - 1; } function inc(k) { return k + 2; } return half(n) + inc(n) + half(inc(n)); }\n"
+      "s = 0; for (i = 0; i < 6; i += 1) { s = s + outer(i); } print(s);", {}, 23);
+  add("recursion to the depth budget",
+      "function f(n) { return f(n + 1); }\nx = f(0); print(x as string); print(\"after\");", {}, 400);
+  add("a chain of recursion in a template",
+      "use t; print(t());",
+      {{"t", "function down(n) { if (n == 0) { i = 0; while (i < 30) { i = i + 1; } return i; } return down(n - 1) + 1; }\nprint(down(12));", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Script}}, 41);
+  add("a template scope that runs out in a chain",
+      "use t; print(\"[\" + t() + \"]\"); print(\"after\");",
+      {{"t", "function down(n) { if (n == 0) { i = 0; while (true) { i = i + 1; } } return down(n - 1) + 1; }\nprint(down(6));", 500, GLTANG_SCOPE_EMPTY, tt::Mode::Script}}, 60);
+  for (uint64_t seed = 1; seed <= 8; ++seed) {
+    Case c;
+    c.name = "calls/generated " + std::to_string(seed);
+    c.source = gen::generate_calls(seed).source;
+    c.step = 150;
+    c.limit = 150;
+    cases.push_back(c);
+  }
+  return cases;
+}
+
 std::vector<Case> all_cases() {
   std::vector<Case> cases = corpus_cases("script", tt::Mode::Script, 40);
   for (Case & c : generated_cases(6)) {
@@ -313,6 +366,9 @@ std::vector<Case> all_cases() {
     cases.push_back(std::move(c));
   }
   for (Case & c : site_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : call_cases()) {
     cases.push_back(std::move(c));
   }
   return cases;
@@ -335,7 +391,7 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
   ASSERT_GE(cases.size(), 40u);
   size_t polls = 0, pauses = 0, deep = 0, scopes_with_variables = 0, polls_with_statements = 0;
 #ifdef GLTANG_WITH_JIT
-  uint64_t jit_entries = 0, jit_slow_polls = 0, jit_refused_pauses = 0;
+  uint64_t jit_entries = 0, jit_slow_polls = 0, jit_refused_pauses = 0, jit_calls = 0, jit_hook_errors = 0;
 #endif
   // Under Valgrind a poll costs fifty milliseconds to record: each program
   // records its first few polls and compares the count of the rest. The other
@@ -399,6 +455,8 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     jit_entries += jit.jit.entries + lines_jit.jit.entries;
     jit_slow_polls += jit.jit.slow_polls + lines_jit.jit.slow_polls;
     jit_refused_pauses += jit.jit.refused_pauses + lines_jit.jit.refused_pauses;
+    jit_calls += jit.jit.calls + lines_jit.jit.calls;
+    jit_hook_errors += jit.jit.hook_argument_errors + lines_jit.jit.hook_argument_errors;
 #endif
   }
   EXPECT_GT(polls, RUNNING_ON_VALGRIND ? 200u : 1800u);
@@ -416,6 +474,10 @@ TEST(Observer, PlainTortureMovingStackAndShuffledPhasesGiveTheSameFrameTraceOutp
     EXPECT_GT(jit_entries, 100u) << "the JIT runs entered compiled code";
     EXPECT_GT(jit_slow_polls, 100u) << "polls inside compiled code took the slow path";
     EXPECT_GT(jit_refused_pauses, 5u) << "a pause at a poll inside compiled code is in the set";
+    // The frame differential of calls between compiled functions: this is the gate
+    // that fails when the run shows none, whatever else it compared.
+    EXPECT_GT(jit_calls, 500u) << "the corpus run made calls between compiled functions: chains of compiled frames were compared at the polls";
+    EXPECT_EQ(jit_hook_errors, 0u);
   }
 #endif
   std::printf("  observer: %zu programs x %d configurations (%d with statement polls), %zu polls, %zu pauses\n", cases.size(),
