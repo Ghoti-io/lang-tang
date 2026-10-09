@@ -808,9 +808,23 @@ class CallBuilder {
       head += (i ? ", p" : "p") + std::to_string(i);
     }
     head += ") {";
-    int shape = (int)below(6);
+    int shape = (int)below(7);
     if (index == 0 && shape >= 2) {
       shape = (int)below(2);  // nothing declared before it to call
+    }
+    // Shape 6 needs two earlier functions of one parameter count to choose between.
+    int pair_a = -1, pair_b = -1;
+    for (size_t x = 0; shape == 6 && x < fns_.size() && pair_b < 0; ++x) {
+      for (size_t y = x + 1; y < fns_.size(); ++y) {
+        if (fns_[x].params == fns_[y].params) {
+          pair_a = (int)x;
+          pair_b = (int)y;
+          break;
+        }
+      }
+    }
+    if (shape == 6 && pair_b < 0) {
+      shape = 2;
     }
     if (params == 0 && (shape == 4 || shape == 5)) {
       shape = 0;
@@ -847,6 +861,13 @@ class CallBuilder {
           rest += ", " + expr(params, 1);
         }
         line("  return (" + name + "(p0 - 1" + rest + ") + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
+      case 6: {  // the callee is a value two paths produce: never a compiled call site
+        const Fn & a = fns_[pair_a];
+        const Fn & b = fns_[pair_b];
+        line("  c = " + expr(params, 1) + " % 2 == 0;");
+        line("  return ((c ? " + a.name + " : " + b.name + ")(" + args_over(a.params, params, 1) + ") + " + expr(params, 1) + ") % 100003;");
         break;
       }
       default: {  // tree recursion, as fib, at most nine deep

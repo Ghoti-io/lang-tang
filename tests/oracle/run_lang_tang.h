@@ -23,6 +23,7 @@
 
 #include "exec_harness.h"
 #include "oracle/oracle.h"
+#include "test_helpers.h"
 
 #include <cstdio>
 

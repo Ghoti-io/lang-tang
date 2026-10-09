@@ -253,6 +253,55 @@ TEST(JitCalls, ACalleeTheInterpreterTiersUpIsCalledDirectlyFromThenOnWithoutReco
   EXPECT_EQ(exits(jit.stats), 0u);
 }
 
+// A callee operand that two paths produce differently is not a call site: the
+// operand stack position merges to "no single producer" and the CALL stays an exit
+// (an unconditional one, so it counts against its function and not as a call exit),
+// whatever the callee value is at run time. Without the merge the first path's
+// producer would name the callee and the site would be compiled as a call to it,
+// and the other path would leave at the callee-value guard instead.
+TEST(JitCalls, ACalleeOperandTwoPathsProduceDifferentlyIsNeverACompiledCallSite) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  const std::vector<std::pair<const char *, const char *>> shapes = {
+      {"ternary", "(c ? f : g)(x)"},
+      {"and-or", "((c && f) || g)(x)"},
+      {"nested ternary", "(c ? (x > 3 ? f : g) : g)(x)"},
+  };
+  for (const auto & shape : shapes) {
+    const std::string callee = shape.second;
+    auto program = [&](const std::string & call) {
+      return "function f(x) { return x + 1; }\nfunction g(x) { return x + 2; }\n"
+             "function t(c, x) { return " + call + "; }\n"
+             "function drive(n) { s = 0; for (i = 0; i < n; i += 1) { s = s + t(i % 2 == 0, i); } return s; }\n"
+             "print(drive(30));\n";
+    };
+    // The control: one named callee, a compiled call site.
+    Scenario control;
+    control.source = program("f(x)");
+    control.script = true;
+    Outcome control_plain, control_jit;
+    expect_same(control, &control_plain, &control_jit);
+    ASSERT_GE(control_jit.stats.calls, 20u) << shape.first << ": the control compiles its call";
+
+    Scenario sc;
+    sc.source = program(callee);
+    sc.script = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    EXPECT_EQ(jit.raw, plain.raw) << shape.first;
+    EXPECT_EQ(exits(jit.stats), 0u) << shape.first << ": the site was never a call site, so no call exit of any class was made at it (a callee-value guard exit means the merge was lost)";
+    EXPECT_EQ(jit.stats.compile_at_call, 0u) << shape.first << ": no callee was compiled for a call site, there is none";
+    EXPECT_GE(jit.stats.deopts, 1u) << shape.first << ": the CALL is an unconditional exit";
+    EXPECT_LT(jit.stats.calls, control_jit.stats.calls) << shape.first << ": fewer compiled calls than the control, which has a site per iteration";
+    EXPECT_EQ(jit.stats.rebuild_failures, 0u) << shape.first;
+    EXPECT_EQ(jit.stats.hook_argument_errors, 0u) << shape.first;
+    // Every function compiled: the analysis that merged the producers had to be run
+    // again from nothing (the CALL was first walked with the first path's producer
+    // and its successors with it), or the code after the exit is left reachable
+    // from stale state and the compile of the function fails.
+    EXPECT_EQ(jit.stats.compile_failures, 0u) << shape.first << ": a merge found after the CALL was walked must not leave the code after it half-analysed";
+  }
+}
+
 TEST(JitCalls, ACalleeThatCannotBeCompiledIsAnExitOnceRememberedAndNeverCountsAgainstItsCaller) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The caller is compiled; then the page provider stops making memory
