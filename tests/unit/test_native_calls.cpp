@@ -373,6 +373,7 @@ TEST(NativeCalls, ABudgetOfFuelThatRunsOutInsideANestedActivationUnwindsToItsBou
   // nested activation is an unwind of that call (the record is nested, AD-5); the
   // run ends, and ends the same way in both tiers.
   uint64_t unwound_inside = 0;
+  uint64_t status_unwinds = 0;
   for (uint64_t budget = 1; budget <= 400; budget += 3) {
     Scenario sc = native_scenario(
         "function leaf(x) { k = 0; while (k < 4) { k = k + 1; } return x + k; }\n"
@@ -382,12 +383,14 @@ TEST(NativeCalls, ABudgetOfFuelThatRunsOutInsideANestedActivationUnwindsToItsBou
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
     unwound_inside += !plain.finished;
+    status_unwinds += jit.stats.native_status_unwinds;
     if (HasFailure()) {
       ADD_FAILURE() << "with a fuel budget of " << budget;
       return;
     }
   }
   EXPECT_GT(unwound_inside, 10u) << "most budgets end the run";
+  EXPECT_GT(status_unwinds, 0u) << "an unwind inside the nested activation reached the compiled caller as the native's status";
 }
 
 TEST(NativeCalls, ANativeDepthBudgetSweptFromOneUpRefusesTheSameReentryAtTheSamePollAndFuelInBothTiers) {
