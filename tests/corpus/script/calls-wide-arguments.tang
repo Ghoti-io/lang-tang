@@ -1,5 +1,7 @@
-// Callees of 8, 12 and 15 parameters, called from a loop: the arguments past the
-// sixth go on the native stack in a compiled call, and the frames are padded.
+// Callees of 8, 12 and 15 parameters, called from a loop. A compiled call passes
+// its parameters and the hidden entry flag in registers up to a per-target count
+// (6 on x86-64 SysV, 8 on arm64, 4 on Win64) and the rest on the native stack, so
+// on every target at least some of these go on the stack, and the frames are padded.
 function sum8(a0, a1, a2, a3, a4, a5, a6, a7) { return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7; }
 function sum12(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
   return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11;

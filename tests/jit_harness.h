@@ -1,22 +1,21 @@
-/**
- * @file
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
  *
- * A host for the execution tests: the group, the options, the context, the
- * heap and the execution that a host makes with runtime-core and runtime-heap,
- * wrapped so that a test says what it runs and what it expects.
+ * Copyright (C) 2024-2026 Corey Pennycuff
  *
- * Every allocation the context, the heap and the engine make passes through a
- * tracker that counts live blocks and live pages, so each test also proves that
- * destroying the context gives all of it back (nothing leaks). The tracker can
- * fail the Nth allocation, which is how the allocation-failure sweep reaches
- * the engine's own arms.
+ * This file is part of Ghoti.io Lang-tang.
  *
- * The variants the suite is run under are chosen by the environment so that
- * one binary serves them all: GRHEAP_TORTURE=1 and GRHEAP_VERIFY=1 are the
- * heap's own (runtime-heap reads them), and GLTANG_TEST_MOVING_STACK=1 moves
- * the guest stack on every push.
+ * Ghoti.io Lang-tang is free software: you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License version
+ * 3 as published by the Free Software Foundation.
  *
- * Copyright 2026 by Corey Pennycuff
+ * Ghoti.io Lang-tang is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef GHOTI_IO_GLTANG_TEST_JIT_HARNESS_H

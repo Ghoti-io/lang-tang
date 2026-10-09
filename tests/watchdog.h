@@ -28,6 +28,12 @@
 
 #include <gtest/gtest.h>
 
+#if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
+#include <valgrind/valgrind.h>
+#else
+#define RUNNING_ON_VALGRIND 0
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -91,6 +97,9 @@ inline unsigned heavy_seconds_scale() {
   }
   if (moving && *moving && *moving != '0') {
     scale *= 4;
+  }
+  if (RUNNING_ON_VALGRIND) {
+    scale *= 10;
   }
   return scale;
 }
