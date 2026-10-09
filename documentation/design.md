@@ -603,16 +603,66 @@ and a run that is unaffected. This is the contract story 9 deferred when it said
 "the `use` resolver is a host callback with no re-entrancy or thread rule".
 
 A native costs one unit of fuel like any call, and one more per
-`GLTANG_WORK_BYTES_PER_FUEL` bytes it returns. The call object points into the
-operand stack - copying the arguments would cost an allocation per call - which
-is sound because the function cannot reach a GC point or push a frame. A string
-answer is copied when it is set, since the function's buffer may be gone when it
-returns. Returning false with nothing set is the error `Host function failed`;
-returning with nothing set is null.
+`GLTANG_WORK_BYTES_PER_FUEL` bytes it returns. The call object points at a copy
+of the arguments in the frame of the shared wrapper that enters the native (next
+section), made before anything can collect and pinned by the wrapper's record,
+which is sound because the function cannot reach a GC point or push a frame. A
+string answer is copied when it is set, since the function's buffer may be gone
+when it returns. Returning false with nothing set is the error `Host function
+failed`; returning with nothing set is null.
 
 **Rejected: letting a native call guest functions.** It would make the native a
 nested activation that cannot pause, and a pause inside it would have to be
-refused by the poll (AD-5), which is what AD-23 states instead.
+refused by the poll (AD-5), which is what AD-23 states instead. That stays true of
+the library API a host uses; the engine itself has the two shapes AD-23 names for
+its own natives (a nested activation, and a resumable native), reached only by
+the test natives below.
+
+### Entering a native: one wrapper for both tiers
+
+`gltang_vm_call_native` (`src/vm/libvalue.c`) is the only place a native is
+entered, from the interpreter's `CALL` and from the thunks compiled code calls
+(`src/jit/natives.c`) alike (spec-runtime-calls story 9, AD-28, AD-23). It copies
+the callee and the arguments into its own frame before anything can collect; opens
+a `GRCORE_ACTIVATION_NATIVE` record whose conservative segment is that frame (from
+the copies to the base of the innermost compiled frame when compiled code called,
+which the call stored in the walk-start cell first, and to just above its own frame
+when the interpreter did), so the objects the copies name are pinned and the native
+reads the copy and not an operand stack a collection may have moved; runs the native;
+and leaves the record. The record enters the native-depth budget (AD-21), so a
+program that nests natives is limited by `grcore_options_set_native_depth`; a refused
+record is the call's value, the recursion-limit error for the depth budget (as the
+guest-depth budget's refusal is) and the out-of-memory value for the memory budget (after
+the budget's verdict poll). Entering a nested activation is a GC point (AD-17): the heap's
+torture mode owns only the GC points the heap has, so under torture the wrapper collects
+once its record is open (the test switch `native_gc_seam`).
+
+*Depth is the same in both tiers.* An interpreted run opens no record, so a nesting of
+natives costs it one unit of the native-depth budget a level; under compiled code each
+compiled run has a JIT record that costs a unit too, and a compiled nesting would be
+refused sooner. A native called from compiled code therefore hands back the units the
+open JIT records cost for as long as it runs (`gltang_jit_lend_depth`, taken back when it
+returns), so the budget the native, and any re-entry it opens, sees is the interpreter's.
+A compiled entry that the budget refuses is "not entered" and the interpreter runs the
+function, which the output cannot tell. The same budget therefore refuses the same call,
+at the same poll and fuel total, whichever tier runs it (the sweep in `test_native_calls.cpp`
+nests re-entering natives under every budget from 1 to 24 and compares fuel, polls and error
+list). Memory timing is the one thing that may differ: the array of records grows by doubling,
+and a compiled run holds more records.
+
+*The test natives* (`src/vm/testnatives.c`, registered by a test through the internal
+`gltang_vm_test_add_native`; no header names it) are the cases an opaque host function never
+meets: `depth` and `records` (what the wrapper opened), `echo`, `alloc_ref` and `alloc_n`
+(natives that allocate), `reenter` (calls a guest function as a nested activation,
+`src/vm/nested.c`: a `REENTRY` record, the function's frame pushed, and the same interpreter
+loop run on it until that frame returns, entering compiled code as it does for any function; a
+pause inside it is an unwind that stops at the record), `deopt` (returns its argument and asks
+compiled code to leave after the call, the status the library names `GRJIT_NATIVE_DEOPT`) and
+`resumable` (the native calls `f` three times and returns the sum; it asks the interpreter,
+which makes each call from its own loop and leaves a native bound to the native's state in the
+caller's frame as the continuation, so a pause inside `f` resumes like any other, and the
+continuation is called again with `f`'s value). A resumable native is reached only through an exit:
+the JIT does not compile a call of a member that is flagged resumable.
 
 ### Native values
 
@@ -1642,6 +1692,42 @@ fifteen parameters or too many slots. A context with no native-stack byte budget
 compiles no call site at all: recursion measured in bytes has nothing to be
 measured against, and a fault is never an acceptable result.
 
+**Library calls and loads (spec-runtime-calls story 9, CAP-7).** A `CALL n` of a library
+native, and the `USE` and `.name` that produce it, compile as `GRJIT_OP_CALL_NATIVE`
+(runtime-jit's registered, typed native call: a GC point, an exit state before it, a status
+and the state after it) to thunks in `src/jit/natives.c` that are the interpreter's own
+operations: `gltang_vm_call_native` (above), `gltang_vm_resolve` and `gltang_vm_op_attr`, called
+as the interpreter calls them, so the value, the allocation, the fuel and the error text are
+one code path and a load gives whatever the libraries hold *now*. The table (one per execution,
+`GRJIT_NativeTable`) holds a call thunk for each argument count from 0 to 15 (the callee is the first
+parameter), the `use` thunk and the `.name` thunk, each with a status; a call thunk declares the
+re-enter flag and every thunk 4 KiB of native stack, which the call site checks against the
+native-stack budget before it calls (an exit, not counted toward the discard limit, with nothing
+charged). What is *static* is only which sites compile: the producer analysis names the
+instruction that made the callee, and a small scan finds the shapes `compile_use` emits
+(`USE k; STORE_x s; POP`) as the function scan finds a declaration's, so a callee read from a
+global or a local that one `use` binds, or from `.name` of a library that one `use` binds, is
+resolved against the libraries now to the member it names. A site compiles when that member is a
+host function that is not flagged resumable (and, for a load, a host function or a library). The
+call site then guards the callee value against that member (a leaf that is not a GC point: the
+value is a native of that member and not an engine builtin); a mismatch is a guard exit and counts
+toward the discard limit, so a variable that is reassigned costs one exit and not a wrong call. A load
+needs no guard: it is the interpreter's operation, called. Everything else stays an exit as before:
+a load that does not yield a host function or a library, the engine's builtins (`random.seeded`,
+`rng.set_seed`), the poll operations of `natives.def`, templates, a call with more than fifteen
+arguments, a value the scan cannot name. The call's fuel is charged by the thunk after the site's
+checks have passed (as the push hook charges a guest call's), so an exit before the call charges
+nothing and the interpreter charges it when it makes the call.
+
+A thunk returns the value and a status. `GLTANG_V_UNWIND`, which a runtime poll returns when it orders
+the run to stop, is `GRJIT_NATIVE_UNWIND`: the site exits with the state after the call, the deopt
+hook skips every compiled frame of the run as for a poll's unwind (cause `NATIVE | 2`) and the
+interpreter's `unwound` takes over. A test native may ask compiled code to leave (`GRJIT_NATIVE_DEOPT`,
+cause `NATIVE | 1`): the whole chain is rebuilt with the call done and its value in place, and the
+interpreter goes on after it; the native ran once. Neither status counts toward a discard limit. A
+backend that refuses natives, or an execution whose table could not be made, leaves the sites as
+exits and counts them (`native_sites_unsupported`), never a fault.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, the flag 0;
 anything else is refused and counted in `hook_argument_errors`), tests the guest
@@ -1678,15 +1764,16 @@ returns into it. The discard is applied after the entry's record is left.
 **What is compiled.** Inline: `POLL`, `LINE`, `POP`, `DUP`, `NULL`, `TRUE`,
 `FALSE`, `CONST` (a small integer only), `LOAD_LOCAL`, `STORE_LOCAL`,
 `LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `LT`, `LE`, `GT`, `GE`,
-`EQ`, `NE`, `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above.
+`EQ`, `NE`, `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, and the
+library `USE`, `ATTR` and `CALL` described there.
 Each step mirrors the interpreter's own inline path: both operands carry the
 integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
 small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
 the product cannot leave the range; the operand of `NOT`, the jumps, `AND` and `OR`
 must be a boolean. Everything else (`DIV`, `MOD`, casts, indexing, attributes,
 slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `PRINT*`, `ITER_*`,
-`DISCARD`, `SET_RESULT`, `USE`, `HALT` and any other constant) is an unconditional
-exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
+`DISCARD`, `SET_RESULT`, a `USE` or `ATTR` that is not a library load, `HALT` and any other constant)
+is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
 (a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
 
 **Frame states are exactly the guest frame.** `frame_slots` slots in the guest
