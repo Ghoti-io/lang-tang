@@ -1993,12 +1993,17 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
 ### What is not done
 
 - **Calls inside compiled code** were a defect of milestone 1 (Corey,
-  2026-10-05: leaving them out was a bug), closed by spec-runtime-calls story 8;
-  "Measured" has the figures. Still exits: a call of a native or a template (story
-  9 and the spec's decision: a template runs in the interpreter, and its function
-  0 can be compiled when it enters it), of a value the declaration scan cannot
-  name (a parameter, an array element, a global with no declaration), and with the
-  wrong number of arguments. Tang has no tail call and none is added. Floating
+  2026-10-05: leaving them out was a bug), closed by spec-runtime-calls story 8
+  (guest functions) and story 9 (library natives and the loads that produce them);
+  "Measured" has the figures. Still exits: a call of a template (the spec's decision:
+  a template runs in the interpreter, and its function 0 can be compiled when it
+  enters it), of an engine builtin (`random.seeded`, `rng.set_seed`), of a native or
+  a function the declaration scan cannot name (a parameter, an array element, a
+  global with no declaration), of a resumable native (the test natives only; reached
+  through an exit by design, AD-23), of a native with sixteen arguments or more
+  (runtime-jit's native call takes the callee and fifteen), a load that does not
+  yield a host function or a library, and any call with the wrong number of
+  arguments. Tang has no tail call and none is added. Floating
   point in compiled code is the same kind of defect:
   `planning/specs/spec-runtime-float/`.
 - **On-stack replacement into a running loop.** Compiled code is entered at a
@@ -2019,8 +2024,8 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   `grjit_backend_available()` is false there and the compile is then
   `GLTANG_ERR_UNSUPPORTED`, counted as a failure. `JIT=no` is the arm for every
   other target.
-- **Inline caches**, **inlining of heap operations** (arrays, maps, strings, calls
-  to natives), floating point, boxed integers and `DIV`/`MOD`: all of them are
+- **Inline caches**, **inlining of heap operations** (arrays, maps, strings; a
+  native is called, not inlined), floating point, boxed integers and `DIV`/`MOD`: all of them are
   exits, and the interpreter does them.
 - **Hardening** of the generated code (guard pages, randomised layout, constant
   blinding): the pages are never writable and executable at once, and that is all.
