@@ -638,6 +638,53 @@ TEST(JitCalls, ATinyNativeStackDeoptimizesTheChainAtTheCallAndTheInterpreterFini
   }
 }
 
+TEST(JitCalls, AFramePushedForACalleeWhoseEntryThenFailsTheStackCheckHoldsItsReferenceArgumentsAfterTheCollectionThePushCaused) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The push is a GC point. When the callee's entry then fails its native stack
+  // check there is no compiled frame to rebuild: the interpreter runs the callee
+  // from the guest frame the push made, so the arguments the hook wrote there must
+  // be the ones read after the collection (and, in the relocation arm, the move),
+  // not copies taken before it.
+  //
+  // A relocating heap moves every object at every collection and an object put
+  // back where it was by a second move would hide a stale copy, so the window is
+  // narrow: the failing push must be the last collection before the first use. The
+  // push hook collects at the first 256 levels of the guest stack and at every
+  // 1,024th call, so the budgets are swept across the one where the 1,024th call
+  // is the push whose callee does not fit (about 380 bytes a compiled frame with these six parameters), and
+  // the recursion reads its arguments at the bottom, with no other collection
+  // between. Torture is off for the same reason: the push hook's collection is the
+  // only one.
+  // Under a stack that moves at every push, or Valgrind, the sweep is coarse and
+  // the narrow window is left to the plain run (the planted-defect check runs that).
+  const uint64_t step = (tt::moving_stack_requested() || RUNNING_ON_VALGRIND) ? 2048 : 64;
+  uint64_t left_at_a_call = 0, runs = 0;
+  for (uint64_t bytes = 360000; bytes <= 392000; bytes += step) {
+    ++runs;
+    Scenario sc;
+    sc.source =
+        "function f(a, b, c, d, e, n) { if (n <= 0) { return a[0] + b[0] + c[0] + d[1] + e[3]; } return f(a, b, c, d, e, n - 1); }\n"
+        "a = [7]; b = [8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]; c = [1, 2, 3, 4, 5, 6, 7, 8, 9]; d = [0, 20]; e = [0, 0, 0, 5];\n"
+        "print(f(a, b, c, d, e, 1300)); print(a[0] * b[0]);\n";
+    sc.script = true;
+    sc.calls = 4000;
+    sc.torture = 0;
+    sc.verify = 0;
+    sc.gc_at_push = true;
+    sc.native_stack_bytes = bytes;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    EXPECT_EQ(jit.raw, "4156") << "native stack " << bytes;
+    if (jit.stats.call_exits_native_stack >= 1u) {
+      ++left_at_a_call;
+    }
+    if (HasFailure()) {
+      return;
+    }
+  }
+  EXPECT_EQ(left_at_a_call, runs) << "every budget leaves the chain at the call that does not fit";
+}
+
 TEST(JitCalls, WithNoNativeStackBudgetNoCallSiteIsCompiledAndDepthOneHundredThousandDoesNotFault) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // A stack that moves at every push copies itself at every call, so the depth is

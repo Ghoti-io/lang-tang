@@ -3,7 +3,7 @@
 # before it pushes the callee's frame, and writes those copies into the frame
 # after the push (which is a GC point under torture): a collection that moves an
 # object updates the area, not the copy, so the callee gets a stale reference
-# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testJit_calls); invisible without relocation
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 over testJit_calls: a callee whose entry fails the native stack check is run by the interpreter from the frame the push made); invisible without relocation
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c

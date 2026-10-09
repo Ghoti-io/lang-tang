@@ -120,6 +120,7 @@ struct Scenario {
   uint64_t calls = 512;                  ///< The guest-depth budget (ctang's max_call_depth).
   bool calls_off = false;                ///< Compile no call site (the control of a measurement).
   bool fail_rebuild = false;             ///< The deopt hook's rebuild fails (the injected failure).
+  bool gc_at_push = false;               ///< Collect in the push hook even without torture (so no other collection runs between it and the first use of a frame).
   bool fail_protect = false;
   bool resume = false;                   ///< On a pause with `step` 0, resume without raising the budget (an interrupt).
   bool script = false;                   ///< Attach a Script, with `on_poll` below.
@@ -181,7 +182,7 @@ inline Outcome run(const Scenario & sc, long threshold) {
   }
   out.created = true;
   context.tracker.fail_protect = sc.fail_protect;
-  context.apply_jit_switches(sc.calls_off, sc.fail_rebuild);
+  context.apply_jit_switches(sc.calls_off, sc.fail_rebuild, sc.gc_at_push);
   EXPECT_EQ(gltang_execution_set_name(context.execution, "page"), GLTANG_OK);
   if (sc.statement_polls) {
     EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);

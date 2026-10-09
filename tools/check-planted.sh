@@ -185,7 +185,7 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_calls --gtest_brief=1 --gtest_filter='JitCalls.TheEighthExit*') ;;
     15-*|20-*)
       # shellcheck disable=SC2086
-      (cd "$WORK" && env -u GRHEAP_TORTURE -u GRHEAP_RELOCATE $RELOC_ENV LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_calls --gtest_brief=1 --gtest_filter='JitCalls.ReferencesInPaddedFrames*:JitCalls.AChainOfSixty*') ;;
+      (cd "$WORK" && env -u GRHEAP_TORTURE -u GRHEAP_RELOCATE $RELOC_ENV LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_calls --gtest_brief=1 --gtest_filter='JitCalls.ReferencesInPaddedFrames*:JitCalls.AChainOfSixty*:JitCalls.AChainOfFiveThousand*:JitCalls.AFramePushedForACallee*') ;;
     11-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
     12-*)

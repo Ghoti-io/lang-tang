@@ -538,8 +538,8 @@ class Context {
   /// The test switches over compiled calls (see gltang_vm_set_jit_test_switches_unchecked):
   /// calls off, a refused rebuild, and a collection in the push hook, which a
   /// heap in torture mode asks for (the frame push is a GC point the engine owns).
-  void apply_jit_switches(bool calls_off, bool fail_rebuild) {
-    gltang_vm_set_jit_test_switches_unchecked(execution, calls_off, fail_rebuild, torture_on && !arena);
+  void apply_jit_switches(bool calls_off, bool fail_rebuild, bool gc_at_push = false) {
+    gltang_vm_set_jit_test_switches_unchecked(execution, calls_off, fail_rebuild, gc_at_push || (torture_on && !arena));
   }
 
   /// What the baseline JIT did for this execution (all zero without it).
