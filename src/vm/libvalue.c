@@ -529,8 +529,9 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   // The segment: from just below this frame's copies to the base of the innermost
   // compiled frame when compiled code called (the walk-start cell, which the call
   // stored first), or just above this frame when the interpreter did.
-  uintptr_t lo = (uintptr_t)&held[0] - 256u;
-  uintptr_t hi = (uintptr_t)__builtin_frame_address(0) + 16u;
+  const uintptr_t frame = (uintptr_t)__builtin_frame_address(0);
+  uintptr_t lo = gltang_vm_segment_low(frame, &held[0]);
+  uintptr_t hi = frame + 16u;
 #ifdef GLTANG_WITH_JIT
   if (compiled) {
     const uintptr_t * cell = (const uintptr_t *)((const char *)exec->context + grcore_jit_layout()->walk_cell_offset);

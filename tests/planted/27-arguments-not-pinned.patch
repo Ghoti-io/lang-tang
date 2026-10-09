@@ -6,14 +6,16 @@
 # caught by: the relocation arm only, where a native that allocates reads its argument
 # afterwards (testNative_calls, GRHEAP_RELOCATE+TORTURE)
 #
---- a/src/vm/libvalue.c
-+++ b/src/vm/libvalue.c
-@@ -532,7 +532,7 @@
-   // The segment: from just below this frame's copies to the base of the innermost
-   // compiled frame when compiled code called (the walk-start cell, which the call
-   // stored first), or just above this frame when the interpreter did.
--  uintptr_t lo = (uintptr_t)&held[0] - 256u;
-+  uintptr_t lo = (uintptr_t)__builtin_frame_address(0) + 8u;  /* planted: the copies are outside the segment */
-   uintptr_t hi = (uintptr_t)__builtin_frame_address(0) + 16u;
- #ifdef GLTANG_WITH_JIT
-   if (compiled) {
+--- a/src/vm/vm_internal.h
++++ b/src/vm/vm_internal.h
+@@ -819,7 +819,9 @@
+ static inline uintptr_t gltang_vm_segment_low(uintptr_t frame, const void * copies) {
+   uintptr_t low = frame - 512u;
+   uintptr_t at = (uintptr_t)copies;
+-  return at < low && frame - at <= 4096u ? at - 64u : low;
++  (void)low;
++  (void)at;
++  return frame + 8u;  /* planted: the segment starts above the copies */
+ }
+ 
+ /** @brief The value of a call whose record was refused (the native-depth budget, or the memory budget). */

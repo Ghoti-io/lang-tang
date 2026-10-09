@@ -71,7 +71,8 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   if (argc) {
     memcpy(held, args, argc * sizeof(GLTANG_Value));
   }
-  GRCORE_CSegment segment = {(uintptr_t)&held[0] - 256u, (uintptr_t)__builtin_frame_address(0) + 16u};
+  const uintptr_t frame_address = (uintptr_t)__builtin_frame_address(0);
+  GRCORE_CSegment segment = {gltang_vm_segment_low(frame_address, &held[0]), frame_address + 16u};
   GRCORE_ActivationRef record;
   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_REENTRY, exec->engine, true, &segment, &record);
   if (entered != GRCORE_OK) {
