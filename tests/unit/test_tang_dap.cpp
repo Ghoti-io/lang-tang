@@ -51,8 +51,8 @@ TEST(TangDap, NeedsTheDescriptorTransportAndSoIsNotRunOnWindows) {
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <fstream>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -664,6 +664,52 @@ TEST(TangDap, TheSourceNameIsTheFileNameAsGivenOnTheCommandLine) {
 // from the manifest is that a tang debugger and its `script` attribute are named.
 // The command name "tang" is the command under test (tang_path()), as it is on
 // the PATH of a VS Code that has one.
+
+/// Each `DebugAdapterExecutable("command", [arguments])` of the extension: the command and the text of the argument list.
+/// Read by hand, not with std::regex: GCC 14 and 16 report libstdc++'s regex state copy as maybe-uninitialized
+/// under ASan, which failed `make test-asan` at the baseline of story 9 as well.
+static std::vector<std::pair<std::string, std::string>> adapter_calls(const std::string & text) {
+  static const std::string kName = "DebugAdapterExecutable(";
+  std::vector<std::pair<std::string, std::string>> calls;
+  auto skip_space = [&](size_t at) {
+    while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) {
+      ++at;
+    }
+    return at;
+  };
+  for (size_t at = text.find(kName); at != std::string::npos; at = text.find(kName, at)) {
+    size_t i = skip_space(at + kName.size());
+    at += kName.size();
+    if (i >= text.size() || text[i] != '"') {
+      continue;
+    }
+    size_t close = text.find('"', i + 1);
+    if (close == std::string::npos || close == i + 1) {
+      continue;
+    }
+    const std::string command = text.substr(i + 1, close - i - 1);
+    i = skip_space(close + 1);
+    if (i >= text.size() || text[i] != ',') {
+      continue;
+    }
+    i = skip_space(i + 1);
+    if (i >= text.size() || text[i] != '[') {
+      continue;
+    }
+    size_t end = text.find(']', i + 1);
+    if (end == std::string::npos) {
+      continue;
+    }
+    size_t after = skip_space(end + 1);
+    if (after >= text.size() || text[after] != ')') {
+      continue;
+    }
+    calls.emplace_back(command, text.substr(i + 1, end - i - 1));
+    at = after;
+  }
+  return calls;
+}
+
 TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndAScript) {
 #ifndef GLTANG_TEST_DATA
 #error "GLTANG_TEST_DATA must name the tests/ directory; the Makefile defines it"
@@ -681,16 +727,16 @@ TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndA
   EXPECT_NE(manifest.find("\"script\""), std::string::npos) << "the launch configuration has no script attribute";
 
   const std::string extension = read_file(dir + "/extension.js");
-  const std::regex call_pattern("DebugAdapterExecutable\\(\\s*\"([^\"]+)\"\\s*,\\s*\\[([^\\]]*)\\]\\s*\\)");
+  const auto calls = adapter_calls(extension);
   struct Arm {
     bool script;
     std::vector<std::string> arguments;  // with `file` as the empty string
   };
   std::vector<Arm> arms;
-  for (auto it = std::sregex_iterator(extension.begin(), extension.end(), call_pattern); it != std::sregex_iterator(); ++it) {
-    EXPECT_EQ((*it)[1].str(), "tang") << "the adapter is the tang command";
+  for (const auto & call : calls) {
+    EXPECT_EQ(call.first, "tang") << "the adapter is the tang command";
     Arm arm{false, {}};
-    std::stringstream list((*it)[2].str());
+    std::stringstream list(call.second);
     std::string item;
     while (std::getline(list, item, ',')) {
       size_t first = item.find_first_not_of(" \t\r\n");
