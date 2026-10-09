@@ -1195,8 +1195,11 @@ build if a poll names no entry, if an entry is named by nothing, or if an
 unbounded entry has no row in the table - so a new native without a gate row is
 a failing build. Each row has a **build** (makes the operand; its fuel and bytes
 are the baseline, measured first on its own) and an **op** (the adversarial
-operation, on a budget of its own beyond the build): 27 rows (26 under the instruments), at least one per
-unbounded native, from `s = "x"; while (true) { s = s + s; }` under 1,000 fuel to
+operation, on a budget of its own beyond the build): 28 rows (27 under the instruments), at least one per
+unbounded native, and since story 9 one that calls a host native from a compiled function (it answers a
+huge string in an endless loop; the same table is run again with every function tiering up at its first
+poll, so the adversarial operations reached from compiled code, and the natives it calls, are held to the
+same bound), from `s = "x"; while (true) { s = s + s; }` under 1,000 fuel to
 repeating an array into 8 GB under a 4 MiB memory budget. A row requires an
 outcome that is a verdict (paused, unwound with `GRCORE_ERR_LIMIT`, or the
 program's own error value) and bounds **the work done**, measured by counters
@@ -1255,11 +1258,17 @@ breaks nothing as not caught. Observed:
 | 12 skipped-output-capture | the snapshot is written as if the output so far were empty | the output-so-far test and the corpus sweep (`testSnapshot`) | the restored output starts from nothing, and the sweep names the first program whose output differs |
 | 13 temporaries-through-a-copy | the execution reports each temporary root through a copy, so it is visited and never updated | the relocation arm: `testExecute_simple` under `GRHEAP_RELOCATE=1` with torture (and, with relocation off, the same build passes) | a poisoned read in an array operation, or a result that differs |
 | 14 array-storage-through-a-copy | an array's trace function reports its storage pointer through a copy | the same | the same |
+| 15 to 24 | the ten of compiled calls (the push hook, the deopt hook, the poll helper, the compile hook, the discard), described in the JIT chapter | `testJit_calls`, `testObserver`; 15 and 20 under relocation | see "The baseline JIT" |
+| 25 native-record-not-closed | the shared wrapper opens a native's activation record and never leaves it | the native depth a native sees, and the loop of library calls (`testNative_calls`) | `jit.native_depth` is not 0 |
+| 26 native-depth-miscount | a native called from compiled code hands back one unit too few of the native-depth budget the open JIT records cost | the depth a native sees, and the budget sweep (`testNative_calls`) | the compiled run prints 2 where the interpreter prints 1 |
+| 27 arguments-not-pinned | the wrapper's record leaves the copies of the native's arguments outside its segment | the relocation arm, `testNative_calls` (a native that allocates and then reads its argument) | a poisoned read; passes with relocation off |
+| 28 stale-stack-over-a-nested-activation | the interpreter goes on with the pointer to the guest stack's slots it had before a native that re-entered guest code | the nested-activation tests on a stack that moves at every push (`testNative_calls`) | the plain and compiled runs differ |
+| 29 unwind-status-read-as-ok | the library-call thunk answers "continue" for the value a runtime poll returns when it orders the run to stop | the run that runs out of budget inside a native's answer (`testNative_calls`) | the plain and compiled runs differ |
 
 `make test` runs 03 to 12 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all twelve. 13 and 14 are run by `make check-planted-relocate`, which the
+runs all of them but the relocation cases. 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
