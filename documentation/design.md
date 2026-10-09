@@ -623,13 +623,17 @@ the test natives below.
 `gltang_vm_call_native` (`src/vm/libvalue.c`) is the only place a native is
 entered, from the interpreter's `CALL` and from the thunks compiled code calls
 (`src/jit/natives.c`) alike (spec-runtime-calls story 9, AD-28, AD-23). It copies
-the callee and the arguments into its own frame before anything can collect; opens
-a `GRCORE_ACTIVATION_NATIVE` record whose conservative segment is that frame (from
-the copies to the base of the innermost compiled frame when compiled code called,
-which the call stored in the walk-start cell first, and to just above its own frame
-when the interpreter did), so the objects the copies name are pinned and the native
-reads the copy and not an operand stack a collection may have moved; runs the native;
-and leaves the record. The record enters the native-depth budget (AD-21), so a
+the callee and the arguments into an array of its own frame before anything can
+collect; opens a `GRCORE_ACTIVATION_NATIVE` record whose conservative segment is
+exactly that array (cleared first, so that every word the collector reads is defined,
+which Valgrind asks and a fake stack of a sanitizer does not break), so the objects
+the copies name are pinned and the native reads the copy and not an operand stack a
+collection may have moved; runs the native; and leaves the record. The segment is not
+the whole frame, nor the stack from the native to the compiled caller as the runtime-jit
+fixture's `NativeScope` gives: the arguments are the only raw references a
+call from compiled code hands over (they are not in the site's stack map), and an
+earlier version that gave the frame and the stack above it faulted under a sanitizer's
+fake stack and read uninitialised words under Valgrind. The record enters the native-depth budget (AD-21), so a
 program that nests natives is limited by `grcore_options_set_native_depth`; a refused
 record is the call's value, the recursion-limit error for the depth budget (as the
 guest-depth budget's refusal is) and the out-of-memory value for the memory budget (after

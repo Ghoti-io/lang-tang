@@ -40,7 +40,6 @@
 #include <ghoti.io/runtime-heap/heap.h>
 #include "vm_internal.h"
 #ifdef GLTANG_WITH_JIT
-#include <ghoti.io/runtime-core/a/layout.h>
 #include "../jit/jit.h"
 #endif
 
@@ -506,10 +505,11 @@ GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Resu
 
 GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled) {
   // The callee and the arguments are copied into this frame before anything that
-  // can reach a collection: the record below gives this frame as its conservative
-  // segment, so what the copies name is pinned, and the native reads the copy and
-  // not the operand stack it came from (which a collection may have moved).
-  GLTANG_Value held[1u + NATIVE_COPY_MAX];
+  // can reach a collection: the record below gives exactly the copies as its
+  // conservative segment, so what they name is pinned, and the native reads the copy
+  // and not the operand stack it came from (which a collection may have moved). The
+  // array is cleared first so that every word the collector reads is defined.
+  GLTANG_Value held[1u + NATIVE_COPY_MAX] = {0};
   const GLTANG_Value * given = args;
   held[0] = callee;
   if (argc <= NATIVE_COPY_MAX) {
@@ -526,21 +526,7 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   (void)compiled;
 #endif
   GRCORE_Stack * stack = grcore_context_stack(exec->context);
-  // The segment: from just below this frame's copies to the base of the innermost
-  // compiled frame when compiled code called (the walk-start cell, which the call
-  // stored first), or just above this frame when the interpreter did.
-  const uintptr_t frame = (uintptr_t)__builtin_frame_address(0);
-  uintptr_t lo = gltang_vm_segment_low(frame, &held[0]);
-  uintptr_t hi = frame + 16u;
-#ifdef GLTANG_WITH_JIT
-  if (compiled) {
-    const uintptr_t * cell = (const uintptr_t *)((const char *)exec->context + grcore_jit_layout()->walk_cell_offset);
-    if (cell[0] > lo && cell[0] - lo <= ((uintptr_t)1 << 20)) {
-      hi = cell[0];
-    }
-  }
-#endif
-  GRCORE_CSegment segment = {lo, hi};
+  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + sizeof(held)};
   GRCORE_ActivationRef record;
   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
   GLTANG_Value result;

@@ -806,22 +806,6 @@ GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const
  * @return The call's value, or ::GLTANG_V_UNWIND.
  */
 GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled);
-/**
- * @brief The low end of the conservative segment a wrapper's record gives: a little below
- *   its own frame, and below the copies it made when they are in that frame.
- *
- * Taken from the frame's address and not from the copies' alone, because under a
- * sanitizer's fake stack a local lives in heap memory far from the real stack, and a
- * segment from there to the frame would span unmapped pages. Then the copies are not on
- * the real stack and are not pinned, which is the sanitizer builds' business (they do not
- * relocate).
- */
-static inline uintptr_t gltang_vm_segment_low(uintptr_t frame, const void * copies) {
-  uintptr_t low = frame - 512u;
-  uintptr_t at = (uintptr_t)copies;
-  return at < low && frame - at <= 4096u ? at - 64u : low;
-}
-
 /** @brief The value of a call whose record was refused (the native-depth budget, or the memory budget). */
 GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Result refused);
 /**

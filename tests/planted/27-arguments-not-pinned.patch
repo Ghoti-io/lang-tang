@@ -6,16 +6,14 @@
 # caught by: the relocation arm only, where a native that allocates reads its argument
 # afterwards (testNative_calls, GRHEAP_RELOCATE+TORTURE)
 #
---- a/src/vm/vm_internal.h
-+++ b/src/vm/vm_internal.h
-@@ -819,7 +819,9 @@
- static inline uintptr_t gltang_vm_segment_low(uintptr_t frame, const void * copies) {
-   uintptr_t low = frame - 512u;
-   uintptr_t at = (uintptr_t)copies;
--  return at < low && frame - at <= 4096u ? at - 64u : low;
-+  (void)low;
-+  (void)at;
-+  return frame + 8u;  /* planted: the segment starts above the copies */
- }
- 
- /** @brief The value of a call whose record was refused (the native-depth budget, or the memory budget). */
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -526,7 +526,7 @@
+   (void)compiled;
+ #endif
+   GRCORE_Stack * stack = grcore_context_stack(exec->context);
+-  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + sizeof(held)};
++  GRCORE_CSegment segment = {(uintptr_t)&held[0] + sizeof(held), (uintptr_t)&held[0] + sizeof(held) + 8u};  /* planted: the segment is after the copies */
+   GRCORE_ActivationRef record;
+   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
+   GLTANG_Value result;
