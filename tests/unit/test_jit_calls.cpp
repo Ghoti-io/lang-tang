@@ -447,7 +447,30 @@ TEST(JitCalls, AChainOfSixtyFramesHoldingReferencesSurvivesACollectionAtItsBotto
 TEST(JitCalls, AChainOfFiveThousandFramesIsWalkedAndRebuilt) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // A stack that moves at every push copies itself 5,000 times, so the depth is
-  // scaled down under the instruments that cost an order of magnitude.
+  // scaled down under the instruments that cost an order of magnitude. A collection
+  // (a move, in the relocation arm) at every other poll while the chain is deep and
+  // compiled: the compiled frames' references are updated through their stack maps
+  // and nothing may put an older copy back (planted defect 20). No pause here: a
+  // pause rebuilds the frames from the compiled ones and would hide that.
+  const int depth = tt::heavy_instruments() ? 500 : 5000;
+  Scenario sc;
+  sc.source = deep_source(depth);
+  sc.calls = 20000;
+  sc.native_stack_bytes = uint64_t{4} << 20;
+  sc.script = true;
+  sc.on_poll = [](Script &, GRCORE_Context * context, uint64_t n) {
+    if (n % 2 == 1) {
+      EXPECT_EQ(grheap_collect(grheap_heap_get(context)), GRHEAP_OK);
+    }
+  };
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_EQ(jit.raw, "112") << "a reference put back over the one the collector updated reads as a poisoned cell, and the three prints are not 1, 1 and 2";
+  EXPECT_GE(jit.stats.deepest_chain, static_cast<uint64_t>(depth) / 5);
+}
+
+TEST(JitCalls, AChainOfFiveThousandFramesPausedAtDepthIsRebuiltIntoItsGuestFramesAndFinishes) {
+  GLTANG_REQUIRE_JIT_BACKEND();
   const int depth = tt::heavy_instruments() ? 500 : 5000;
   Scenario sc;
   sc.source = deep_source(depth);
@@ -458,16 +481,9 @@ TEST(JitCalls, AChainOfFiveThousandFramesIsWalkedAndRebuilt) {
   // compiled code is refused and the frames are rebuilt), and the run resumes.
   sc.fuel = static_cast<uint64_t>(depth) * 3;
   sc.step = sc.fuel;
-  sc.script = true;
-  sc.on_poll = [](Script &, GRCORE_Context * context, uint64_t n) {
-    if (n % 2 == 1) {
-      EXPECT_EQ(grheap_collect(grheap_heap_get(context)), GRHEAP_OK);
-    }
-  };
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.raw, "112");
-  EXPECT_GE(jit.stats.deepest_chain, static_cast<uint64_t>(depth) / 5);
   EXPECT_GE(jit.stats.refused_pauses, 2u) << "a pause in compiled code rebuilt the chain, more than once";
   EXPECT_EQ(jit.stats.rebuild_failures, 0u);
 }
