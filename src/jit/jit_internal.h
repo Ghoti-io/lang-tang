@@ -136,8 +136,14 @@ enum {
   GLTANG_JIT_NATIVE_ATTR = 17,
   GLTANG_JIT_NATIVE_COUNT = 18
 };
-/** @brief The most native stack the thunks, the shared wrapper and the host function's own frame are taken to use before they call anything that checks. */
-#define GLTANG_JIT_NATIVE_STACK 4096u
+/**
+ * @brief The most native stack the thunks, the shared wrapper and the host function's own
+ *   frame are taken to use before they call anything that checks: 16 KiB, because what a
+ *   thunk reaches includes an allocation, and so a collection, and a runtime poll with its
+ *   handlers, none of which checks the budget. The call site is an exit before it unless
+ *   that much lies above the limit (runtime-jit's `stack_bytes`, at most 64 KiB).
+ */
+#define GLTANG_JIT_NATIVE_STACK 16384u
 
 /** @brief The execution's JIT state. */
 typedef struct GLTANG_Jit {

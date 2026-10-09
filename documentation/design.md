@@ -1701,7 +1701,7 @@ as the interpreter calls them, so the value, the allocation, the fuel and the er
 one code path and a load gives whatever the libraries hold *now*. The table (one per execution,
 `GRJIT_NativeTable`) holds a call thunk for each argument count from 0 to 15 (the callee is the first
 parameter), the `use` thunk and the `.name` thunk, each with a status; a call thunk declares the
-re-enter flag and every thunk 4 KiB of native stack, which the call site checks against the
+re-enter flag and every thunk 16 KiB of native stack (what a thunk reaches includes an allocation, so a collection, and a runtime poll with its handlers, none of which checks the budget), which the call site checks against the
 native-stack budget before it calls (an exit, not counted toward the discard limit, with nothing
 charged). What is *static* is only which sites compile: the producer analysis names the
 instruction that made the callee, and a small scan finds the shapes `compile_use` emits
