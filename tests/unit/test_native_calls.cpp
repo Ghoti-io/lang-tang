@@ -301,7 +301,6 @@ TEST(NativeCalls, ANativeStackBudgetSweptAcrossTheNeedOfACallIsAnExitBeforeItAnd
   GLTANG_REQUIRE_JIT_BACKEND();
   uint64_t exits_seen = 0;
   uint64_t calls_seen = 0;
-  uint64_t mixed = 0;
   for (uint64_t bytes = 1024; bytes <= 96 * 1024; bytes += 1024) {
     Scenario sc = native_scenario(loop_source(30));
     sc.native_stack_bytes = bytes;
@@ -310,7 +309,6 @@ TEST(NativeCalls, ANativeStackBudgetSweptAcrossTheNeedOfACallIsAnExitBeforeItAnd
     EXPECT_EQ(jit.raw, "3030") << bytes << " bytes";
     exits_seen += jit.stats.native_exits_stack;
     calls_seen += jit.stats.native_calls;
-    mixed += jit.stats.native_exits_stack != 0 && jit.stats.native_calls != 0;
     if (HasFailure()) {
       ADD_FAILURE() << "with a budget of " << bytes << " bytes";
       return;
