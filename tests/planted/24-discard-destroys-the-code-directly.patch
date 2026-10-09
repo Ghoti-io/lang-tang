@@ -1,0 +1,18 @@
+# 24 discard destroys the code directly instead of dropping its references
+# defect: discarding a function frees its machine code at once, without waiting
+# for the registry's and the slot's references or for the record to be left, so
+# the reference that is dropped last frees it a second time (and a frame still
+# waiting in a chain would return into freed pages)
+# caught by: the discard test (testJit_calls)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -156,6 +156,8 @@
+     (void)grcore_code_unregister(exec->context, f->start);
+     f->start = 0;
+   }
++  /* planted: the code is destroyed here and now */
++  grjit_code_destroy(((GLTANG_JitCode *)grcore_code_payload(f->code))->code);
+   grcore_code_release(f->code);
+   f->code = NULL;
+   f->state = GLTANG_JITFN_NEVER;

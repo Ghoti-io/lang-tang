@@ -1,0 +1,32 @@
+# 15 the push hook reads its arguments before the push
+# defect: the hook copies the arguments out of the call site's argument area
+# before it pushes the callee's frame, and writes those copies into the frame
+# after the push (which is a GC point under torture): a collection that moves an
+# object updates the area, not the copy, so the callee gets a stale reference
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testJit_calls); invisible without relocation
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -89,6 +89,11 @@
+   }
+   GRCORE_Stack * stack = grcore_context_stack(context);
+   GRCORE_FrameRef frame;
++  /* planted: the arguments are read before the push */
++  uint64_t planted_early[GLTANG_JIT_MAX_CALL_ARGS + 1u];
++  for (uint32_t i = 0; i < cf->parameter_count; ++i) {
++    planted_early[i] = args[i];
++  }
+   if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+     return refuse_push(jit);
+   }
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -109,7 +109,7 @@
+   S[GLTANG_F_FLAGS] = exec->act->depth;
+   const uint32_t parameters = cf->parameter_count;
+   for (uint32_t i = 0; i < parameters; ++i) {
+-    S[H + i] = args[i];
++    S[H + i] = planted_early[i];
+   }
+   for (uint32_t i = parameters; i < cf->local_count; ++i) {
+     S[H + i] = 0;

@@ -1,0 +1,33 @@
+# 21 the slot of a callee that cannot be compiled is not refused
+# defect: a callee whose compile failed or was declined is marked never-compile
+# but its entry slot is left empty, so every call from compiled code asks the
+# compile hook again instead of exiting at the cost of one compare
+# caught by: the remembered-exit count (testJit_calls)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -215,9 +215,7 @@
+ void gltang_jit_mark_never(GLTANG_Execution * exec, GLTANG_Jit * jit, GLTANG_JitFn * f) {
+   (void)jit;
+   f->state = GLTANG_JITFN_NEVER;
+-  if (f->slot) {
+-    (void)grcore_entry_slot_refuse(exec->context, f->slot);
+-  }
++  (void)exec;  /* planted: the slot is not refused */
+ }
+ 
+ bool gltang_jit_compile_function(GLTANG_Execution * exec, uint64_t fword) {
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -148,11 +148,6 @@
+     return 1u;
+   }
+   if (f->state == GLTANG_JITFN_NEVER) {
+-    // Cannot happen (the slot mirrors the state), but a slot that was somehow empty
+-    // for a function that can never be compiled is made right here.
+-    if (f->slot) {
+-      (void)grcore_entry_slot_refuse(exec->context, f->slot);
+-    }
+     jit->refusal = GLTANG_REFUSAL_REMEMBERED;
+     return 1u;
+   }

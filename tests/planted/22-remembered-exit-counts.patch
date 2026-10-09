@@ -1,0 +1,17 @@
+# 22 an exit at a call to a remembered callee counts toward the discard limit
+# defect: the deopt hook charges the caller for an exit that the callee, not the
+# caller, caused, so a caller that calls an uncompilable function is discarded
+# after eight exits
+# caught by: the uncompilable-callee test (testJit_calls)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -214,7 +214,7 @@
+           if (call_site_at(jc, fr.identity.offset)) {
+             // An exit at a call site. Whoever refused recorded why, and none of
+             // these counts toward a discard limit except the callee-value guard.
+-            counts = false;
++            counts = true;  /* planted: false */
+             if (idx + 1u < frame_count) {
+               ++exec->jit_stats.call_exits_native_stack;
+             }

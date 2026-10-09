@@ -1,0 +1,16 @@
+# 19 the deopt hook ignores a failed rebuild
+# defect: the hook returns zero whatever the rebuild said, so the compiled
+# frames return DEOPTED and the interpreter continues on guest frames that were
+# never rebuilt
+# caught by: the injected rebuild failure (testJit_calls)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -252,6 +252,7 @@
+     GRCORE_Result r = grcore_compiled_rebuild(context, jit->reservation, keep, &rebuilt);
+     rc = r == GRCORE_OK ? 0u : (uint32_t)r;
+   }
++  rc = 0u;  /* planted: a failed rebuild is ignored */
+   if (rc == 0u && any) {
+     jit->exit_fword = innermost_fword;
+     jit->exit_counted = counts;

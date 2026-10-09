@@ -1,0 +1,50 @@
+# 20 the poll helper copies the guest frame back after a continue
+# defect: the helper writes the compiled frame into the guest frame before the
+# poll and the guest frame back into the compiled frame after it, as milestone 1's
+# did when the guest frame was the truth: a collection that moved an object
+# updated the compiled frame through its stack map, and the copy puts the stale
+# reference back over it
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testJit_calls); invisible without relocation
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -59,6 +59,25 @@
+   // errors made next.
+   exec->current_function = GLTANG_FN_INDEX(fword);
+   exec->current_offset = (uint32_t)index;
++  /* planted: the compiled frame is copied into the guest frame before the poll */
++  GRCORE_CompiledWalk planted_walk;
++  GRCORE_CompiledFrame planted_frame;
++  uint64_t planted_slots[GLTANG_JIT_MAX_SLOTS];
++  size_t planted_count = 0;
++  GRCORE_Stack * planted_stack = grcore_context_stack(context);
++  bool planted_have = grcore_compiled_walk_begin(context, &planted_walk) == GRCORE_OK &&
++      grcore_compiled_walk_next(&planted_walk, &planted_frame) == GRCORE_CWALK_FRAME;
++  if (planted_have) {
++    planted_count = planted_frame.site->frame_state_count;
++    planted_have = planted_count <= GLTANG_JIT_MAX_SLOTS &&
++        grcore_deopt_read(planted_frame.site, (const void *)planted_frame.frame_base, planted_slots, planted_count) == GRCORE_OK;
++  }
++  if (planted_have) {
++    uint64_t * G = grcore_stack_slots(planted_stack, grcore_stack_top(planted_stack));
++    for (size_t k = GLTANG_FRAME_HEADER; k < planted_count; ++k) {
++      G[k] = planted_slots[k];
++    }
++  }
+   GRCORE_Verdict verdict = grcore_stack_poll(context, fword, index);
+   if (verdict == GRCORE_VERDICT_PAUSE) {
+     return 1u;
+@@ -66,5 +85,13 @@
+   if (verdict == GRCORE_VERDICT_UNWIND) {
+     return 2u;
+   }
++  if (planted_have) {
++    /* planted: and back after it, over whatever the collector updated */
++    uint64_t * G = grcore_stack_slots(planted_stack, grcore_stack_top(planted_stack));
++    for (size_t k = GLTANG_FRAME_HEADER; k < planted_count; ++k) {
++      planted_slots[k] = G[k];
++    }
++    (void)grcore_deopt_write_back(planted_frame.site, (void *)planted_frame.frame_base, planted_slots, planted_count);
++  }
+   return 0u;
+ }

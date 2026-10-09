@@ -1,0 +1,18 @@
+# 17 the depth test off by one
+# defect: the push hook refuses a call one level before the guest-depth limit
+# instead of at it, so compiled recursion exits at a call the interpreter's
+# would make (the verdict is the same, as the interpreter then makes the call;
+# the number of compiled calls is not)
+# caught by: the recursion-limit test, which counts the compiled calls (testJit_calls)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -84,7 +84,7 @@
+   // push. The push is the frame-push GC point. It does not fire the memory
+   // budget's CALL_REFUSED poll: the interpreter makes the call after the exit
+   // and fires it once.
+-  if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
++  if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) + 1u >= grcore_context_guest_depth(context)) {  /* planted: one too soon */
+     return refuse_push(jit);
+   }
+   GRCORE_Stack * stack = grcore_context_stack(context);

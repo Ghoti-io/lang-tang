@@ -1,0 +1,17 @@
+# 18 the deopt hook does not set the callers' identities
+# defect: the rebuilt guest frames of a chain keep the identity they were pushed
+# with, so a caller waiting under the callee reports its own first
+# instruction, not its call, and a stack trace shows the wrong line
+# caught by: the frame differential, a caller's line after a chain is rebuilt (testObserver)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -236,7 +236,7 @@
+         --g_idx;
+       }
+       if (idx + 1u < frame_count) {
+-        (void)grcore_stack_set_identity(stack, g, fr.identity);
++        /* planted: the identity is not set */
+       }
+     }
+   }
