@@ -1,0 +1,17 @@
+# 28 a stale reference over a nested activation
+# defect: after a native returns, the interpreter keeps using the pointer to the guest
+# stack's slots it had before the call; a native that re-entered guest code pushed
+# frames, the stack moved, and the result is written through the old pointer
+# caught by: the nested-activation tests on a stack that moves at every push (testNative_calls)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -761,7 +761,7 @@
+         if (r == GLTANG_V_UNWIND) {
+           goto unwound;
+         }
+-        RELOAD();
++        /* planted: no RELOAD() after a call that may have moved the stack */
+         DROP(argc + 1u);
+         PUSH(r);
+         break;

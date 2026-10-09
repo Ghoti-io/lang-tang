@@ -1,0 +1,17 @@
+# 25 a native's activation record is not closed
+# defect: the shared wrapper opens the NATIVE record and never leaves it, so the
+# native-depth units and the record stay for the rest of the run; the next record the
+# context opens or leaves finds the wrong one on top
+# caught by: the native-depth probe and the loop of library calls (testNative_calls)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -557,7 +557,7 @@
+       (void)grheap_collect(exec->heap);
+     }
+     result = run_native(exec, held[0], argc, given);
+-    (void)grcore_activation_leave(stack, record);
++    /* planted: the record is never left */
+   }
+ #ifdef GLTANG_WITH_JIT
+   gltang_jit_return_depth(exec, lent);

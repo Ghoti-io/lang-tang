@@ -1,0 +1,17 @@
+# 29 an unwind status read as OK
+# defect: the thunk of a library call answers "continue" for the value a runtime poll
+# returns when it orders the run to stop, so compiled code goes on with a value that
+# is not one instead of leaving through the chain deopt
+# caught by: the run whose budget runs out inside a native's answer (testNative_calls)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -56,7 +56,7 @@
+   GRJIT_NativeResult result;
+   result.value = value;
+   result.reserved = 0;
+-  result.status = value == GLTANG_V_UNWIND ? GRJIT_NATIVE_UNWIND : from_native ? exec->native_status : GRJIT_NATIVE_OK;
++  result.status = from_native ? exec->native_status : GRJIT_NATIVE_OK;  /* planted: GLTANG_V_UNWIND is not looked at */
+   return result;
+ }
+ 

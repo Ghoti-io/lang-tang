@@ -1,0 +1,17 @@
+# 26 a native-depth miscount
+# defect: a native called from compiled code hands back one unit too few of the
+# native-depth budget the open JIT records cost, so the budget is one unit tighter
+# compiled than interpreted and refuses a nesting level sooner
+# caught by: the native depth the native sees, and the budget sweep (testNative_calls)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -375,7 +375,7 @@
+   if (!jit || jit->records_open <= jit->depth_lent) {
+     return 0;
+   }
+-  size_t lent = jit->records_open - jit->depth_lent;
++  size_t lent = jit->records_open - jit->depth_lent - 1u;  /* planted: one too few */
+   for (size_t i = 0; i < lent; ++i) {
+     (void)grcore_context_leave_depth(exec->context, GRCORE_DEPTH_NATIVE);
+   }
