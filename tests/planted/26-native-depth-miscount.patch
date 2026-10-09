@@ -6,12 +6,12 @@
 #
 --- a/src/jit/jit.c
 +++ b/src/jit/jit.c
-@@ -375,7 +375,7 @@
+@@ -376,7 +376,7 @@
    if (!jit || jit->records_open <= jit->depth_lent) {
      return 0;
    }
--  size_t lent = jit->records_open - jit->depth_lent;
-+  size_t lent = jit->records_open - jit->depth_lent - 1u;  /* planted: one too few */
-   for (size_t i = 0; i < lent; ++i) {
-     (void)grcore_context_leave_depth(exec->context, GRCORE_DEPTH_NATIVE);
-   }
+-  size_t want = jit->records_open - jit->depth_lent;
++  size_t want = jit->records_open - jit->depth_lent - 1u;  /* planted: one too few */
+   size_t lent = 0;
+   for (size_t i = 0; i < want; ++i) {
+     // Only a unit that was handed back is counted as lent: a refusal leaves the

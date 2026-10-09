@@ -577,6 +577,9 @@ resume_loop:
               // The `CALL` itself is run again when the callee returns, finding
               // the continuation and the value.
               GLTANG_Value kf = exec->callk_function;
+              // Nothing allocates between the native's return and the continuation
+              // below (which holds the state itself across its allocation), so the
+              // state is not moved in between.
               GLTANG_Value kstate = exec->callk_state;
               exec->callk_function = 0;
               RELOAD();

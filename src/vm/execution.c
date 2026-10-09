@@ -31,6 +31,7 @@
  * destructor has not yet run (reverse registration order, AD-20).
  */
 
+#include "test_hooks.h"
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <stdio.h>
@@ -883,7 +884,6 @@ void gltang_buffer_free(void * buffer) {
 // The tests' switches over compiled calls (src/jit/jit.c): a build without the JIT
 // has nothing to switch, and the harness that sets them for every execution it
 // makes still links.
-void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
 void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push) {
   (void)execution;
   (void)calls_off;
@@ -893,7 +893,6 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
 
 // The same for the switches over native calls (src/jit/jit.c): the shared wrapper's
 // collection is the engine's, so it stays; the compiled half has nothing to switch.
-void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
 void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam) {
   (void)natives_off;
   if (execution) {

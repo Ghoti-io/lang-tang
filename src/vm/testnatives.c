@@ -23,8 +23,8 @@
  *
  * The engine's test natives (spec-runtime-calls story 9): host functions that
  * reach the engine's internals, which no host can, registered into a library by a
- * test through `gltang_vm_test_add_native` (declared by the test; no header
- * names it). They exist to show the cases a host's opaque native never meets:
+ * test through `gltang_vm_test_add_native` (declared in test_hooks.h, which is not installed and which no host
+ * names). They exist to show the cases a host's opaque native never meets:
  *
  * - `depth()` and `records()`: the native-depth units and activation records in
  *   use while the native runs, which are what the shared wrapper opened.
@@ -39,8 +39,12 @@
  * - `resumable(f)`: f() + f() + f(), the first two of them called by the
  *   interpreter on the native's behalf, with its state in a guest frame (AD-23); it
  *   is reached only through an exit.
+ * - `after(f)`: calls the guest function f as a nested activation, and returns 1 if
+ *   the native is still inside a host function once that has returned (it is: a
+ *   native f called must not have cleared the flag the public setters read), else 0.
  */
 
+#include "test_hooks.h"
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <ghoti.io/runtime-core/a/activation.h>
@@ -54,7 +58,8 @@ typedef enum {
   TEST_NATIVE_ALLOC_N,
   TEST_NATIVE_REENTER,
   TEST_NATIVE_DEOPT,
-  TEST_NATIVE_RESUMABLE
+  TEST_NATIVE_RESUMABLE,
+  TEST_NATIVE_AFTER
 } TestNative;
 
 static void return_value(GLTANG_NativeCall * call, GLTANG_Value value) {
@@ -123,11 +128,16 @@ static bool test_native(GLTANG_NativeCall * call, void * user) {
       return_value(call, arg(call, 0));
       return true;
     case TEST_NATIVE_ALLOC_REF: {
-      GLTANG_Value array = gltang_vm_array_new(exec, 1);
+      // One argument: an array holding it. Several: an array holding the first and
+      // the last, which is how a call with more arguments than the wrapper's frame
+      // holds shows that every one of them was copied and pinned.
+      const size_t held = call->argc > 1u ? 2u : 1u;
+      GLTANG_Value array = gltang_vm_array_new(exec, held);
       if (is_array(array)) {
-        // The argument was copied before anything could collect and the record pins
-        // what it names, so it is read from the copy, after the allocation.
-        gltang_vm_array_fill(exec, array, &call->args[0], 1);
+        // The arguments were copied before anything could collect and the record pins
+        // what they name, so they are read from the copy, after the allocation.
+        const GLTANG_Value items[2] = {arg(call, 0), arg(call, call->argc ? call->argc - 1u : 0u)};
+        gltang_vm_array_fill(exec, array, items, held);
       }
       return_value(call, array);
       return true;
@@ -162,11 +172,15 @@ static bool test_native(GLTANG_NativeCall * call, void * user) {
       return true;
     case TEST_NATIVE_RESUMABLE:
       return resumable(call);
+    case TEST_NATIVE_AFTER: {
+      (void)gltang_vm_call_guest(exec, arg(call, 0), 0, NULL);
+      gltang_call_return_integer(call, exec->in_host ? 1 : 0);
+      return true;
+    }
   }
   return false;
 }
 
-GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind) {
   GLTANG_Result r = gltang_library_add_native(library, name, test_native, (void *)(uintptr_t)kind);
   if (r == GLTANG_OK && kind == (int)TEST_NATIVE_RESUMABLE) {

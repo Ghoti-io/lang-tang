@@ -32,6 +32,7 @@
  * by runtime-core, which sees a context that is running.
  */
 
+#include "test_hooks.h"
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <string.h>
@@ -193,9 +194,10 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
       // never at registration. It makes a scalar; "not available" is null.
       GLTANG_HostValue host;
       memset(&host, 0, sizeof(host));
+      const bool outer_in_host = exec->in_host;
       exec->in_host = true;
       bool available = member->factory(member->user, &host);
-      exec->in_host = false;
+      exec->in_host = outer_in_host;
       return available ? host_value(exec, &host) : GLTANG_V_NULL;
     }
     case GLTANG_MEMBER_BUILTIN:
@@ -467,9 +469,12 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
   // back in the value it is bound to.
   call.resume_state = native->bound;
   exec->callk_function = 0;
+  // A native that re-entered guest code may have called another native: the outer
+  // one is still running when the inner returns, so the flag goes back as it was.
+  const bool outer_in_host = exec->in_host;
   exec->in_host = true;
   bool worked = member->native(&call, member->user);
-  exec->in_host = false;
+  exec->in_host = outer_in_host;
   if (call.callk_function) {
     // The native asked for a guest call and to be called again with its result
     // (AD-23): the interpreter does that, from its own loop, never here.
@@ -509,15 +514,24 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   // conservative segment, so what they name is pinned, and the native reads the copy
   // and not the operand stack it came from (which a collection may have moved). The
   // array is cleared first so that every word the collector reads is defined.
-  GLTANG_Value held[1u + NATIVE_COPY_MAX] = {0};
-  const GLTANG_Value * given = args;
-  held[0] = callee;
-  if (argc <= NATIVE_COPY_MAX) {
-    if (argc) {
-      memcpy(&held[1], args, argc * sizeof(GLTANG_Value));
+  GLTANG_Value held_small[1u + NATIVE_COPY_MAX] = {0};
+  GLTANG_Value * held = held_small;
+  size_t held_count = 1u + NATIVE_COPY_MAX;
+  if (argc > NATIVE_COPY_MAX) {
+    // More arguments than the frame holds: the copy is made on the heap, zeroed,
+    // and is the record's segment all the same, so every argument count is pinned
+    // and read from a copy the operand stack's moves cannot reach.
+    held_count = 1u + argc;
+    held = gcu_calloc(held_count, sizeof(GLTANG_Value));
+    if (!held) {
+      return exec->roots[GLTANG_ROOT_OOM];
     }
-    given = &held[1];
   }
+  held[0] = callee;
+  if (argc) {
+    memcpy(&held[1], args, argc * sizeof(GLTANG_Value));
+  }
+  const GLTANG_Value * given = &held[1];
   ++exec->natives_called;
   exec->native_status = GLTANG_NATIVE_STATUS_OK;
 #ifdef GLTANG_WITH_JIT
@@ -526,7 +540,7 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   (void)compiled;
 #endif
   GRCORE_Stack * stack = grcore_context_stack(exec->context);
-  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + sizeof(held)};
+  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + held_count * sizeof(GLTANG_Value)};
   GRCORE_ActivationRef record;
   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
   GLTANG_Value result;
@@ -537,7 +551,7 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
     result = gltang_vm_native_refused_value(exec, entered);
   }
   else {
-    if (exec->native_gc_seam && argc <= NATIVE_COPY_MAX) {
+    if (exec->native_gc_seam) {
       // Entering a nested activation is a GC point (AD-17); the heap's torture
       // mode owns only the ones the heap has, so under torture the engine makes
       // this one. The native then finds its arguments where they were copied.
@@ -549,6 +563,9 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
 #ifdef GLTANG_WITH_JIT
   gltang_jit_return_depth(exec, lent);
 #endif
+  if (held != held_small) {
+    gcu_free(held);
+  }
   return result;
 }
 
@@ -556,7 +573,6 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
  * For the tests only: how many natives the execution has entered through the shared
  * wrapper, from either tier. Not declared in any header; a test declares it itself.
  */
-uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution) {
   return execution ? execution->natives_called : 0;
 }

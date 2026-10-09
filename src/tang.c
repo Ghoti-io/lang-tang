@@ -559,7 +559,8 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     if (gltang_execution_jit_stats(execution, &stats) == GLTANG_OK) {
       fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu, "
         "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu, rebuild failures %llu, hook argument errors %llu, code bytes mapped %llu, "
-        "library functions called %llu, member loads %llu, library exits %llu\n",
+        "library functions called %llu, member loads %llu, library guard exits %llu, library stack exits %llu, "
+        "library status deopts %llu, library status unwinds %llu, library enters refused %llu, library sites unsupported %llu\n",
         (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
         (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
         (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls,
@@ -568,7 +569,9 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
         (unsigned long long)stats.compile_at_call, (unsigned long long)stats.deepest_chain,
         (unsigned long long)stats.rebuild_failures, (unsigned long long)stats.hook_argument_errors, (unsigned long long)stats.code_bytes_mapped,
         (unsigned long long)stats.native_calls, (unsigned long long)stats.member_loads,
-        (unsigned long long)(stats.native_call_exits_guard + stats.native_exits_stack + stats.native_status_deopts + stats.native_status_unwinds));
+        (unsigned long long)stats.native_call_exits_guard, (unsigned long long)stats.native_exits_stack,
+        (unsigned long long)stats.native_status_deopts, (unsigned long long)stats.native_status_unwinds,
+        (unsigned long long)stats.native_enters_refused, (unsigned long long)stats.native_sites_unsupported);
     }
   }
 #ifdef GLTANG_WITH_DEBUG

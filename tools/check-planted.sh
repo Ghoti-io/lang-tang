@@ -40,6 +40,7 @@
 #   27 a native's arguments are copied before the collection and not pinned   the relocation arm   (testNative_calls, GRHEAP_RELOCATE+TORTURE)
 #   28 a stale pointer into the guest stack after a native that re-entered guest code   the nested-activation tests on a moving stack   (testNative_calls)
 #   29 an unwind status read as OK   the run that runs out of budget inside a native's answer   (testNative_calls)
+#   30 a compiled member load by name is not charged   the differential over a loop of `.name` loads and of a dotted `use` path   (testNative_calls)
 #
 # Cases 13, 14, 15, 20 and 27 (`--relocate`) are caught only by runtime-heap's relocation
 # torture, which moves every unpinned object at every collection: a reference
@@ -57,7 +58,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26, 28 and 29; 10 is retired); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 30; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13, 14, 15, 20 and 27, against PLANTED_RELOC_PREFIX and
@@ -68,7 +69,7 @@
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
 # copy is built the same way, in its own tree (release-nojit for no). Cases 08, 09
-# and 15 to 29 plant a defect in the JIT, which a JIT=no build does not contain, so
+# and 15 to 30 plant a defect in the JIT, which a JIT=no build does not contain, so
 # with no they are SKIPPED, loudly, and counted as skipped and never as caught:
 # the summary line gives both numbers, and a run in which nothing was caught
 # fails (an all-skipped run proves nothing). With yes every case runs.
@@ -93,7 +94,7 @@ case "$JIT" in
   *) printf 'check-planted: PLANTED_JIT must be yes or no, not %s\n' "$JIT" >&2; exit 2 ;;
 esac
 # Cases whose defect is in code only a JIT=yes build contains.
-JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok"
+JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged"
 
 if [ -z "$LIBDIR" ]; then
   printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
@@ -124,7 +125,7 @@ RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15
 # What a relocation case runs under: relocation and torture together (a move at
 # every GC point). The "relocation is the instrument" check removes the first.
 RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged"
 SLOW="01-missing-root 02-missing-gc-store"
 
 if [ "$MODE" = relocate ]; then
@@ -155,7 +156,7 @@ target_of() {
     03-*|05-*|08-*) echo "build/linux/$TREE/apps/testObserver" ;;
     09-*) echo "build/linux/$TREE/apps/testJit" ;;
     15-*|16-*|17-*|19-*|20-*|21-*|22-*|23-*|24-*) echo "build/linux/$TREE/apps/testJit_calls" ;;
-    25-*|26-*|27-*|28-*|29-*) echo "build/linux/$TREE/apps/testNative_calls" ;;
+    25-*|26-*|27-*|28-*|29-*|30-*) echo "build/linux/$TREE/apps/testNative_calls" ;;
     18-*) echo "build/linux/$TREE/apps/testObserver" ;;
     11-*|12-*) echo "build/linux/$TREE/apps/testSnapshot" ;;
     04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
@@ -201,6 +202,8 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testNative_calls --gtest_brief=1 --gtest_filter='NativeCalls.EveryCompiledFrameBelowANestedActivation*') ;;
     29-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testNative_calls --gtest_brief=1 --gtest_filter='NativeCalls.ANativeWhoseResultUnwinds*') ;;
+    30-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testNative_calls --gtest_brief=1 --gtest_filter='NativeCalls.ADottedUsePath*') ;;
     11-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
     12-*)
@@ -234,6 +237,7 @@ name_of_test() {
     27-*) echo "testNative_calls under relocation torture" ;;
     28-*) echo "testNative_calls (the nested activation on a stack that moves)" ;;
     29-*) echo "testNative_calls (the unwind inside a native's answer)" ;;
+    30-*) echo "testNative_calls (the loads of a dotted path and of a name)" ;;
     04-*) echo "testNative_gate" ;;
     11-*) echo "testSnapshot (the address scan)" ;;
     12-*) echo "testSnapshot (the output-so-far test and the corpus sweep)" ;;

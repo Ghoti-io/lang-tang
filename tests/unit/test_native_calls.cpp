@@ -47,6 +47,7 @@ void expect_clean_natives(const Outcome & jit) {
   EXPECT_EQ(jit.stats.hook_argument_errors, 0u);
   EXPECT_EQ(jit.stats.rebuild_failures, 0u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_EQ(jit.stats.depth_handback_failures, 0u);
   EXPECT_EQ(jit.native_depth, 0u) << "every native record and JIT record was left";
 }
 
@@ -109,7 +110,13 @@ TEST(NativeCalls, ABudgetOfNativeDepthRefusesTheSameCallInBothTiers) {
     expect_same(sc, &plain, &jit);
     EXPECT_EQ(jit.native_depth, 0u) << "budget " << budget;
     if (budget == 0) {
+      // Every call is refused with the recursion-limit error, in both tiers, and is
+      // printed as an error, never as a sum.
       EXPECT_NE(plain.raw, "234") << "a full budget refuses the call: the value is an error, not the sum";
+      EXPECT_EQ(plain.raw, "") << "nothing is printed: the program ends in the error";
+      EXPECT_NE(plain.errors.find("Not implemented"), std::string::npos) << plain.errors;
+      EXPECT_EQ(plain.errors, jit.errors);
+      EXPECT_EQ(plain.raw, jit.raw);
     }
     else {
       EXPECT_EQ(plain.raw, "234") << "budget " << budget;
@@ -490,6 +497,12 @@ TEST(NativeCalls, GeneratedCallGraphsThatCallTheLibraryAreTheSameCompiledAndInte
     EXPECT_EQ(jit.stats.hook_argument_errors, 0u) << "seed " << seed;
     EXPECT_EQ(jit.stats.rebuild_failures, 0u) << "seed " << seed;
     EXPECT_EQ(jit.native_depth, 0u) << "seed " << seed;
+    // Per call, not in aggregate: the two tiers enter the wrapper the same number of
+    // times, and the compiled ones are a part of those the JIT run made (the rest are
+    // the interpreter's, at exits and before tier-up).
+    EXPECT_EQ(jit.natives_called, plain.natives_called) << "seed " << seed << ": every call of a native is made once, in whichever tier";
+    EXPECT_LE(jit.stats.native_calls, jit.natives_called) << "seed " << seed;
+    EXPECT_EQ(plain.stats.native_calls, 0u) << "seed " << seed << ": the interpreter alone makes no compiled call";
   }
   EXPECT_GT(native_calls, kSeeds * 5) << "the comparison is not vacuous: native calls were compiled";
   EXPECT_GT(with_calls, kSeeds / 3);
@@ -658,16 +671,170 @@ TEST(NativeCalls, AContextPausedBetweenLibraryCallsAndInsideAResumableNativeResu
   EXPECT_EQ(context.jit_stats().functions_discarded, 0u);
 }
 
-TEST(NativeCalls, AMemberLoadThatYieldsNothingCompiledStaysAnExit) {
+TEST(NativeCalls, ALoadOfANameNothingProvidesIsAnExitAfterTheLoadsBeforeItAreCompiled) {
   GLTANG_REQUIRE_JIT_BACKEND();
+  // `use math` and `use random` are compiled loads (two a run); `use nothing_provides_this`
+  // is null, which compiled code does not make: it leaves by an exit and the interpreter
+  // goes on, so each run has a deopt, no library call is made, and the program's
+  // result and errors are the interpreter's.
   Scenario sc = native_scenario(
       "function run() { use math; use random; use nothing_provides_this; s = 0; i = 0; while (i < 5) { s = s + inc2(i); i = i + 1; } return s; }\n"
       "function inc2(x) { return x + 1; }\n"
-      "print(run() as string);\n");
+      "print(run() as string); print(run() as string);\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
+  EXPECT_EQ(jit.stats.member_loads, 4u) << "two compiled loads in each of the two runs";
+  EXPECT_EQ(jit.stats.native_calls, 0u);
+  EXPECT_GE(jit.stats.deopts, 2u) << "the load of the missing name is an exit in each run";
+  EXPECT_EQ(jit.stats.native_status_unwinds, 0u);
 }
 
+
+// ---------------------------------------------------------------------------
+// Loads through a sub-library: `use a.b` paths and `.name`
+// ---------------------------------------------------------------------------
+
+/// The natives of add_natives, and a library `m` holding `inc` and `plus` (and an integer `ten`) and a library `k` whose `inc` is the weighted sum.
+void add_sub_libraries(Context & context) {
+  context.add_native_library();
+  GLTANG_Library * m = nullptr;
+  GLTANG_Library * k = nullptr;
+  ASSERT_EQ(gltang_library_create("m", &m), GLTANG_OK);
+  ASSERT_EQ(gltang_library_create("k", &k), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(m, "inc", &Context::inc_native, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(m, "plus", &Context::sum_native, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_integer(m, "ten", 10), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(k, "inc", &Context::sum_native, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_library(context.library(), m), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_library(context.library(), k), GLTANG_OK);
+  gltang_library_release(m);
+  gltang_library_release(k);
+}
+
+Scenario sub_scenario(const std::string & source) {
+  Scenario sc;
+  sc.source = source;
+  sc.script = true;
+  sc.before = add_sub_libraries;
+  return sc;
+}
+
+TEST(NativeCalls, ADottedUsePathAndTheNameOfALibraryAreLoadedAndCalledFromCompiledCodeWithNoExit) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  constexpr int kN = 25;
+  const std::string n = std::to_string(kN);
+  for (int torture = 0; torture <= 1; ++torture) {
+    // `use m.inc as f`: one load of a dotted path per run, then the call of the value.
+    Scenario path = sub_scenario(
+        "function run(n) { use m.inc as f; s = 0; i = 0; while (i < n) { s = f(s); i = i + 1; } return s; }\n"
+        "print(run(" + n + ")); print(run(" + n + "));\n");
+    // `m.inc(s)`: the library is loaded once and its member by `.name` on every iteration.
+    Scenario name = sub_scenario(
+        "function run(n) { use m; s = 0; i = 0; while (i < n) { s = m.inc(s); i = i + 1; } return s; }\n"
+        "print(run(" + n + ")); print(run(" + n + "));\n");
+    for (Scenario * sc : {&path, &name}) {
+      if (torture) {
+        sc->torture = 1;
+        sc->verify = 1;
+        sc->moving = 1;
+        sc->gc_at_native = true;
+      }
+    }
+    Outcome plain, jit;
+    expect_same(path, &plain, &jit);
+    EXPECT_EQ(jit.raw, n + n);
+    expect_clean_natives(jit);
+    EXPECT_EQ(jit.stats.native_calls, 2u * kN) << "torture " << torture << ": every call of the loop is compiled";
+    EXPECT_EQ(jit.stats.member_loads, 2u) << "torture " << torture << ": the dotted path is one load per run";
+    EXPECT_EQ(jit.stats.native_call_exits_guard + jit.stats.native_exits_stack, 0u);
+    Outcome plain2, jit2;
+    expect_same(name, &plain2, &jit2);
+    EXPECT_EQ(jit2.raw, n + n);
+    expect_clean_natives(jit2);
+    EXPECT_EQ(jit2.stats.native_calls, 2u * kN) << "torture " << torture;
+    EXPECT_EQ(jit2.stats.member_loads, 2u * (1u + kN)) << "torture " << torture << ": `use m` once, and one `.name` load on every iteration, the callee of the call";
+    EXPECT_EQ(jit2.stats.native_call_exits_guard + jit2.stats.native_exits_stack, 0u);
+    if (HasFailure()) {
+      return;
+    }
+  }
+}
+
+TEST(NativeCalls, ALibraryNameReassignedAfterTheFunctionIsCompiledLoadsWhatItHoldsNow) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // After four iterations `m` is the other library, whose `inc` is another native:
+  // the load of `.inc` is made again and the call site's guard sees the new value.
+  Scenario sc = sub_scenario(
+      "function run() { use m; use k; s = 0; i = 0; while (i < 10) { s = m.inc(s); if (i == 3) { m = k; } i = i + 1; } return s; }\n"
+      "print(run()); print(run());\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_GE(jit.stats.native_call_exits_guard, 1u) << "the callee is no longer the native the site names";
+  EXPECT_GE(jit.stats.native_calls, 8u);
+  // A library name rebound to something that is not a library: the load is an
+  // ordinary attribute of the new value, in both tiers.
+  Scenario other = sub_scenario(
+      "function run() { use m; s = 0; i = 0; while (i < 6) { if (i == 3) { m = 7; } s = s + 1; t = m.ten; i = i + 1; } return s; }\n"
+      "print(run()); print(run());\n");
+  Outcome p2, j2;
+  expect_same(other, &p2, &j2);
+}
+
+TEST(NativeCalls, ANativeCalledWithMoreArgumentsThanTheWrapperFrameHoldsReadsItsArgumentsAfterCollectionsUnderTortureOnAMovingHeap) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // 16 to 24 arguments: the call is an exit in compiled code and made by the
+  // interpreter, whose arguments are on the operand stack; the wrapper copies every
+  // one of them and pins the copies, so the native that allocates first and reads
+  // them afterwards finds the first and the last as they were.
+  for (int n : {16, 17, 20, 24}) {
+    std::string args = "[i]";
+    for (int k = 1; k < n; ++k) {
+      args += ", [i + " + std::to_string(k) + "]";
+    }
+    Scenario sc = native_scenario(
+        "function run() { use alloc_ref; s = 0; i = 0; while (i < 10) { r = alloc_ref(" + args + "); s = s + r[0][0] * 100 + r[1][0]; i = i + 1; } return s; }\n"
+        "print(run()); print(run());\n");
+    sc.torture = 1;
+    sc.verify = 1;
+    sc.moving = 1;
+    sc.gc_at_native = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    // The sum over i of i * 100 + (i + n - 1), printed by each of the two runs.
+    const std::string each = std::to_string(100 * 45 + 45 + 10 * (n - 1));
+    EXPECT_EQ(plain.raw, each + each) << n << " arguments";
+    if (HasFailure()) {
+      ADD_FAILURE() << "with " << n << " arguments";
+      return;
+    }
+  }
+}
+
+TEST(NativeCalls, AnOuterNativeStillRefusesTheHostApiAfterANativeItsGuestCodeCalledHasReturned) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `after(f)` runs f as a nested activation and reports whether it is still inside a
+  // host function afterwards; f calls another native (`echo`), which must not clear it.
+  Scenario sc = native_scenario(
+      "function leaf() { use echo; return echo(5); }\n"
+      "function run() { use after; return after(leaf); }\n"
+      "print(run()); print(run());\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_EQ(plain.raw, "11");
+  EXPECT_EQ(jit.raw, "11");
+}
+
+TEST(NativeCalls, ALoadAfterANativeThatAsksCompiledCodeToLeaveIsMadeByTheInterpreterInTheSameFunction) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc = native_scenario(
+      "function run() { use deopt; use inc; use depth; s = 0; i = 0; while (i < 4) { s = s + deopt(i); s = s + depth(); i = i + 1; } return inc(s); }\n"
+      "print(run()); print(run());\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_EQ(jit.stats.native_status_deopts, 2u) << "the first call of each run leaves compiled code";
+  EXPECT_GE(jit.stats.native_calls, 2u);
+  expect_clean_natives(jit);
+}
 
 #else  // GLTANG_WITH_JIT
 

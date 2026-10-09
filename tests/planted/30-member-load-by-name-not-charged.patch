@@ -1,0 +1,17 @@
+# 30 a compiled member load by name is not charged
+# defect: the thunk of `.name` on a library does not add the ATTR to the fuel the
+# function has pending, so a compiled loop of member loads costs less than the
+# interpreter's run of the same loop
+# caught by: the differential over a function that loads `.name` on every iteration (testNative_calls)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -124,7 +124,7 @@
+ 
+ static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
++  /* planted: the load of a member by name is charged nothing */
+   ++exec->jit_stats.member_loads;
+   // As the interpreter's ATTR, where the container stays on the operand stack for
+   // the whole operation: here it is held on the temp stack until the attribute

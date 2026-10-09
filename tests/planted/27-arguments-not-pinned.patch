@@ -8,12 +8,12 @@
 #
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -526,7 +526,7 @@
+@@ -540,7 +540,7 @@
    (void)compiled;
  #endif
    GRCORE_Stack * stack = grcore_context_stack(exec->context);
--  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + sizeof(held)};
-+  GRCORE_CSegment segment = {(uintptr_t)&held[0] + sizeof(held), (uintptr_t)&held[0] + sizeof(held) + 8u};  /* planted: the segment is after the copies */
+-  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + held_count * sizeof(GLTANG_Value)};
++  GRCORE_CSegment segment = {(uintptr_t)&held[0] + held_count * sizeof(GLTANG_Value), (uintptr_t)&held[0] + held_count * sizeof(GLTANG_Value) + 8u};  /* planted: the segment is after the copies */
    GRCORE_ActivationRef record;
    GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
    GLTANG_Value result;

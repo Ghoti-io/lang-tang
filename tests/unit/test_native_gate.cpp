@@ -129,6 +129,7 @@ struct Result {
   uint64_t collections = 0;
   GRCORE_Result ran = GRCORE_OK;
   double seconds = 0;
+  uint64_t compiled_native_calls = 0;  // library natives called from compiled code (the JIT's statistic)
 };
 
 Result run_source(const std::string & source, const Row & row, uint64_t fuel, uint64_t memory) {
@@ -176,6 +177,7 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
     EXPECT_EQ(gltang_execution_native_polls(context.execution, row.native, &r.native_polls), GLTANG_OK)
         << row.native << " is not an id in natives.def";
   }
+  r.compiled_native_calls = context.jit_stats().native_calls;
   r.m.fuel = grcore_context_fuel_used(context.context);
   r.m.peak = context.tracker.peak_bytes;
   r.m.memory_peak = grcore_context_memory_peak(context.context);
@@ -205,6 +207,11 @@ void run_row(const Row & row) {
       << "bytes held " << r.m.peak << " against a build that held " << base.m.peak << " and a bound of " << row.max_extra_bytes << " more";
   if (r.outcome == FINISHED_ERROR && row.error != GLTANG_ERROR_KIND_COUNT) {
     EXPECT_EQ(r.error, row.error);
+  }
+  if (g_jit_threshold == 1 && row.host_native_bytes) {
+    // The compiled arm must have compiled the call: a gate that ran the native only through
+    // the interpreter would pass for the wrong reason.
+    EXPECT_GT(r.compiled_native_calls, 0u) << "the native was not called from compiled code";
   }
   if (row.gc) {
     EXPECT_GT(r.collections, 0u) << "memory over budget runs a collection before the verdict";
@@ -489,11 +496,14 @@ TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
 TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWorkWhenEveryFunctionIsCompiled) {
   GLTANG_REQUIRE_JIT_BACKEND();
   std::vector<Row> t = rows();
+  // Reset on every way out of the test, a failed assertion included.
+  struct Reset {
+    ~Reset() { g_jit_threshold = -1; }
+  } reset;
   g_jit_threshold = 1;
   for (const Row & row : t) {
     run_row(row);
   }
-  g_jit_threshold = -1;
 }
 #endif
 

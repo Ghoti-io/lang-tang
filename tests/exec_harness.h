@@ -22,6 +22,7 @@
 #ifndef GHOTI_IO_GLTANG_TEST_EXEC_HARNESS_H
 #define GHOTI_IO_GLTANG_TEST_EXEC_HARNESS_H
 
+#include "../src/vm/test_hooks.h"
 #include <gtest/gtest.h>
 
 #include <ghoti.io/cutil/memory.h>
@@ -40,9 +41,6 @@
 #define GLTANG_TEST_HAS_RELOCATE 1
 #endif
 
-extern "C" void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
-extern "C" void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
-extern "C" GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);
 
 #include <malloc.h>
 #if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
@@ -592,14 +590,14 @@ class Context {
   /// The library of natives the call tests and the frame differential use: `inc` (adds
   /// one) and `sum` (the sum of its arguments, each weighted by its position) through the
   /// public API, and the engine's test natives (src/vm/testnatives.c) `depth`, `records`,
-  /// `echo`, `alloc_ref`, `alloc_n`, `reenter`, `deopt` and `resumable`.
+  /// `echo`, `alloc_ref`, `alloc_n`, `reenter`, `deopt`, `resumable` and `after`.
   void add_native_library() {
     GLTANG_Library * lib = library();
     ASSERT_NE(lib, nullptr);
     ASSERT_EQ(gltang_library_add_native(lib, "inc", &Context::inc_native, nullptr), GLTANG_OK);
     ASSERT_EQ(gltang_library_add_native(lib, "sum", &Context::sum_native, nullptr), GLTANG_OK);
-    const char * names[] = {"depth", "records", "echo", "alloc_ref", "alloc_n", "reenter", "deopt", "resumable"};
-    for (int k = 0; k < 8; ++k) {
+    const char * names[] = {"depth", "records", "echo", "alloc_ref", "alloc_n", "reenter", "deopt", "resumable", "after"};
+    for (int k = 0; k < 9; ++k) {
       ASSERT_EQ(gltang_vm_test_add_native(lib, names[k], k), GLTANG_OK);
     }
   }

@@ -126,19 +126,24 @@ static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
   ++exec->jit_stats.member_loads;
-  // As the interpreter's ATTR: the name is made (a GC point) while the library is
-  // held, and the attribute is read from the library as the collector left it.
+  // As the interpreter's ATTR, where the container stays on the operand stack for
+  // the whole operation: here it is held on the temp stack until the attribute
+  // has been read, since the name is made (a GC point) and the read may allocate
+  // (a member's value). The name is cached in the execution's constants, which the
+  // collector reads, once it is made.
   size_t mark = gltang_vm_temp_mark(exec);
   if (!gltang_vm_temp_push(exec, container)) {
     return finished(exec, exec->roots[GLTANG_ROOT_OOM], false);
   }
   GLTANG_Value name = gltang_vm_constant(exec, (uint32_t)constant);
   container = gltang_vm_temp_at(exec, mark);
-  gltang_vm_temp_release(exec, mark);
   if (name == GLTANG_V_UNWIND) {
+    gltang_vm_temp_release(exec, mark);
     return finished(exec, name, false);
   }
-  return finished(exec, gltang_vm_op_attr(exec, container, name), false);
+  GLTANG_Value value = gltang_vm_op_attr(exec, container, name);
+  gltang_vm_temp_release(exec, mark);
+  return finished(exec, value, false);
 }
 
 GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTable ** out) {

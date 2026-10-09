@@ -53,6 +53,7 @@
  * chain still returns into it.
  */
 
+#include "../vm/test_hooks.h"
 #include <ghoti.io/lang-tang/macros.h>
 
 #include "jit_internal.h"
@@ -375,9 +376,15 @@ size_t gltang_jit_lend_depth(GLTANG_Execution * exec) {
   if (!jit || jit->records_open <= jit->depth_lent) {
     return 0;
   }
-  size_t lent = jit->records_open - jit->depth_lent;
-  for (size_t i = 0; i < lent; ++i) {
-    (void)grcore_context_leave_depth(exec->context, GRCORE_DEPTH_NATIVE);
+  size_t want = jit->records_open - jit->depth_lent;
+  size_t lent = 0;
+  for (size_t i = 0; i < want; ++i) {
+    // Only a unit that was handed back is counted as lent: a refusal leaves the
+    // unit with the JIT record, and the hand-back below returns what was lent.
+    if (grcore_context_leave_depth(exec->context, GRCORE_DEPTH_NATIVE) != GRCORE_OK) {
+      break;
+    }
+    ++lent;
   }
   jit->depth_lent += lent;
   return lent;
@@ -389,7 +396,11 @@ void gltang_jit_return_depth(GLTANG_Execution * exec, size_t lent) {
     return;
   }
   for (size_t i = 0; i < lent; ++i) {
-    (void)grcore_context_enter_depth(exec->context, GRCORE_DEPTH_NATIVE);
+    if (grcore_context_enter_depth(exec->context, GRCORE_DEPTH_NATIVE) != GRCORE_OK) {
+      // The units were handed back for the call, so the budget has room for them
+      // again unless something else took it: counted, never expected.
+      ++exec->jit_stats.depth_handback_failures;
+    }
   }
   jit->depth_lent -= lent;
 }
@@ -523,7 +534,6 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
  * needs (the heap owns the GC points it has, not this one). Not declared in any
  * header; a test declares it itself.
  */
-void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
 void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push) {
   if (execution && execution->jit) {
     execution->jit->test_calls_off = calls_off;
@@ -540,7 +550,6 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
  * nested-activation GC point of AD-17 that the heap's own torture mode does not
  * reach. Not declared in any header; a test declares it itself.
  */
-void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
 void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam) {
   if (!execution) {
     return;

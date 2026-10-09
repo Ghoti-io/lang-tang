@@ -26,6 +26,7 @@
 // about the two runs compared. Shared by test_jit.cpp (the baseline) and
 // test_jit_calls.cpp (calls between compiled functions).
 
+#include "../src/vm/test_hooks.h"
 #include "exec_harness.h"
 
 #include <functional>
@@ -36,10 +37,8 @@
 #include <ghoti.io/runtime-core/runtime-core.h>
 
 extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled);
-extern "C" void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
 extern "C" int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after);
 extern "C" int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting);
-extern "C" uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
 
 namespace jt {

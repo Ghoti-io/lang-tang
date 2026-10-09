@@ -323,6 +323,7 @@ typedef struct GLTANG_JitStats {
   uint64_t native_status_unwinds; ///< Exits after a native or a member load reported that the run is unwinding.
   uint64_t native_enters_refused; ///< Calls of a library native from compiled code whose activation record the native-depth or memory budget refused (the call's value is the error; the interpreter's call is refused the same).
   uint64_t native_sites_unsupported; ///< Library call and member load sites left as exits because natives cannot be called from compiled code here (a backend that refuses them, or no table).
+  uint64_t depth_handback_failures; ///< Native-depth units a native call lent back from the open compiled-code records that the budget then refused to take again. Zero in any correct run.
 } GLTANG_JitStats;
 
 /**

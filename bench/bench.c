@@ -58,6 +58,7 @@
 /* clock_gettime(CLOCK_MONOTONIC) is POSIX, and -std=c17 hides it. */
 #define _POSIX_C_SOURCE 200809L
 
+#include "../src/vm/test_hooks.h"
 #include <ghoti.io/lang-tang/compile.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/lang-tang.h>
@@ -569,7 +570,6 @@ static uint64_t small_function_compiled_run(uint64_t iterations, double * elapse
  * counters of the last run are printed with the figure. */
 #define FIB_SOURCE "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } fib(%d);"
 
-extern void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
 
 /* The control: the JIT at its default threshold with no call site compiled, so
  * every CALL is an exit as in milestone 1. */
@@ -617,7 +617,6 @@ static uint64_t fib22_calls_off_run(uint64_t iterations, double * elapsed) {
  * native and the load of `use` are compiled and make no exit), and compiled with
  * natives switched off (the behaviour before the story: the call is an exit at
  * every iteration). The result is checked. */
-extern void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
 
 static void setup_native_interpreted(GLTANG_Execution * execution) {
   setup_native(execution);
