@@ -571,7 +571,7 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
 
 /*
  * For the tests only: how many natives the execution has entered through the shared
- * wrapper, from either tier. Not declared in any header; a test declares it itself.
+ * wrapper, from either tier. Declared in vm/test_hooks.h.
  */
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution) {
   return execution ? execution->natives_called : 0;

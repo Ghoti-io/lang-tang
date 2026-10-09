@@ -532,7 +532,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
  * survive without continuing on unrebuilt frames; `gc_at_push` makes the push
  * hook collect after its push, which is the frame-push GC point GC torture
  * needs (the heap owns the GC points it has, not this one). Not declared in any
- * header; a test declares it itself.
+ * header but test_hooks.h.
  */
 void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push) {
   if (execution && execution->jit) {
@@ -548,7 +548,7 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
  * exits, and the statistic counts them); `gc_seam` makes the shared wrapper (and a
  * native's nested activation) collect once its record is open, which is the
  * nested-activation GC point of AD-17 that the heap's own torture mode does not
- * reach. Not declared in any header; a test declares it itself.
+ * reach. Declared in vm/test_hooks.h.
  */
 void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam) {
   if (!execution) {
