@@ -27,9 +27,10 @@
  * that a signature that drifts is a compile error and not a silent link.
  */
 
-#ifndef GHOTIIO_LANG_TANG_VM_TEST_HOOKS_H
-#define GHOTIIO_LANG_TANG_VM_TEST_HOOKS_H
+#ifndef GHOTI_IO_GLTANG_VM_TEST_HOOKS_H
+#define GHOTI_IO_GLTANG_VM_TEST_HOOKS_H
 
+#include <ghoti.io/lang-tang/macros.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/library.h>
 
