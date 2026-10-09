@@ -114,8 +114,11 @@ TEST(NativeCalls, ABudgetOfNativeDepthRefusesTheSameCallInBothTiers) {
     else {
       EXPECT_EQ(plain.raw, "234") << "budget " << budget;
     }
-    if (budget >= 2) {
+    if (budget >= 1) {
+      // With a budget of one unit the run's own JIT record takes it: the native is called from
+      // compiled code only because the wrapper hands that unit back before it opens its record.
       EXPECT_GE(jit.stats.native_calls, 3u) << "budget " << budget << ": the record of the run is entered and the native is called from compiled code";
+      EXPECT_EQ(jit.stats.native_enters_refused, 0u) << "budget " << budget;
     }
     if (HasFailure()) {
       return;
