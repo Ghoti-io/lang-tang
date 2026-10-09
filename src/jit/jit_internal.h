@@ -66,6 +66,8 @@
 #define GLTANG_JIT_DEOPT_LIMIT 8u
 /** @brief The most arguments of a compiled call (runtime-jit's limit is 16, one of them the entry flag). */
 #define GLTANG_JIT_MAX_CALL_ARGS 15u
+/* runtime-jit's builder takes at most 16 call arguments (GRJIT_BUILDER_MAX_ARGS, not public): the parameters and the hidden flag must fit. */
+_Static_assert(GLTANG_JIT_MAX_CALL_ARGS + 1u <= 16u, "a compiled call's arguments and the entry flag must fit runtime-jit's call limit");
 
 /** @brief Where a function is in its life in one execution. */
 typedef enum GLTANG_JitFnState {

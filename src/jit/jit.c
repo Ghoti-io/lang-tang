@@ -500,6 +500,10 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
 int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after);
 int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after) {
   GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  if (!jit || execution->program_count == 0 || code_fn >= execution->programs[0].program->function_count ||
+      slot_fn >= execution->programs[0].program->function_count) {
+    return -1;
+  }
   GLTANG_JitFn * code_record = jit ? gltang_jit_find_fn(execution, jit, GLTANG_FN_WORD(0, code_fn), false) : NULL;
   GLTANG_JitFn * slot_record = jit ? gltang_jit_find_fn(execution, jit, GLTANG_FN_WORD(0, slot_fn), false) : NULL;
   if (!code_record || !code_record->code || !slot_record || !slot_record->slot) {
@@ -548,7 +552,9 @@ int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, 
  * For the tests only: calls one of the call hooks (0 push, 1 pop, 2 compile, 3
  * deopt) as compiled code would, with arguments the test chooses, so that the
  * checks a hook makes of its own arguments are seen to refuse. Returns the hook's
- * result.
+ * result: push and compile return their refusal word (0 is success), pop returns 0,
+ * and deopt returns its result word with `token` as the cause. -1 means nothing was
+ * called (no JIT, or no such hook), which is not a refusal.
  */
 int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
 int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count) {
@@ -557,7 +563,9 @@ int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t tok
   }
   switch (hook) {
     case 0: return (int)gltang_jit_hooks.push(execution->context, token, args, count);
+    case 1: gltang_jit_hooks.pop(execution->context); return 0;
     case 2: return (int)gltang_jit_hooks.compile(execution->context, token);
+    case 3: return (int)gltang_jit_hooks.deopt(execution->context, token);
     default: return -1;
   }
 }
