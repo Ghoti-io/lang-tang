@@ -64,7 +64,7 @@ const char * mode_name(gen::Mode mode) {
 /// One generated program through both engines. `mutate` may alter lang-tang's
 /// verdict before the comparison, which is how a planted divergence is made.
 Result run_one(const std::string & runner, const std::string & dir, uint64_t seed, gen::Mode mode,
-    const std::function<void(oracle::Verdict &)> & mutate = nullptr) {
+    const std::function<void(oracle::Verdict &)> & mutate = nullptr, long jit_threshold = -1) {
   gen::Program program = gen::generate(seed, mode);
   bool script = mode == gen::Mode::Script;
   std::string path = dir + "/p-" + std::to_string(seed) + (script ? "-s" : "-t") + ".tang";
@@ -73,7 +73,7 @@ Result run_one(const std::string & runner, const std::string & dir, uint64_t see
     f << program.source;
   }
   Result r;
-  r.ours = oracle::lang_tang_run(program.source, script);
+  r.ours = oracle::lang_tang_run(program.source, script, oracle::kDifferentialFuel, jit_threshold);
   r.theirs = oracle::ctang_run_verdict(runner, script ? "run-script" : "run-template", path, kCtangTimeoutMs);
   std::remove(path.c_str());
   if (mutate) {
@@ -94,13 +94,13 @@ const char * runner_or_null() {
 
 /// Runs `count` programs from `first`: program k is seed first + k / 2, script
 /// for even k and template for odd k.
-void campaign(const std::string & runner, uint64_t first, uint64_t count, size_t * agreed, size_t * killed, size_t * paused) {
+void campaign(const std::string & runner, uint64_t first, uint64_t count, size_t * agreed, size_t * killed, size_t * paused, long jit_threshold = -1) {
   std::string dir = work_dir(runner);
   size_t shown = 0;
   for (uint64_t k = 0; k < count; ++k) {
     uint64_t seed = first + k / 2;
     gen::Mode mode = k % 2 == 0 ? gen::Mode::Script : gen::Mode::Template;
-    Result r = run_one(runner, dir, seed, mode);
+    Result r = run_one(runner, dir, seed, mode, nullptr, jit_threshold);
     *killed += r.theirs.kind == oracle::Kind::Killed;
     *paused += r.ours.kind == oracle::Kind::Paused;
     if (r.agreed) {
@@ -131,6 +131,14 @@ TEST(FuzzDiff, FixedBatchOfGeneratedProgramsAgreesOnBothEngines) {
   EXPECT_EQ(killed, 0u) << "a generated program never runs away";
   EXPECT_EQ(paused, 0u);
   std::printf("  fuzz-diff fixed batch: 440 programs (seeds 1 to 220, both modes), %zu agree\n", agreed);
+  // The same batch with every function compiled at its first poll (calls between
+  // compiled functions included).
+  size_t agreed_jit = 0, killed_jit = 0, paused_jit = 0;
+  campaign(runner, 1, 440, &agreed_jit, &killed_jit, &paused_jit, 1);
+  EXPECT_EQ(agreed_jit, 440u);
+  EXPECT_EQ(killed_jit, 0u);
+  EXPECT_EQ(paused_jit, 0u);
+  std::printf("  fuzz-diff fixed batch compiled at the first poll: 440 programs, %zu agree\n", agreed_jit);
 }
 
 TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFirstPoll) {

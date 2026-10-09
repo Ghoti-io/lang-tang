@@ -28,6 +28,8 @@
 
 using namespace jt;
 
+#ifdef GLTANG_WITH_JIT
+
 namespace {
 
 const char * kSourceMax = "576460752303423487";  // the largest small integer
@@ -48,11 +50,6 @@ std::string params(int n, const char * prefix = "a") {
   return join(p);
 }
 
-}  // namespace
-
-#ifdef GLTANG_WITH_JIT
-
-namespace {
 
 uint64_t exits(const GLTANG_JitStats & s) {
   return s.call_exits_remembered + s.call_exits_push_refused + s.call_exits_callee_guard + s.call_exits_native_stack;
