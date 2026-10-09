@@ -182,7 +182,10 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   GRCORE_Stack * stack = grcore_context_stack(context);
   const size_t frame_count = grcore_stack_frame_count(stack);
   size_t keep = SIZE_MAX;
-  bool counts = true;
+  // Only a guard or an unconditional exit (cause 0) counts toward a function's
+  // discard limit; a poll's deopt (a pause, cause 1, or an unwind, cause 2) does
+  // not: a debugger step or a fuel pause must not throw away hot code.
+  bool counts = cause == 0u;
   uint64_t innermost_fword = 0;
   bool any = false;
 
