@@ -992,6 +992,53 @@ TEST(JitCalls, TheEighthExitOfAFunctionDiscardsItByReferenceAndLaterCallsAreTheI
   EXPECT_EQ(jit.raw, "14" "12");
 }
 
+TEST(JitCalls, PausesInOneHotFunctionNeverDiscardItWhileGuardExitsStillDoAtTheEighth) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A poll's deopt is not a guard: a debugger step or a fuel pause must not throw
+  // away hot code (decided at the done checkpoint). Thirty calls of one function,
+  // the budget raised by a small step on every pause, so many pauses are taken
+  // inside its compiled loop. (A function can be unwound only once, the unwind ends
+  // the run, so the unwind cause is checked as one more exit that does not count.)
+  {
+    Scenario sc;
+    sc.source =
+        "function g(n) { i = 0; while (i < n) { i = i + 1; } return i; }\n"
+        "t = 0; for (k = 0; k < 30; k += 1) { t = t + g(150); } print(t);\n";
+    sc.script = true;
+    sc.fuel = 700;
+    sc.step = 700;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    EXPECT_EQ(jit.raw, "4500");
+    EXPECT_GE(jit.stats.refused_pauses, 9u) << "more pauses than the discard limit were taken in compiled code";
+    EXPECT_EQ(jit.stats.functions_discarded, 0u) << "pauses do not count toward the discard limit";
+    EXPECT_EQ(jit.registered, jit.stats.functions_compiled) << "every compiled function is still registered";
+    EXPECT_GE(jit.stats.entries, 20u) << "later calls kept entering compiled code";
+  }
+  {
+    Scenario sc;
+    sc.source = "function g(n) { i = 0; while (i < n) { i = i + 1; } return i; }\nt = 0; for (k = 0; k < 9; k += 1) { t = t + g(20000); } print(t);\n";
+    sc.script = true;
+    sc.on_poll = [](Script & script, GRCORE_Context *, uint64_t n) {
+      if (n == 3000) {
+        script.post(GRCORE_REQUEST_TERMINATE);
+      }
+    };
+    Outcome jit = run(sc, 1);
+    EXPECT_EQ(jit.stats.refused_unwinds, 1u);
+    EXPECT_EQ(jit.stats.functions_discarded, 0u) << "an unwind does not count toward the discard limit";
+  }
+  // The control: the same eight-exit limit, reached by guard exits, still discards.
+  {
+    Scenario sc;
+    sc.source = std::string("function g(x) { return x + x; }\nM = ") + kSourceMax + ";\nt = 0; for (k = 0; k < 12; k += 1) { y = g(M); t = t + 1; } print(t);\n";
+    sc.script = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    EXPECT_EQ(jit.stats.functions_discarded, 1u) << "guard exits still discard a function at the eighth";
+  }
+}
+
 /// GLTANG_LONG_RUN_FUNCTIONS=N: how many functions the thrashing program has
 /// (1,000 on the EVO; a small number in `make test`).
 int thrash_functions() {

@@ -592,13 +592,12 @@ TEST(Jit, AContextPausedInsideCompiledCodeResumesOnAnotherThreadWithTheSameOutpu
   EXPECT_EQ(context.raw(), reference.raw());
   EXPECT_EQ(context.describe(), reference.describe());
   EXPECT_GT(context.jit_stats().refused_pauses, 2u) << "pauses were taken inside compiled code";
-  // Each pause is an exit from compiled code that counts toward the discard limit
-  // of the function it was in, like a guard: at the eighth the function is let
-  // go and the rest of the run is the interpreter's. Every one of the eight hops
-  // entered compiled code on its own thread.
-  EXPECT_EQ(context.jit_stats().refused_pauses, 8u);
-  EXPECT_EQ(context.jit_stats().functions_discarded, 1u);
-  EXPECT_GE(context.jit_stats().entries, 8u) << "and later calls entered compiled code on the other threads";
+  // A pause is not a guard: it does not count toward the discard limit, so the
+  // function stays compiled across every hop and later calls enter compiled code on
+  // the other threads (80 calls of tri, all but the first entered).
+  EXPECT_GT(context.jit_stats().refused_pauses, 8u);
+  EXPECT_EQ(context.jit_stats().functions_discarded, 0u);
+  EXPECT_GT(context.jit_stats().entries, 40u) << "and later calls entered compiled code on the other threads";
 }
 
 // ---------------------------------------------------------------------------
