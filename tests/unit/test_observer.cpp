@@ -127,6 +127,7 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
     EXPECT_TRUE(compiled.back()->ok()) << part.name << ": " << compiled.back()->error.message;
     EXPECT_EQ(gltang_library_add_template(context.library(), part.name.c_str(), compiled.back()->program, part.fuel, part.policy), GLTANG_OK);
   }
+  context.add_native_library();
   observer::Observer obs;
   obs.trace.limit = std::min(c.limit, cap);
   EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
@@ -357,6 +358,49 @@ std::vector<Case> call_cases() {
   return cases;
 }
 
+/// Natives called from compiled code (story 9): library calls and member loads in
+/// loops and chains, a native that allocates at the bottom of a chain, one that
+/// re-enters guest code (a pause inside it is an unwind), one that asks compiled
+/// code to leave, a resumable one, and generated call graphs that use the library.
+/// A poll inside a native (its answer is paced) shows the frame of the compiled
+/// caller at the native's call site, which must be the interpreter's.
+std::vector<Case> native_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, uint64_t step) {
+    Case c;
+    c.name = "natives/" + name;
+    c.source = source;
+    c.step = step;
+    cases.push_back(c);
+  };
+  add("a loop of library calls",
+      "function run(n) { use inc; use sum; s = 0; i = 0; while (i < n) { s = sum(inc(s), i, 1); i = i + 1; } return s; }\n"
+      "print(run(30));", 19);
+  add("a chain with a native at its bottom",
+      "function deep(n, a, b) { use alloc_ref; if (n == 0) { r = alloc_ref(a); k = 0; while (k < 3) { k = k + 1; } return r[0]; } r = deep(n - 1, b, a); return r; }\n"
+      "a = [1]; b = [2]; x = deep(12, a, b); print(x[0]);", 13);
+  add("a native that re-enters",
+      "function leaf(x) { use inc; k = 0; while (k < 4) { k = inc(k); } return x + k; }\n"
+      "function run(n) { use reenter; s = 0; i = 0; while (i < n) { s = s + reenter(leaf, i); i = i + 1; } return s; }\n"
+      "print(run(8)); print(run(4));", 23);
+  add("a native that asks compiled code to leave",
+      "function run(n) { use deopt; s = 0; i = 0; while (i < n) { s = s + deopt(i); i = i + 1; } return s; }\n"
+      "print(run(9)); print(run(5));", 17);
+  add("a resumable native",
+      "function g() { k = 0; while (k < 4) { k = k + 1; } return k; }\n"
+      "function run() { use resumable; return resumable(g); }\n"
+      "print(run()); print(run());", 11);
+  for (uint64_t seed = 1; seed <= 6; ++seed) {
+    Case c;
+    c.name = "natives/generated " + std::to_string(seed);
+    c.source = gen::generate_calls(seed, true).source;
+    c.step = 150;
+    c.limit = 150;
+    cases.push_back(c);
+  }
+  return cases;
+}
+
 std::vector<Case> all_cases() {
   std::vector<Case> cases = corpus_cases("script", tt::Mode::Script, 40);
   for (Case & c : generated_cases(6)) {
@@ -369,6 +413,9 @@ std::vector<Case> all_cases() {
     cases.push_back(std::move(c));
   }
   for (Case & c : call_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : native_cases()) {
     cases.push_back(std::move(c));
   }
   return cases;

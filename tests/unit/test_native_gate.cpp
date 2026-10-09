@@ -94,7 +94,26 @@ struct Row {
   // whose operation is refused before the native's first poll (the verdict
   // then comes from the refused allocation's own poll).
   bool attributed = true;
+  // Bytes a host native named `answer` returns each time it is called (0: none is
+  // registered). Called from a function that is compiled, it is a native called from
+  // compiled code whose answer is the adversarial input.
+  size_t host_native_bytes = 0;
 };
+
+/// The JIT threshold the rows run with: -1 is the suite's own (the default, or the
+/// environment's), 1 compiles every function at its first poll.
+long g_jit_threshold = -1;
+
+size_t g_answer_bytes = 0;
+
+bool answer_native(GLTANG_NativeCall * call, void *) {
+  static std::string text;
+  if (text.size() != g_answer_bytes) {
+    text.assign(g_answer_bytes, 'x');
+  }
+  gltang_call_return_string(call, text.data(), text.size(), GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+  return true;
+}
 
 struct Measured {
   uint64_t fuel = 0;
@@ -123,6 +142,7 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
   config.fuel = fuel;
   config.memory_bytes = memory;
   config.calls = row.calls;
+  config.jit_threshold = g_jit_threshold;
   tt::Context context(compiled.program, config);
   EXPECT_TRUE(context.ok());
   if (!context.ok()) {
@@ -130,6 +150,10 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
   }
   if (row.host_string) {
     EXPECT_TRUE(context.add_library("big", tt::Host::string(std::string(row.host_string, 'x'))));
+  }
+  if (row.host_native_bytes) {
+    g_answer_bytes = row.host_native_bytes;
+    EXPECT_EQ(gltang_library_add_native(context.library(), "answer", answer_native, nullptr), GLTANG_OK);
   }
   context.attach();
   auto started = std::chrono::steady_clock::now();
@@ -263,6 +287,15 @@ std::vector<Row> rows() {
   // and the verdict follows it. That charge is this native's slack.
   from_host.fuel_slack = from_host.host_string / 64 + 1500;
   t.push_back(from_host);
+  // A native called from compiled code (story 9): a host native whose answer is a huge string, called in an
+  // endless loop from a function. Run with every function compiled, the loop is compiled and so is the call
+  // of the native; the answer is read through the shared wrapper under the pacer of STRING_FROM_UTF8, whose
+  // poll orders the stop, and the run ends within the same bound as the interpreter's.
+  Row answer = {"STRING_FROM_UTF8", "a native answering a huge string in an endless loop", "function f() { use answer; while (true) { t = answer(); } } x = 1;", "f();", 300,
+      16 * kMiB, kStops, 12 * kMiB};
+  answer.host_native_bytes = kSmall ? kMiB / 32 : kMiB;
+  answer.fuel_slack = 2 * (answer.host_native_bytes / 64) + 1500;  // the call charges the answer's bytes, and so does the string it makes
+  t.push_back(answer);
   t.push_back({"PRINT", "printing a huge string", kStr1M, "print(s);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"PRINT", "printing a large container", kArr200k, "print(a);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"RENDER_TO_STRING", "rendering a large container with as string", kArr200k, "t = a as string;", 300, 16 * kMiB, kStops, 12 * kMiB});
@@ -442,11 +475,27 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
 
 TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
   std::vector<Row> t = rows();
-  EXPECT_EQ(t.size(), kSmall ? 26u : 27u);
+  EXPECT_EQ(t.size(), kSmall ? 27u : 28u);
+  g_jit_threshold = -1;
   for (const Row & row : t) {
     run_row(row);
   }
 }
+
+#ifdef GLTANG_WITH_JIT
+// The compiled arm: the same table with every function tiering up at its first poll,
+// so that the adversarial operations that are reached from a compiled function, and
+// the natives that a compiled function calls, are held to the same bound.
+TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWorkWhenEveryFunctionIsCompiled) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  std::vector<Row> t = rows();
+  g_jit_threshold = 1;
+  for (const Row & row : t) {
+    run_row(row);
+  }
+  g_jit_threshold = -1;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The limits that need the host: the wall clock, and a page of children

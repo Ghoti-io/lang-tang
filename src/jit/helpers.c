@@ -48,6 +48,18 @@ void gltang_jit_note_callee_guard(GLTANG_Execution * exec) {
   exec->jit->refusal = GLTANG_REFUSAL_CALLEE_GUARD;
 }
 
+void gltang_jit_note_native_guard(GLTANG_Execution * exec) {
+  exec->jit->refusal = GLTANG_REFUSAL_NATIVE_GUARD;
+}
+
+uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {
+  if (!gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
+    return 0;
+  }
+  const GLTANG_NativeObject * native = gltang_object(callee);
+  return native->member == (const GLTANG_LibraryMember *)(uintptr_t)member && native->builtin == (uint32_t)GLTANG_BUILTIN_NONE;
+}
+
 uint32_t gltang_jit_poll(void * ctx, uint64_t fword, uint64_t index) {
   GRCORE_Context * context = ctx;
   GLTANG_Execution * exec = gltang_vm_execution_of(context);

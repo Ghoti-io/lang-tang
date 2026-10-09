@@ -59,6 +59,7 @@
 #include <ghoti.io/runtime-jit/builder.h>
 #include <ghoti.io/runtime-jit/code.h>
 #include <ghoti.io/runtime-jit/ir.h>
+#include <ghoti.io/runtime-jit/natives.h>
 
 /**
  * @brief The allocator of everything the JIT keeps for an execution: its records,
@@ -111,6 +112,7 @@ typedef struct GLTANG_JitCode {
   uint32_t parameter_count;
   uint32_t code_count;        ///< Bytecode words of the function (the size of `call_sites`' index space).
   uint8_t * call_sites;       ///< One bit per bytecode index: a compiled call is emitted there. Owned.
+  uint8_t * native_sites;     ///< One bit per bytecode index: a native call (a library call or a member load) is emitted there. Owned.
 } GLTANG_JitCode;
 
 /** @brief Why the last call exit happened, written by the hook that refused and read by the deopt hook. */
@@ -118,8 +120,24 @@ typedef enum GLTANG_JitRefusal {
   GLTANG_REFUSAL_NONE = 0,
   GLTANG_REFUSAL_REMEMBERED,   ///< The callee cannot be compiled (the compile hook said so).
   GLTANG_REFUSAL_PUSH,         ///< The push was refused: depth, memory, an argument error.
-  GLTANG_REFUSAL_CALLEE_GUARD  ///< The callee value was not the function the site names.
+  GLTANG_REFUSAL_CALLEE_GUARD, ///< The callee value was not the function the site names.
+  GLTANG_REFUSAL_NATIVE_GUARD  ///< The callee value was not the library native the site names.
 } GLTANG_JitRefusal;
+
+/**
+ * The natives compiled code calls (runtime-jit's `CALL_NATIVE`), registered once
+ * per execution in a table, in this order: the call of a library native with 0 to
+ * 15 arguments (the callee is the first parameter), the load of a `use`d path and
+ * the `.name` of a library.
+ */
+enum {
+  GLTANG_JIT_NATIVE_CALL0 = 0,   ///< ... up to GLTANG_JIT_NATIVE_CALL0 + 15.
+  GLTANG_JIT_NATIVE_USE = 16,
+  GLTANG_JIT_NATIVE_ATTR = 17,
+  GLTANG_JIT_NATIVE_COUNT = 18
+};
+/** @brief The most native stack the thunks, the shared wrapper and the host function's own frame are taken to use before they call anything that checks. */
+#define GLTANG_JIT_NATIVE_STACK 4096u
 
 /** @brief The execution's JIT state. */
 typedef struct GLTANG_Jit {
@@ -130,15 +148,19 @@ typedef struct GLTANG_Jit {
   size_t queue_capacity;
   GRCORE_RequestKind kind;       ///< The tier-up request kind.
   GRCORE_Port * port;            ///< Posts it; taken at the first post.
+  GRJIT_NativeTable * natives;   ///< The thunks of the library calls and loads; NULL if it could not be made (then no site is compiled as one).
   GRCORE_DeoptReservation * reservation;  ///< Made once; extended by each compiled call (by zero here: no converting location).
   uint64_t last_fword;           ///< The function the last counted poll was in, and its record: a loop polls one function over and over.
   GLTANG_JitFn * last_fn;
+  size_t records_open;           ///< JIT activation records open now: each costs one unit of native depth that an interpreted run does not.
+  size_t depth_lent;             ///< Of those, the units a native call has handed back for as long as it runs (see gltang_jit_lend_depth).
   uint64_t chain;                ///< Compiled calls open now (the push hook counts, the pop hook and a deopt take away).
   uint8_t refusal;               ///< A ::GLTANG_JitRefusal the deopt hook consumes.
   uint64_t exit_fword;           ///< The function whose frame was innermost at the last exit, for the discard limit.
   bool exit_counted;             ///< Whether that exit counts toward its discard limit.
   bool exit_valid;               ///< `exit_fword` was set by the deopt hook of this entry.
   bool test_calls_off;           ///< Test seam: compile no call sites.
+  bool test_natives_off;         ///< Test seam: compile no library call or member load (as a backend that refuses natives would).
   bool test_fail_rebuild;        ///< Test seam: the deopt hook's rebuild fails.
   bool gc_at_push;               ///< Test seam, for GC torture: the push hook collects after the push, as the frame-push GC point of AD-28.
 } GLTANG_Jit;
@@ -183,6 +205,16 @@ extern const GRJIT_CallHooks gltang_jit_hooks;
 void gltang_jit_flush(GLTANG_Execution * exec);
 /** @brief Called by compiled code when the callee-value guard of a call site failed, just before its exit. No GC point. */
 void gltang_jit_note_callee_guard(GLTANG_Execution * exec);
+/** @brief The same for the guard of a library call. No GC point. */
+void gltang_jit_note_native_guard(GLTANG_Execution * exec);
+/** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
+uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
+
+/**
+ * @brief Makes the table of the natives compiled code calls (natives.c).
+ * @return ::GRJIT_OK or the table's error; on an error nothing is left.
+ */
+GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTable ** out);
 /**
  * @brief The poll slow path of compiled code, the one GC point of a function
  *   that makes no call. Returns 0 to continue, 1 after a pause verdict, 2 after an

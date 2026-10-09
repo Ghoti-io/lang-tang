@@ -32,7 +32,10 @@
  *
  * What it inlines is the cheap and the exact: small-integer arithmetic and
  * comparisons, booleans, locals and globals, function values, jumps, `POLL`,
- * `LINE`, `RET`, and `CALL` of a function the declaration scan can name. Each
+ * `LINE`, `RET`, `CALL` of a function the declaration scan can name, and the
+ * library: the load of a `use`d path or a library's `.name` and the `CALL` of a
+ * library native (a host function), each a call to the engine's own operation
+ * (natives.c) with no exit. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
  * the word the interpreter would. For everything else, and for an operand that
  * is not what the inline path takes, the function leaves through a guard (a
@@ -115,6 +118,14 @@ typedef struct Ctx {
   uint32_t ** prod_at;            ///< For a jump target: the producing instruction of each operand position, merged over every way in.
   uint32_t * cur;                 ///< The same, along the straight run being walked.
   int32_t * call_k;               ///< Per index of a CALL: the function it calls, or -1 (an exit).
+  const GLTANG_LibraryMember ** call_member;  ///< Per index of a CALL: the library native it calls, or NULL.
+  uint32_t * attr_src;            ///< Per index of an ATTR: the instruction that produced the operand it reads.
+  bool * load_ok;                 ///< Per index of a USE or ATTR: compiled as a member load.
+  bool * declined;                ///< Per index: a library call or member load that natives being unavailable left as an exit.
+  uint32_t * global_use;          ///< Per global: the path constant its `use` stores, DECL_NONE or DECL_MANY.
+  uint32_t * local_use;           ///< The same for this function's locals.
+  uint8_t * native_sites;         ///< One bit per index where a native call (a library call or a member load) is emitted.
+  bool natives_on;
   bool * flowed;                  ///< Per index of a CALL: the walk went on past it as a call.
   bool * force_exit;              ///< Per index of a CALL: after a merge made its callee unnamable.
   uint64_t * call_entry;          ///< Per index of a CALL: the address of the callee's slot word.
@@ -150,6 +161,8 @@ static bool small_int_constant(const Ctx * c, uint32_t index, int64_t * out) {
   return true;
 }
 
+static bool use_load_ok(const Ctx * c, uint32_t constant);
+
 /** Whether an instruction other than CALL is compiled inline, or is a deoptimization exit. */
 static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
   int64_t unused;
@@ -181,6 +194,8 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_OR:
     case GLTANG_OP_RET:
       return true;
+    case GLTANG_OP_USE:
+      return c->natives_on && use_load_ok(c, a);
     case GLTANG_OP_LOAD_GLOBAL:
       return a < c->program->global_count;
     case GLTANG_OP_FUNC:
@@ -234,6 +249,130 @@ static void scan_declarations(Ctx * c) {
       note_declaration(c->local_fn, c->lc, GLTANG_INSTRUCTION_A(c->fn->code[j + 1u]), GLTANG_INSTRUCTION_A(w));
     }
   }
+}
+
+/**
+ * The same for `use`: `USE k; STORE_x s; POP` is what `compile_use` emits, and the
+ * slot then holds whatever the path named when the statement last ran. Which
+ * member that is can be read from the libraries now; whether the slot still holds
+ * it when a call runs is the call site's guard.
+ */
+static void scan_uses(Ctx * c) {
+  for (int pass = 0; pass < 2; ++pass) {
+    const GLTANG_Function * f = pass == 0 ? &c->program->functions[0] : c->fn;
+    if (pass == 1 && f == &c->program->functions[0]) {
+      break;  // the top level is the function: its globals were just read
+    }
+    for (uint32_t j = 0; j + 2u < f->code_count; ++j) {
+      uint32_t w = f->code[j];
+      if (GLTANG_INSTRUCTION_OP(w) == GLTANG_OP_ITER_NEXT) {
+        ++j;
+        continue;
+      }
+      if (GLTANG_INSTRUCTION_OP(w) != GLTANG_OP_USE || GLTANG_INSTRUCTION_OP(f->code[j + 2u]) != GLTANG_OP_POP) {
+        continue;
+      }
+      GLTANG_Opcode store = GLTANG_INSTRUCTION_OP(f->code[j + 1u]);
+      uint32_t slot = GLTANG_INSTRUCTION_A(f->code[j + 1u]);
+      if (store == GLTANG_OP_STORE_GLOBAL) {
+        note_declaration(c->global_use, c->program->global_count, slot, GLTANG_INSTRUCTION_A(w));
+      }
+      else if (store == GLTANG_OP_STORE_LOCAL && f == c->fn) {
+        note_declaration(c->local_use, c->lc, slot, GLTANG_INSTRUCTION_A(w));
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Which library member a value names (the libraries as they are now)
+// ---------------------------------------------------------------------------
+
+/** The string constant at an index: its bytes, or NULL. */
+static const char * constant_text(const Ctx * c, uint32_t index, size_t * length) {
+  if (index >= c->program->constant_count || c->program->constants[index].kind != GLTANG_CONST_STRING) {
+    return NULL;
+  }
+  const GLTANG_StringBlock * block = c->program->constants[index].block;
+  *length = (size_t)block->byte_length;
+  return gltang_string_bytes(block);
+}
+
+/** The member a `use` path names, walked as `gltang_vm_resolve` walks it (a library for every part but the last), or NULL. */
+static const GLTANG_LibraryMember * path_member(const Ctx * c, uint32_t constant) {
+  size_t length = 0;
+  const char * text = constant_text(c, constant, &length);
+  if (!text) {
+    return NULL;
+  }
+  const char * dot = memchr(text, '.', length);
+  size_t first = dot ? (size_t)(dot - text) : length;
+  const GLTANG_Library * layers[3] = {c->exec->libraries, c->program->libraries, gltang_library_builtins()};
+  const GLTANG_LibraryMember * member = NULL;
+  for (size_t i = 0; i < 3 && !member; ++i) {
+    member = gltang_library_find(layers[i], text, first);
+  }
+  size_t at = first;
+  while (member && at < length) {
+    if (member->kind != GLTANG_MEMBER_LIBRARY || !member->library) {
+      return NULL;
+    }
+    ++at;
+    size_t next = at;
+    while (next < length && text[next] != '.') {
+      ++next;
+    }
+    member = gltang_library_find(member->library, text + at, next - at);
+    at = next;
+  }
+  return member;
+}
+
+/** The member the value an instruction produced is, if the declarations and the libraries say so; NULL if not or if not known. */
+static const GLTANG_LibraryMember * static_member(const Ctx * c, uint32_t producer, int depth) {
+  if (producer == PROD_NONE || producer >= c->fn->code_count || depth > 8) {
+    return NULL;
+  }
+  GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(c->fn->code[producer]);
+  uint32_t a = GLTANG_INSTRUCTION_A(c->fn->code[producer]);
+  switch (op) {
+    case GLTANG_OP_LOAD_GLOBAL:
+      if (a < c->program->global_count && c->global_use[a] != DECL_NONE && c->global_use[a] != DECL_MANY && c->global_fn[a] == DECL_NONE) {
+        return path_member(c, c->global_use[a]);
+      }
+      return NULL;
+    case GLTANG_OP_LOAD_LOCAL:
+      if (a < c->lc && c->local_use[a] != DECL_NONE && c->local_use[a] != DECL_MANY && c->local_fn[a] == DECL_NONE) {
+        return path_member(c, c->local_use[a]);
+      }
+      return NULL;
+    case GLTANG_OP_ATTR: {
+      const GLTANG_LibraryMember * library = static_member(c, c->attr_src[producer], depth + 1);
+      size_t length = 0;
+      const char * name = library && library->kind == GLTANG_MEMBER_LIBRARY && library->library ? constant_text(c, a, &length) : NULL;
+      return name ? gltang_library_find(library->library, name, length) : NULL;
+    }
+    default:
+      return NULL;
+  }
+}
+
+/** Whether a member is one a load can produce without an exit: a host function or a library. */
+static bool loadable(const GLTANG_LibraryMember * member) {
+  return member && (member->kind == GLTANG_MEMBER_NATIVE || member->kind == GLTANG_MEMBER_LIBRARY);
+}
+
+static bool use_load_ok(const Ctx * c, uint32_t constant) {
+  return loadable(path_member(c, constant));
+}
+
+/** The host function a `CALL n` calls, given the instruction that produced its callee, or NULL: a library native, not a resumable one. */
+static const GLTANG_LibraryMember * resolve_native(const Ctx * c, uint32_t producer, uint32_t n) {
+  if (n > GLTANG_JIT_MAX_CALL_ARGS) {
+    return NULL;
+  }
+  const GLTANG_LibraryMember * member = static_member(c, producer, 0);
+  return member && member->kind == GLTANG_MEMBER_NATIVE && !(member->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE) ? member : NULL;
 }
 
 /** Marks the instructions a jump lands on. The one two-word instruction is skipped over. */
@@ -362,15 +501,47 @@ static GLTANG_Result analyse_once(Ctx * c) {
       if (op == GLTANG_OP_CALL) {
         if (d < 0 || (int64_t)a + 1 > d) { return GLTANG_ERR_INTERNAL; }
         int32_t k = c->force_exit[i] ? -1 : resolve_callee(c, c->cur[d - 1 - (int32_t)a], a);
+        const GLTANG_LibraryMember * native = NULL;
+        if (k < 0 && !c->force_exit[i]) {
+          // Not a guest function: a library native, if the declarations name one.
+          native = resolve_native(c, c->cur[d - 1 - (int32_t)a], a);
+          if (native && !c->natives_on) {
+            c->declined[i] = true;
+            native = NULL;
+          }
+        }
         c->call_k[i] = k;
-        if (k < 0) {
+        c->call_member[i] = native;
+        if (k < 0 && !native) {
           break;                 // an unconditional exit: nothing flows from it
         }
         c->flowed[i] = true;
         after = d - (int32_t)a;
         c->cur[after - 1] = i;
       }
+      else if (op == GLTANG_OP_ATTR) {
+        // `.name` of a library: a member load when the declarations say the operand
+        // is one and the library has the member.
+        if (d < 1) { return GLTANG_ERR_INTERNAL; }
+        c->attr_src[i] = c->cur[d - 1];
+        const GLTANG_LibraryMember * library = static_member(c, c->cur[d - 1], 0);
+        size_t length = 0;
+        const char * name = library && library->kind == GLTANG_MEMBER_LIBRARY && library->library ? constant_text(c, a, &length) : NULL;
+        bool ok = name && loadable(gltang_library_find(library->library, name, length)) && !c->force_exit[i];
+        c->load_ok[i] = ok && c->natives_on;
+        if (ok && !c->natives_on) {
+          c->declined[i] = true;
+        }
+        if (!c->load_ok[i]) {
+          break;                 // an unconditional exit: nothing flows from it
+        }
+        c->flowed[i] = true;
+        c->cur[d - 1] = i;
+      }
       else if (!inline_op(c, op, a)) {
+        if (op == GLTANG_OP_USE && !c->natives_on && use_load_ok(c, a)) {
+          c->declined[i] = true;
+        }
         break;                   // an unconditional exit: nothing flows from it
       }
       else switch (op) {
@@ -392,6 +563,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
         case GLTANG_OP_CONST:
         case GLTANG_OP_LOAD_GLOBAL:
         case GLTANG_OP_FUNC:
+        case GLTANG_OP_USE:
           c->cur[d] = i;
           after = d + 1;
           break;
@@ -502,6 +674,10 @@ static GLTANG_Result analyse(Ctx * c) {
       c->queued[i] = false;
       c->flowed[i] = false;
       c->call_k[i] = -1;
+      c->call_member[i] = NULL;
+      c->load_ok[i] = false;
+      c->declined[i] = false;
+      c->attr_src[i] = PROD_NONE;
     }
     free_prod(c);
     GLTANG_Result r = analyse_once(c);
@@ -510,7 +686,11 @@ static GLTANG_Result analyse(Ctx * c) {
     }
     bool again = false;
     for (size_t i = 0; i < c->fn->code_count; ++i) {
-      if (c->flowed[i] && c->call_k[i] < 0) {
+      if (!c->flowed[i]) {
+        continue;
+      }
+      bool call = GLTANG_INSTRUCTION_OP(c->fn->code[i]) == GLTANG_OP_CALL;
+      if (call ? (c->call_k[i] < 0 && !c->call_member[i]) : !c->load_ok[i]) {
         c->force_exit[i] = true;
         again = true;
       }
@@ -698,6 +878,74 @@ static void emit_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, uint32_t k) {
       identity_at(c, i), c->state2, c->slots, identity_at(c, i), c->state, c->slots));
 }
 
+/** Records where the instruction at `i` is, as the interpreter's SYNC does, for the errors the call makes and for a native's poll. */
+static void emit_site(Ctx * c, uint32_t i) {
+  B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_function), 32, I((int64_t)c->function_index)));
+  B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_offset), 32, I((int64_t)i)));
+}
+
+/**
+ * One call to a native of the table, at `i` with `d` operands before it: the
+ * guest frame while it runs and for an exit before it is the one at `i`; the
+ * frame after it has the result in the operand slot `result_at` and `after_depth`
+ * operands. Everything pending is charged first, since the native may observe it.
+ */
+static void emit_native(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth) {
+  emit_site(c, i);
+  flush_cost(c);
+  fill_state(c, c->state, i, d);
+  fill_state(c, c->state2, i + 1u, after_depth);
+  GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
+  GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
+  B(grjit_builder_call_native(c->b, dst, id, args, argc, &before, &after));
+  c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+}
+
+/**
+ * A `CALL n` of the library native `member`: the callee value is guarded to be a
+ * native of that member (a mismatch is a guard exit, counted against this
+ * function), and the call is `thunk_n(callee, arguments)` through the shared
+ * wrapper. A refused call (the native stack would run out) is an exit before it,
+ * with nothing charged; a native that reports unwinding, or asks to leave, exits
+ * after it with the result in place.
+ */
+static void emit_native_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, const GLTANG_LibraryMember * member) {
+  GRJIT_VReg * T = c->stack;
+  GRJIT_VReg * t = c->tmp;
+  const uint32_t at = d - 1u - n;
+  bitcast(c, t[TMP_A], T[at]);
+  GRJIT_Operand guard_args[2] = {V(t[TMP_A]), I((int64_t)(intptr_t)member)};
+  B(grjit_builder_call(c->b, t[TMP_C], (uint64_t)(uintptr_t)gltang_jit_callee_is_native, GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, guard_args, 2,
+      (GRCORE_PollIdentity){0, 0}, NULL, 0));
+  GRJIT_BlockId good, bad;
+  new_block(c, &good);
+  new_block(c, &bad);
+  flush_cost(c);
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), good, bad));
+  c->open = false;
+  set_block(c, bad);
+  call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_note_native_guard);
+  emit_exit(c, i, d);
+  set_block(c, good);
+  GRJIT_Operand args[GLTANG_JIT_MAX_CALL_ARGS + 1u];
+  for (uint32_t j = 0; j <= n; ++j) {
+    args[j] = V(T[at + j]);
+  }
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_CALL0 + n, args, (size_t)n + 1u, T[at], at + 1u);
+}
+
+/** `USE k`: the interpreter's resolve, called from compiled code; the value is the operand slot `d`. */
+static void emit_use(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->program->constants[a].block)};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_USE, args, 1, c->stack[d], d + 1u);
+}
+
+/** `ATTR name`: the interpreter's attribute rule on the operand in slot `d - 1`, which the value replaces. */
+static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_ATTR, args, 2, c->stack[d - 1u], d);
+}
+
 static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
   const uint32_t word = c->fn->code[i];
   const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(word);
@@ -711,6 +959,18 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
     if (c->call_k[i] >= 0) {
       emit_call(c, i, d, a, (uint32_t)c->call_k[i]);
       c->call_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+    }
+    else if (c->call_member[i]) {
+      emit_native_call(c, i, d, a, c->call_member[i]);
+    }
+    else {
+      emit_exit(c, i, d);
+    }
+    return;
+  }
+  if (op == GLTANG_OP_ATTR) {
+    if (c->load_ok[i]) {
+      emit_attr(c, i, d, a);
     }
     else {
       emit_exit(c, i, d);
@@ -782,6 +1042,10 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
       B(grjit_builder_move(c->b, c->local[a], V(T[d - 1u])));
       add_fuel(c, cost);
       break;
+    case GLTANG_OP_USE:
+      emit_use(c, i, d, a);
+      break;
+
     case GLTANG_OP_LOAD_GLOBAL:
       // `exec->globals` is the running program's variables, read at each load as
       // the interpreter reads it.
@@ -905,6 +1169,7 @@ static void release_code(void * payload) {
   const GRCORE_Allocator * allocator = jc->allocator;
   grjit_code_destroy(jc->code);
   gcu_allocator_free(allocator, jc->call_sites);
+  gcu_allocator_free(allocator, jc->native_sites);
   gcu_allocator_free(allocator, jc);
 }
 
@@ -948,6 +1213,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   GRJIT_Code * code = NULL;
   GLTANG_JitCode * payload = NULL;
   uint8_t * call_sites = NULL;
+  uint8_t * native_sites = NULL;
   c->exec = exec;
   c->program = program;
   c->fn = fn;
@@ -980,8 +1246,17 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->local_fn = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
   call_sites = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (n >> 3) + 1u, 1);
   c->call_sites = call_sites;
+  native_sites = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (n >> 3) + 1u, 1);
+  c->native_sites = native_sites;
+  c->call_member = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(const GLTANG_LibraryMember *));
+  c->attr_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
+  c->load_ok = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->declined = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
+  c->local_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
   if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at
-      || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites) {
+      || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !c->call_member
+      || !c->attr_src || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
     goto done;
   }
   for (size_t i = 0; i < n; ++i) {
@@ -994,6 +1269,16 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   for (uint32_t l = 0; l < c->lc; ++l) {
     c->local_fn[l] = DECL_NONE;
   }
+  for (uint32_t g = 0; g < program->global_count; ++g) {
+    c->global_use[g] = DECL_NONE;
+  }
+  for (uint32_t l = 0; l < c->lc; ++l) {
+    c->local_use[l] = DECL_NONE;
+  }
+  // Library calls and member loads are compiled when the execution has the table
+  // of natives and the backend calls them; otherwise they stay exits, and the
+  // statistic counts the sites that would have been compiled.
+  c->natives_on = exec->jit && exec->jit->natives && !exec->jit->test_natives_off && grjit_backend_calls_available();
   if (!inline_op(c, GLTANG_INSTRUCTION_OP(fn->code[1]), GLTANG_INSTRUCTION_A(fn->code[1]))) {
     *out = NULL;
     result = GLTANG_OK;
@@ -1003,9 +1288,15 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   if (c->calls_on) {
     scan_declarations(c);
   }
+  scan_uses(c);
   result = analyse(c);
   if (result != GLTANG_OK) {
     goto done;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (c->depth[i] >= 0 && c->declined[i]) {
+      ++exec->jit_stats.native_sites_unsupported;
+    }
   }
   // The entry slot of each callee a call goes through, named (and made) now.
   for (size_t i = 0; i < n; ++i) {
@@ -1033,6 +1324,9 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     }
   }
   B(grjit_builder_set_callable(c->b, &gltang_jit_hooks));
+  if (c->natives_on) {
+    B(grjit_builder_set_natives(c->b, exec->jit->natives));
+  }
   B(grjit_builder_set_token(c->b, c->fword));
   for (uint32_t k = 0; k < c->params; ++k) {
     B(grjit_builder_param(c->b, GRJIT_TYPE_REF, &c->local[k]));
@@ -1138,6 +1432,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   payload->parameter_count = fn->parameter_count;
   payload->code_count = fn->code_count;
   payload->call_sites = call_sites;
+  payload->native_sites = native_sites;
   {
     GRCORE_Code * handle = NULL;
     if (grcore_code_create(GLTANG_JIT_ALLOCATOR(exec), payload, release_code, &handle) != GRCORE_OK) {
@@ -1148,6 +1443,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     code = NULL;
     payload = NULL;
     call_sites = NULL;
+    native_sites = NULL;
     result = GLTANG_OK;
   }
 
@@ -1161,7 +1457,14 @@ done:
   }
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), payload);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), call_sites);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), native_sites);
   free_prod(c);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_member);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->attr_src);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->load_ok);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->declined);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_use);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->local_use);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->prod_at);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->cur);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_k);

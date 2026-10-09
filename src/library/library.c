@@ -251,6 +251,20 @@ GLTANG_Result gltang_library_add_native(GLTANG_Library * library, const char * n
   return member_commit(library);
 }
 
+GLTANG_Result gltang_library_mark_resumable(GLTANG_Library * library, const char * name) {
+  if (!library || !name || gltang_library_sealed(library)) {
+    return GLTANG_ERR_INVALID;
+  }
+  const GLTANG_LibraryMember * found = gltang_library_find(library, name, strlen(name));
+  if (!found || found->kind != GLTANG_MEMBER_NATIVE) {
+    return GLTANG_ERR_INVALID;
+  }
+  // The member is in the library's own array: the const is the reader's.
+  GLTANG_LibraryMember * member = &library->members[found - library->members];
+  member->native_flags |= GLTANG_NATIVE_FLAG_RESUMABLE;
+  return GLTANG_OK;
+}
+
 GLTANG_Result gltang_library_add_factory(GLTANG_Library * library, const char * name, GLTANG_FactoryFn factory, void * user) {
   if (!factory) {
     return GLTANG_ERR_INVALID;

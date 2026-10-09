@@ -36,7 +36,13 @@
 
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
+#include <ghoti.io/runtime-core/a/activation.h>
+#include <ghoti.io/runtime-heap/heap.h>
 #include "vm_internal.h"
+#ifdef GLTANG_WITH_JIT
+#include <ghoti.io/runtime-core/a/layout.h>
+#include "../jit/jit.h"
+#endif
 
 // ---------------------------------------------------------------------------
 // The heap types
@@ -397,6 +403,7 @@ static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * cal
       case GLTANG_CALL_BOOL: result = gltang_v_from_bool(call->boolean); break;
       case GLTANG_CALL_INTEGER: result = gltang_vm_make_int(exec, call->integer); break;
       case GLTANG_CALL_FLOAT: result = gltang_vm_make_float(exec, call->number); break;
+      case GLTANG_CALL_VALUE: result = call->value; break;
       case GLTANG_CALL_STRING:
         // A native costs fuel in proportion to the bytes it returns.
         exec->pending_fuel += call->length / GLTANG_WORK_BYTES_PER_FUEL;
@@ -416,7 +423,13 @@ static bool integer_argument(GLTANG_Value v) {
   return gltang_vm_kind(v) == GLTANG_KIND_INTEGER;
 }
 
-GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args) {
+/**
+ * The value of a native itself, once its activation record is open: the
+ * engine's own builtins, then a host function (opaque, AD-23: it cannot reach the
+ * heap, pause or call guest code through the library's API). Test natives
+ * (src/vm/testnatives.c) are host functions that reach the engine's internals.
+ */
+static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args) {
   const GLTANG_NativeObject * native = gltang_object(callee);
   switch ((GLTANG_BuiltinId)native->builtin) {
     case GLTANG_BUILTIN_RANDOM_SEEDED:
@@ -445,13 +458,121 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
     default:
       break;
   }
+  const GLTANG_LibraryMember * member = native->member;
   GLTANG_NativeCall call;
   memset(&call, 0, sizeof(call));
   call.exec = exec;
   call.args = args;
   call.argc = argc;
+  // A continuation of a resumable native carries the state it asked to be given
+  // back in the value it is bound to.
+  call.resume_state = native->bound;
+  exec->callk_function = 0;
   exec->in_host = true;
-  bool worked = native->member->native(&call, native->member->user);
+  bool worked = member->native(&call, member->user);
   exec->in_host = false;
-  return call_result(exec, &call, worked);
+  if (call.callk_function) {
+    // The native asked for a guest call and to be called again with its result
+    // (AD-23): the interpreter does that, from its own loop, never here.
+    gcu_free(call.text);
+    exec->callk_function = call.callk_function;
+    exec->callk_state = call.callk_state;
+    exec->native_status = GLTANG_NATIVE_STATUS_OK;
+    return GLTANG_V_NULL;
+  }
+  GLTANG_Value result = call_result(exec, &call, worked);
+  // Last, so that a nested call the native made does not leave its own status here.
+  exec->native_status = call.test_status;
+  return result;
+}
+
+#define NATIVE_COPY_MAX 16u
+
+/** The refusal of a native's record, as the call's value (the same in both tiers). */
+GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Result refused) {
+  GRCORE_Context * context = exec->context;
+  if (grcore_context_depth(context, GRCORE_DEPTH_NATIVE) >= grcore_context_native_depth(context)) {
+    // The native-depth budget is full. The call is not made and its value is the
+    // recursion-limit error, as for the guest-depth budget (reference 10.3).
+    return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+  }
+  // The record could not be allocated: the memory budget's verdict comes first,
+  // as for any call.
+  if (refused == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
+    return GLTANG_V_UNWIND;
+  }
+  return exec->roots[GLTANG_ROOT_OOM];
+}
+
+GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled) {
+  // The callee and the arguments are copied into this frame before anything that
+  // can reach a collection: the record below gives this frame as its conservative
+  // segment, so what the copies name is pinned, and the native reads the copy and
+  // not the operand stack it came from (which a collection may have moved).
+  GLTANG_Value held[1u + NATIVE_COPY_MAX];
+  const GLTANG_Value * given = args;
+  held[0] = callee;
+  if (argc <= NATIVE_COPY_MAX) {
+    if (argc) {
+      memcpy(&held[1], args, argc * sizeof(GLTANG_Value));
+    }
+    given = &held[1];
+  }
+  ++exec->natives_called;
+  exec->native_status = GLTANG_NATIVE_STATUS_OK;
+#ifdef GLTANG_WITH_JIT
+  size_t lent = compiled ? gltang_jit_lend_depth(exec) : 0;
+#else
+  (void)compiled;
+#endif
+  GRCORE_Stack * stack = grcore_context_stack(exec->context);
+  // The segment: from just below this frame's copies to the base of the innermost
+  // compiled frame when compiled code called (the walk-start cell, which the call
+  // stored first), or just above this frame when the interpreter did.
+  uintptr_t lo = (uintptr_t)&held[0] - 256u;
+  uintptr_t hi = (uintptr_t)__builtin_frame_address(0) + 16u;
+#ifdef GLTANG_WITH_JIT
+  if (compiled) {
+    const uintptr_t * cell = (const uintptr_t *)((const char *)exec->context + grcore_jit_layout()->walk_cell_offset);
+    if (cell[0] > lo && cell[0] - lo <= ((uintptr_t)1 << 20)) {
+      hi = cell[0];
+    }
+  }
+#endif
+  GRCORE_CSegment segment = {lo, hi};
+  GRCORE_ActivationRef record;
+  GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
+  GLTANG_Value result;
+  if (entered != GRCORE_OK) {
+    result = gltang_vm_native_refused_value(exec, entered);
+  }
+  else {
+    if (exec->native_gc_seam && argc <= NATIVE_COPY_MAX) {
+      // Entering a nested activation is a GC point (AD-17); the heap's torture
+      // mode owns only the ones the heap has, so under torture the engine makes
+      // this one. The native then finds its arguments where they were copied.
+      (void)grheap_collect(exec->heap);
+    }
+    result = run_native(exec, held[0], argc, given);
+    (void)grcore_activation_leave(stack, record);
+  }
+#ifdef GLTANG_WITH_JIT
+  gltang_jit_return_depth(exec, lent);
+#endif
+  return result;
+}
+
+/*
+ * For the tests only: how many natives the execution has entered through the shared
+ * wrapper, from either tier. Not declared in any header; a test declares it itself.
+ */
+uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
+uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution) {
+  return execution ? execution->natives_called : 0;
+}
+
+GLTANG_Value gltang_vm_native_continuation(GLTANG_Execution * exec, GLTANG_Value callee, GLTANG_Value state) {
+  const GLTANG_NativeObject * native = gltang_object(callee);
+  const GLTANG_LibraryMember * member = native->member;
+  return native_value(exec, member, GLTANG_BUILTIN_NONE, state);
 }

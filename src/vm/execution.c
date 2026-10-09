@@ -513,6 +513,7 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
   exec->main_act.globals = exec->roots + GLTANG_ROOT_FIXED;
   exec->main_act.name = NULL;
   gltang_vm_set_activation(exec, &exec->main_act);
+  exec->run_base_act = &exec->main_act;
   exec->name = NULL;
   exec->error_limit = GLTANG_ERROR_LIMIT_DEFAULT;
 
@@ -888,5 +889,15 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
   (void)calls_off;
   (void)fail_rebuild;
   (void)gc_at_push;
+}
+
+// The same for the switches over native calls (src/jit/jit.c): the shared wrapper's
+// collection is the engine's, so it stays; the compiled half has nothing to switch.
+void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
+void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam) {
+  (void)natives_off;
+  if (execution) {
+    execution->native_gc_seam = gc_seam;
+  }
 }
 #endif

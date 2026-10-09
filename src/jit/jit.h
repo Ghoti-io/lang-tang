@@ -83,6 +83,23 @@ void gltang_jit_note_poll(GLTANG_Execution * exec, uint64_t fword, bool at_entry
  */
 GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * context, uint64_t fword, GLTANG_Value * out_value);
 
+/**
+ * @brief Hands back the native-depth units the open JIT records cost, for the
+ *   duration of a native call (AD-21, AD-28).
+ *
+ * An interpreted run opens no record, so a nesting of natives costs it fewer
+ * units of the native-depth budget than the same nesting under compiled code,
+ * which has a JIT record per compiled run. A native called from compiled code
+ * gives those units back before it opens its own record and takes them again when
+ * it returns, so the budget refuses at the same nesting in both tiers.
+ *
+ * @return How many units were handed back; pass it to ::gltang_jit_return_depth.
+ */
+size_t gltang_jit_lend_depth(GLTANG_Execution * exec);
+
+/** @brief Takes back the units ::gltang_jit_lend_depth handed back. */
+void gltang_jit_return_depth(GLTANG_Execution * exec, size_t lent);
+
 /** @brief The run has unwound: clears a pending tier-up request. */
 void gltang_jit_unwound(GLTANG_Execution * exec);
 

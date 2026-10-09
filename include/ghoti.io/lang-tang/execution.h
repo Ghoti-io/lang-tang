@@ -312,6 +312,16 @@ typedef struct GLTANG_JitStats {
   uint64_t rebuild_failures;    ///< Chain deoptimizations whose rebuild was refused (the run then ends unwound, never continued).
   uint64_t last_exit_cause;     ///< The cause of the last exit from compiled code: 0 a guard or a call exit, 1 a pause, 2 an unwind, or the deopt hook's code after a refused rebuild.
   uint64_t code_bytes_mapped;   ///< Bytes of executable pages mapped for compiled code (whole pages), summed over every compile. They are charged to the group's meter, not to the context's memory budget: the executable pages are the engine's, not the program's.
+  // Library calls (spec-runtime-calls story 9, CAP-7): a call of a library native
+  // and the load of a library member are compiled as calls to the engine's own
+  // operations, with no exit, through the wrapper the interpreter uses.
+  uint64_t native_calls;        ///< Calls of a library native made from compiled code (through the shared wrapper).
+  uint64_t member_loads;        ///< Loads of a library member (`use` and `.name`) made from compiled code.
+  uint64_t native_call_exits_guard; ///< Exits at a library call site because the callee value was not the native the site names (counts toward the discard limit).
+  uint64_t native_exits_stack;  ///< Exits before a library call or member load because the native stack would have run out (not counted toward the discard limit).
+  uint64_t native_status_deopts; ///< Exits after a native asked compiled code to leave (the interpreter goes on after the call).
+  uint64_t native_status_unwinds; ///< Exits after a native or a member load reported that the run is unwinding.
+  uint64_t native_sites_unsupported; ///< Library call and member load sites left as exits because natives cannot be called from compiled code here (a backend that refuses them, or no table).
 } GLTANG_JitStats;
 
 /**

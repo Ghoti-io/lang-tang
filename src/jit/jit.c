@@ -139,6 +139,11 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
     gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit);
     return;
   }
+  // The natives compiled code calls. Optional: without the table no library call
+  // or member load is compiled (they stay exits, and the statistic says so).
+  if (gltang_jit_natives_create(exec, &jit->natives) != GRJIT_OK) {
+    jit->natives = NULL;
+  }
   exec->jit = jit;
   exec->jit_threshold = GLTANG_JIT_DEFAULT_THRESHOLD;
   exec->jit_settled_fword = UINT64_MAX;
@@ -190,6 +195,7 @@ void gltang_jit_release(GLTANG_Execution * exec) {
   }
   (void)grcore_deopt_release(exec->context, jit->reservation);
   jit->reservation = NULL;
+  grjit_native_table_free(jit->natives);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->programs);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->queue);
   grcore_port_release(jit->port);
@@ -364,6 +370,30 @@ void gltang_jit_unwound(GLTANG_Execution * exec) {
 // Entering compiled code
 // ---------------------------------------------------------------------------
 
+size_t gltang_jit_lend_depth(GLTANG_Execution * exec) {
+  GLTANG_Jit * jit = exec->jit;
+  if (!jit || jit->records_open <= jit->depth_lent) {
+    return 0;
+  }
+  size_t lent = jit->records_open - jit->depth_lent;
+  for (size_t i = 0; i < lent; ++i) {
+    (void)grcore_context_leave_depth(exec->context, GRCORE_DEPTH_NATIVE);
+  }
+  jit->depth_lent += lent;
+  return lent;
+}
+
+void gltang_jit_return_depth(GLTANG_Execution * exec, size_t lent) {
+  GLTANG_Jit * jit = exec->jit;
+  if (!jit || !lent) {
+    return;
+  }
+  for (size_t i = 0; i < lent; ++i) {
+    (void)grcore_context_enter_depth(exec->context, GRCORE_DEPTH_NATIVE);
+  }
+  jit->depth_lent -= lent;
+}
+
 GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * context, uint64_t fword, GLTANG_Value * out_value) {
   GLTANG_Jit * jit = exec->jit;
   if (!jit) {
@@ -382,6 +412,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   if (grcore_activation_enter(stack, GRCORE_ACTIVATION_JIT, exec->engine, false, NULL, &record) != GRCORE_OK) {
     return GLTANG_JIT_NOT_ENTERED;
   }
+  ++jit->records_open;
   // One reference for the duration of the call, so code discarded during the
   // run (a deopt that was the eighth) is freed only after the call ends.
   GRCORE_Code * handle = grcore_code_retain(f->code);
@@ -399,11 +430,16 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
     args[jc->parameter_count] = 1u;
   }
   ++exec->jit_stats.entries;
+  // A nested entry (a native re-entering guest code, AD-23) runs inside the
+  // chain of an outer run: its own count starts at zero and the outer's is put
+  // back.
+  const uint64_t outer_chain = jit->chain;
   jit->chain = 0;
   jit->exit_valid = false;
   jit->refusal = GLTANG_REFUSAL_NONE;
   uint32_t exit = grjit_code_call(jc->code, context, args, out);
-  jit->chain = 0;
+  jit->chain = outer_chain;
+  --jit->records_open;
   // Left before the interpreter acts on the exit, with the rebuilt guest frames
   // in place (core allows that for a rebuilt JIT record: never fewer frames than
   // it began with).
@@ -420,7 +456,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
     case GRJIT_EXIT_DEOPT: {
       // Every compiled frame of the chain has been rebuilt into its guest frame
       // by the deopt hook; the cause is the poll helper's answer, or 0 for a
-      // guard or an exit at a call.
+      // guard or an exit at a call, or a native's status with the native bit.
       uint64_t cause = out[0];
       exec->jit_stats.last_exit_cause = cause;
       if (cause == 0) {
@@ -430,6 +466,12 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
       else if (cause == 1u) {
         ++exec->jit_stats.refused_pauses;
         result = GLTANG_JIT_PAUSED;
+      }
+      else if ((cause & GRJIT_CAUSE_NATIVE) != 0u) {
+        // A native's status (counted by the deopt hook): an unwind in progress ends
+        // the run as a poll's does, anything else leaves the interpreter to go on
+        // after the call, with its value in place.
+        result = (uint32_t)cause == GRJIT_NATIVE_UNWIND ? GLTANG_JIT_UNWOUND : GLTANG_JIT_DEOPTED;
       }
       else {
         ++exec->jit_stats.refused_unwinds;
@@ -487,6 +529,25 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
     execution->jit->test_calls_off = calls_off;
     execution->jit->test_fail_rebuild = fail_rebuild;
     execution->jit->gc_at_push = gc_at_push;
+  }
+}
+
+/*
+ * For the tests only: two switches over native calls. `natives_off` compiles no
+ * library call or member load (as a backend that refuses natives would: they stay
+ * exits, and the statistic counts them); `gc_seam` makes the shared wrapper (and a
+ * native's nested activation) collect once its record is open, which is the
+ * nested-activation GC point of AD-17 that the heap's own torture mode does not
+ * reach. Not declared in any header; a test declares it itself.
+ */
+void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
+void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam) {
+  if (!execution) {
+    return;
+  }
+  execution->native_gc_seam = gc_seam;
+  if (execution->jit) {
+    execution->jit->test_natives_off = natives_off;
   }
 }
 

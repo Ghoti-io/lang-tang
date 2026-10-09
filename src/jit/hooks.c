@@ -173,6 +173,10 @@ static bool call_site_at(const GLTANG_JitCode * jc, uint64_t offset) {
   return jc && offset < jc->code_count && jc->call_sites && (jc->call_sites[offset >> 3] & (1u << (offset & 7u))) != 0;
 }
 
+static bool native_site_at(const GLTANG_JitCode * jc, uint64_t offset) {
+  return jc && offset < jc->code_count && jc->native_sites && (jc->native_sites[offset >> 3] & (1u << (offset & 7u))) != 0;
+}
+
 static uint32_t hook_deopt(void * context, uint64_t cause) {
   GLTANG_Execution * exec = exec_of(context);
   GLTANG_Jit * jit = exec ? exec->jit : NULL;
@@ -186,6 +190,12 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   // discard limit; a poll's deopt (a pause, cause 1, or an unwind, cause 2) does
   // not: a debugger step or a fuel pause must not throw away hot code.
   bool counts = cause == 0u;
+  // A native's status leaves compiled code with `GRJIT_CAUSE_NATIVE | status`: the
+  // unwind status is a poll's unwind (every compiled frame of the run is inside
+  // the scope that is unwinding), any other is a leave, with the state after the call.
+  const bool native_cause = (cause & GRJIT_CAUSE_NATIVE) != 0u;
+  const uint32_t native_status = (uint32_t)cause;
+  const bool unwinding = cause == 2u || (native_cause && native_status == GRJIT_NATIVE_UNWIND);
   uint64_t innermost_fword = 0;
   bool any = false;
 
@@ -208,7 +218,15 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
         any = true;
         record = fr.record;
         innermost_fword = fr.identity.function;
-        if (cause == 2u) {
+        if (native_cause) {
+          if (native_status == GRJIT_NATIVE_UNWIND) {
+            ++exec->jit_stats.native_status_unwinds;
+          }
+          else {
+            ++exec->jit_stats.native_status_deopts;
+          }
+        }
+        if (unwinding) {
           // An unwind pops frames without converting them: every compiled frame of
           // this run is inside the scope that is unwinding (compiled code opens
           // none), so the rebuild skips them all and only marks the record rebuilt.
@@ -217,7 +235,20 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
         if (cause == 0u) {
           GLTANG_JitFn * jf = gltang_jit_find_fn(exec, jit, fr.identity.function, false);
           const GLTANG_JitCode * jc = jf && jf->code ? grcore_code_payload(jf->code) : NULL;
-          if (call_site_at(jc, fr.identity.offset)) {
+          if (native_site_at(jc, fr.identity.offset)) {
+            // An exit at a library call or member load: the callee value was not the
+            // native the site names (counts, like the guest call's), or the native
+            // stack would have run out before the call (does not).
+            if (jit->refusal == GLTANG_REFUSAL_NATIVE_GUARD) {
+              ++exec->jit_stats.native_call_exits_guard;
+              counts = true;
+            }
+            else {
+              ++exec->jit_stats.native_exits_stack;
+              counts = false;
+            }
+          }
+          else if (call_site_at(jc, fr.identity.offset)) {
             // An exit at a call site. Whoever refused recorded why, and none of
             // these counts toward a discard limit except the callee-value guard.
             counts = false;

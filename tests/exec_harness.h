@@ -41,6 +41,8 @@
 #endif
 
 extern "C" void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
+extern "C" void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
+extern "C" GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);
 
 #include <malloc.h>
 #if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
@@ -490,6 +492,7 @@ class Context {
         }
       }
       apply_jit_switches(false, false);
+      apply_native_switches(false);
     } while (false);
     grheap_options_destroy(heap_options);
     grcore_options_destroy(options);
@@ -542,6 +545,14 @@ class Context {
     gltang_vm_set_jit_test_switches_unchecked(execution, calls_off, fail_rebuild, gc_at_push || (torture_on && !arena));
   }
 
+  /// The test switches over native calls (see gltang_vm_set_native_switches_unchecked):
+  /// library calls and loads compiled or not, and a collection once a native's record
+  /// is open, which a heap in torture mode asks for (entering a nested activation is a
+  /// GC point the engine owns).
+  void apply_native_switches(bool natives_off, bool gc_seam = false) {
+    gltang_vm_set_native_switches_unchecked(execution, natives_off, gc_seam || (torture_on && !arena));
+  }
+
   /// What the baseline JIT did for this execution (all zero without it).
   GLTANG_JitStats jit_stats() const {
     GLTANG_JitStats stats;
@@ -576,6 +587,39 @@ class Context {
       case GLTANG_HOST_STRING: r = gltang_library_add_string(lib, name.c_str(), value.text.data(), value.text.size(), value.value.encoding); break;
     }
     return r == GLTANG_OK;
+  }
+
+  /// The library of natives the call tests and the frame differential use: `inc` (adds
+  /// one) and `sum` (the sum of its arguments, each weighted by its position) through the
+  /// public API, and the engine's test natives (src/vm/testnatives.c) `depth`, `records`,
+  /// `echo`, `alloc_ref`, `alloc_n`, `reenter`, `deopt` and `resumable`.
+  void add_native_library() {
+    GLTANG_Library * lib = library();
+    ASSERT_NE(lib, nullptr);
+    ASSERT_EQ(gltang_library_add_native(lib, "inc", &Context::inc_native, nullptr), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(lib, "sum", &Context::sum_native, nullptr), GLTANG_OK);
+    const char * names[] = {"depth", "records", "echo", "alloc_ref", "alloc_n", "reenter", "deopt", "resumable"};
+    for (int k = 0; k < 8; ++k) {
+      ASSERT_EQ(gltang_vm_test_add_native(lib, names[k], k), GLTANG_OK);
+    }
+  }
+
+  static bool inc_native(GLTANG_NativeCall * call, void *) {
+    gltang_call_return_integer(call, gltang_call_integer(call, 0) + 1);
+    return true;
+  }
+
+  static bool sum_native(GLTANG_NativeCall * call, void *) {
+    int64_t sum = 0;
+    for (size_t i = 0; i < gltang_call_count(call); ++i) {
+      if (gltang_call_kind(call, i) != GLTANG_KIND_INTEGER) {
+        gltang_call_return_error(call, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+        return true;
+      }
+      sum += gltang_call_integer(call, i) * static_cast<int64_t>(i + 1);
+    }
+    gltang_call_return_integer(call, sum);
+    return true;
   }
 
   /// Attaches the library, once, before the run begins.

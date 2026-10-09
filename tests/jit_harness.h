@@ -39,6 +39,7 @@ extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execu
 extern "C" void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
 extern "C" int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after);
 extern "C" int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting);
+extern "C" uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
 
 namespace jt {
@@ -120,6 +121,8 @@ struct Scenario {
   bool calls_off = false;                ///< Compile no call site (the control of a measurement).
   bool fail_rebuild = false;             ///< The deopt hook's rebuild fails (the injected failure).
   bool gc_at_push = false;               ///< Collect in the push hook even without torture (so no other collection runs between it and the first use of a frame).
+  bool natives_off = false;              ///< Compile no library call or member load (as a backend that refuses natives would).
+  bool gc_at_native = false;             ///< Collect once a native's record is open even without torture.
   bool fail_protect = false;
   bool resume = false;                   ///< On a pause with `step` 0, resume without raising the budget (an interrupt).
   bool script = false;                   ///< Attach a Script, with `on_poll` below.
@@ -144,6 +147,7 @@ struct Outcome {
   uint64_t stack_moves = 0;              ///< How many times the guest stack's buffer moved (it starts small and grows).
   uint64_t retired_peak = 0;             ///< The most references the context's retired-code list held at once.
   uint64_t registered = 0;               ///< Compiled ranges registered at the end of the run.
+  uint64_t natives_called = 0;           ///< Natives entered through the shared wrapper, from either tier.
   std::string key() const {
     std::string s = raw + "|" + rendered + "|" + result + "|" + errors + "|" + std::to_string(ran) + "|" + std::to_string(finished) + "|fuel " + std::to_string(fuel);
     for (const auto & p : pauses) {
@@ -182,6 +186,7 @@ inline Outcome run(const Scenario & sc, long threshold) {
   out.created = true;
   context.tracker.fail_protect = sc.fail_protect;
   context.apply_jit_switches(sc.calls_off, sc.fail_rebuild, sc.gc_at_push);
+  context.apply_native_switches(sc.natives_off, sc.gc_at_native);
   EXPECT_EQ(gltang_execution_set_name(context.execution, "page"), GLTANG_OK);
   if (sc.statement_polls) {
     EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
@@ -245,6 +250,7 @@ inline Outcome run(const Scenario & sc, long threshold) {
   out.stack_moves = grcore_stack_move_count(grcore_context_stack(context.context));
   out.retired_peak = grcore_code_retired_peak(context.context);
   out.registered = grcore_code_registered_count(context.context);
+  out.natives_called = gltang_vm_test_natives_called(context.execution);
   return out;
 }
 
@@ -257,6 +263,7 @@ inline void expect_same(const Scenario & sc, Outcome * interpreter = nullptr, Ou
   ASSERT_TRUE(b.created);
   EXPECT_EQ(a.key(), b.key());
   EXPECT_EQ(a.polls, b.polls);
+  EXPECT_EQ(a.natives_called, b.natives_called) << "every native, compiled or an exit, is entered through the one wrapper, once";
   ASSERT_EQ(a.identities.size(), b.identities.size());
   for (size_t i = 0; i < a.identities.size(); ++i) {
     ASSERT_TRUE(a.identities[i].function == b.identities[i].function && a.identities[i].offset == b.identities[i].offset)

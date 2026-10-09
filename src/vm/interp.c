@@ -103,6 +103,12 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   } while (0)
 #define SYNC() (exec->current_function = fidx, exec->current_offset = (uint32_t)(pc - 1u))
 #define SAVE() (S[GLTANG_F_PC] = pc, S[GLTANG_F_SP] = sp)
+// The frame as it stands while an operation that can be compiled to a call of the
+// engine's own function runs (a library load, the call of a native): at the
+// operation itself, with its operands still on the stack. That is the state compiled
+// code's call site carries for the same operation (which an exit before the call needs
+// too), so a poll inside it sees the same frame in both tiers.
+#define SAVE_AT_OP() (S[GLTANG_F_PC] = pc - 1u, S[GLTANG_F_SP] = sp)
 #define PUSH(v) (S[sp++] = (v))
 #define DROP(n) \
   do { \
@@ -184,6 +190,12 @@ resume_loop:
               break;
             case GLTANG_JIT_RETURNED:
               grcore_stack_pop(stack);
+              if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
+                // The entry frame of a nested run (AD-23) returned: the native that
+                // opened it takes the value.
+                exec->nested_value = returned;
+                return GRCORE_STEP_FINISHED;
+              }
               frame = grcore_stack_top(stack);
               LOAD_FRAME();
               PUSH(returned);
@@ -304,6 +316,7 @@ resume_loop:
 
       case GLTANG_OP_USE: {
         SYNC();
+        SAVE_AT_OP();
         GLTANG_Value v = gltang_vm_resolve(exec, program->constants[a].block);
         if (v == GLTANG_V_UNWIND) {
           goto unwound;
@@ -441,6 +454,7 @@ resume_loop:
 
       case GLTANG_OP_ATTR: {
         SYNC();
+        SAVE_AT_OP();
         GLTANG_Value name = gltang_vm_constant(exec, a);
         if (name == GLTANG_V_UNWIND) {
           goto unwound;
@@ -553,7 +567,70 @@ resume_loop:
           if (gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
             // A host function, or one of the engine's own: synchronous, with
             // the arguments where they are on the operand stack.
-            r = gltang_vm_call_native(exec, callee, argc, &S[sp - argc]);
+            SAVE_AT_OP();
+            r = gltang_vm_call_native(exec, callee, argc, &S[sp - argc], false);
+            if (exec->callk_function) {
+              // A resumable native asked for a guest call and to be called again
+              // with its value (AD-23): its continuation is a native bound to the
+              // state it gave, left where the callee was, and the call is made
+              // here, by this loop, so a pause inside it resumes like any other.
+              // The `CALL` itself is run again when the callee returns, finding
+              // the continuation and the value.
+              GLTANG_Value kf = exec->callk_function;
+              GLTANG_Value kstate = exec->callk_state;
+              exec->callk_function = 0;
+              RELOAD();
+              uint64_t ktarget = gltang_v_function_index(kf);
+              if (argc != 1u || !gltang_v_is_function(kf) || ktarget >= program->function_count || program->functions[ktarget].parameter_count != 0) {
+                r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+                goto call_result;
+              }
+              if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+                r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+                goto call_result;
+              }
+              GLTANG_Value k = gltang_vm_native_continuation(exec, S[sp - 2u], kstate);
+              if (k == GLTANG_V_UNWIND || k == exec->roots[GLTANG_ROOT_OOM]) {
+                r = k;
+                goto call_result;
+              }
+              RELOAD();
+              S[sp - 2u] = k;
+              S[sp - 1u] = kf;
+              const GLTANG_Function * kfn = &program->functions[ktarget];
+              SAVE();
+              grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
+              GRCORE_FrameRef kframe;
+              GRCORE_Result kpushed = grcore_stack_push(stack, exec->engine, kfn->frame_slots, &kframe);
+              if (kpushed != GRCORE_OK) {
+                if (kpushed == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
+                  goto unwound;
+                }
+                r = exec->roots[GLTANG_ROOT_OOM];
+                goto call_result;
+              }
+              {
+                uint64_t * caller = grcore_stack_slots(stack, frame);
+                uint64_t * callee_slots = grcore_stack_slots(stack, kframe);
+                caller[sp - 1u] = 0;
+                --sp;
+                caller[GLTANG_F_SP] = sp;
+                caller[GLTANG_F_PC] = pc - 1u;
+                callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(GLTANG_FN_PROGRAM(fword), ktarget);
+                callee_slots[GLTANG_F_PC] = 0;
+                callee_slots[GLTANG_F_SP] = H + kfn->local_count;
+                callee_slots[GLTANG_F_FLAGS] = exec->act->depth;
+                frame = kframe;
+                S = callee_slots;
+                fidx = (uint32_t)ktarget;
+                fword = callee_slots[GLTANG_F_FUNCTION];
+                fn = kfn;
+                code = kfn->code;
+                pc = 0;
+                sp = H + kfn->local_count;
+              }
+              break;
+            }
           }
           else if (gltang_v_is_kind(callee, GLTANG_OBJ_TEMPLATE)) {
             const GLTANG_LibraryMember * member = gltang_vm_template_member(callee);
@@ -703,6 +780,11 @@ resume_loop:
         GLTANG_Value v = S[sp - 1u];
         S[sp - 1u] = 0;
         grcore_stack_pop(stack);
+        if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
+          // The entry frame of a nested run (AD-23) returned.
+          exec->nested_value = v;
+          return GRCORE_STEP_FINISHED;
+        }
         frame = grcore_stack_top(stack);
         LOAD_FRAME();
         PUSH(v);
@@ -774,7 +856,7 @@ resume_loop:
 
 unwound:
   gltang_vm_flush_fuel(exec);
-  if (exec->act != &exec->main_act && exec->act->policy != GLTANG_SCOPE_PAUSE
+  if (exec->act != exec->run_base_act && exec->act->policy != GLTANG_SCOPE_PAUSE
       && grcore_budget_scope_exhausted(stack, (GRCORE_BudgetScope){exec->act->scope_id})) {
     // A template call's own budget ran out, and nothing else voted to stop
     // (not the request's ceiling, not a terminate, not memory): the unwind is
@@ -813,14 +895,25 @@ unwound:
     }
   }
   // The run's own end. Every template call still open is let go of, innermost
-  // first, and the stack is emptied (the scopes close with it).
-  while (exec->act != &exec->main_act) {
+  // first, and the stack is emptied (the scopes close with it). A nested run
+  // (AD-23) ends at its own base: the template calls it opened and the frames
+  // above its record go, and the native that opened it takes the unwind back to
+  // the run that called it.
+  const bool nested = exec->run_base_frames != 0;
+  while (exec->act != exec->run_base_act) {
     GLTANG_Activation * open = exec->act;
     gltang_vm_activation_leave(exec, open);
     gltang_vm_activation_free(exec, open);
   }
-  while (exec->temp_count) {
+  while (exec->temp_count > exec->run_base_temps) {
     gltang_vm_temp_pop(exec);
+  }
+  if (nested) {
+    (void)grcore_unwind_to_activation(stack, exec->run_base_record, NULL);
+#ifdef GLTANG_WITH_JIT
+    gltang_jit_unwound(exec);
+#endif
+    return GRCORE_STEP_UNWOUND;
   }
   grcore_unwind_all(stack, NULL);
   // The program did not finish, so what an earlier statement left as its
@@ -841,6 +934,7 @@ unwound:
 #undef LOAD_FRAME
 #undef SYNC
 #undef SAVE
+#undef SAVE_AT_OP
 #undef PUSH
 #undef DROP
 }
@@ -852,13 +946,13 @@ GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {
     // would be a lie about a poll that never happened.
     return GRCORE_STEP_FINISHED;
   }
-#ifdef GLTANG_WITH_JIT
   if (!exec->activations_reserved) {
-    // The first entry into compiled code opens an activation record, and the
-    // array of records is allocated at the first one the context opens, charged
-    // to the guest's memory budget. Opening and leaving one here, before the
-    // program runs, makes that allocation the same whether or not anything is ever
-    // compiled, so a budget gives the same verdict on both tiers.
+    // The first native call or entry into compiled code opens an activation
+    // record, and the array of records is allocated at the first one the context
+    // opens, charged to the guest's memory budget. Opening and leaving one here,
+    // before the program runs, makes that allocation the same whether or not
+    // anything is ever compiled, so a budget gives the same verdict on both tiers
+    // (and in the build without the JIT).
     GRCORE_ActivationRef record;
     GRCORE_Stack * stack = grcore_context_stack(context);
     if (grcore_activation_enter(stack, GRCORE_ACTIVATION_INTERPRETER, exec->engine, false, NULL, &record) == GRCORE_OK) {
@@ -866,6 +960,5 @@ GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {
     }
     exec->activations_reserved = true;
   }
-#endif
   return gltang_vm_run(exec, context);
 }

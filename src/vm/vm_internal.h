@@ -65,6 +65,7 @@
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/lang-tang/value.h>
+#include <ghoti.io/runtime-core/a/activation.h>
 #include <ghoti.io/runtime-core/a/budget_scope.h>
 #include <ghoti.io/runtime-core/a/engine.h>
 #include <ghoti.io/runtime-core/a/frame.h>
@@ -289,8 +290,10 @@ struct GLTANG_NativeCall {
   size_t argc;
   enum {
     GLTANG_CALL_NONE = 0, GLTANG_CALL_NULL, GLTANG_CALL_BOOL, GLTANG_CALL_INTEGER,
-    GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR
+    GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR,
+    GLTANG_CALL_VALUE   ///< Test natives only: `value`, a heap value or ::GLTANG_V_UNWIND, as it is.
   } set;
+  GLTANG_Value value;
   bool boolean;
   int64_t integer;
   double number;
@@ -299,7 +302,22 @@ struct GLTANG_NativeCall {
   GLTANG_String_Type encoding;
   GLTANG_ErrorKind error;
   bool failed_to_copy;
+  GLTANG_Value resume_state;    ///< A resumable native's state, handed back (0 on the first call).
+  GLTANG_Value callk_function;  ///< Test natives only: the guest function the native wants called before it is called again.
+  GLTANG_Value callk_state;     ///< ... and the state it wants handed back, with that call's value.
+  uint32_t test_status;         ///< Test natives only: what the native asks of compiled code (a GLTANG_NATIVE_STATUS_*); the interpreter ignores it.
 };
+
+/**
+ * What a native asks of the compiled code that called it, once it has run:
+ * nothing, to leave compiled code and let the interpreter go on after the call,
+ * or that a guest unwind is in progress. The values are runtime-jit's
+ * `GRJIT_NATIVE_OK`, `GRJIT_NATIVE_DEOPT` and `GRJIT_NATIVE_UNWIND` (a static
+ * assertion in src/jit/ says so); the interpreter reads none of them.
+ */
+#define GLTANG_NATIVE_STATUS_OK 0u
+#define GLTANG_NATIVE_STATUS_DEOPT 1u
+#define GLTANG_NATIVE_STATUS_UNWIND 2u
 
 /** @brief The deepest a container nests for the recursive operations. */
 #define GLTANG_MAX_VALUE_DEPTH 2048
@@ -433,6 +451,22 @@ struct GLTANG_Execution {
   uint32_t current_function;
   uint32_t current_offset;
   uint64_t pending_fuel;        ///< Charged to the context at the next poll.
+  uint32_t native_status;       ///< What the last native call asked of compiled code (GLTANG_NATIVE_STATUS_*); set by the shared wrapper, read by the compiled call's thunk.
+  bool native_gc_seam;          ///< Test seam: the shared wrapper collects once its record is open (entering a nested activation is a GC point, AD-17).
+  uint64_t natives_called;      ///< Native calls through the shared wrapper, either tier.
+
+  // The run the interpreter loop is in: the program's own (frames from 0, the
+  // main activation) or a nested one a native opened (AD-23), which ends where
+  // it began.
+  size_t run_base_frames;       ///< The guest frame count at which the loop returns; 0 for the program's own run.
+  GLTANG_Activation * run_base_act;  ///< The activation the loop was started in; a nested run unwinds template calls down to it, not past it.
+  size_t run_base_temps;
+  GRCORE_ActivationRef run_base_record;  ///< A nested run's REENTRY record: what it unwinds to.
+  GLTANG_Value nested_value;    ///< The value the nested run's entry frame returned.
+
+  // A resumable native's continuation request (test natives only, AD-23).
+  GLTANG_Value callk_function;  ///< The guest function the native wants called, or 0.
+  GLTANG_Value callk_state;     ///< What it wants handed back to it.
   uint64_t frames_unwound;
   uint64_t native_polls[GLTANG_NATIVE_COUNT]; ///< Polls made for each native.
 
@@ -753,8 +787,41 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
 GLTANG_Value gltang_vm_library_attr(GLTANG_Execution * exec, GLTANG_Value library, const char * name, size_t length);
 /** @brief `rng.name`: `next_int`, `next_float`, `next_bool` draw; `set_seed` is a method. */
 GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length);
-/** @brief Calls a native function value (a host's, or one of the engine's). */
-GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args);
+/**
+ * @brief Calls a native function value (a host's, or one of the engine's): the
+ *   one place a native is entered, from the interpreter's `CALL` and from
+ *   compiled code's thunks alike (AD-28, AD-23).
+ *
+ * It opens the native's activation record (`GRCORE_ACTIVATION_NATIVE`, which
+ * enters the native-depth budget and gives the wrapper's C frame as a
+ * conservative segment), runs the native, and closes the record. A refused enter
+ * is the call's value: the recursion-limit error for the native-depth budget, the
+ * out-of-memory value for the memory budget. `compiled` is true from compiled
+ * code: the wrapper then hands back the native-depth units the open JIT records
+ * cost, for as long as the native runs, so the same budget refuses at the same
+ * nesting as in the interpreter. It is a GC point.
+ *
+ * @param args `argc` values; read before the first GC point, and the native is
+ *   given a copy that the record pins.
+ * @return The call's value, or ::GLTANG_V_UNWIND.
+ */
+GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled);
+/** @brief The value of a call whose record was refused (the native-depth budget, or the memory budget). */
+GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Result refused);
+/**
+ * @brief Calls a guest function from a native as a nested activation (AD-23).
+ *
+ * Opens a `REENTRY` record, pushes the function's frame with `args`, and runs the
+ * interpreter loop until that frame returns; the loop enters compiled code as it
+ * does for any function. A pause inside is an unwind (the record is nested, AD-5)
+ * that ends at the record: the frames above it are popped and the result is
+ * ::GLTANG_V_UNWIND for the native to hand on. A refused record is the call's
+ * value, as for any native. Only the engine's test natives do this: a host's
+ * function is opaque and cannot reach it. A GC point.
+ */
+GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function, size_t argc, const GLTANG_Value * args);
+/** @brief A native bound to `state`: what a resumable native's continuation call is made on. A GC point. */
+GLTANG_Value gltang_vm_native_continuation(GLTANG_Execution * exec, GLTANG_Value callee, GLTANG_Value state);
 /** @brief The member of a template value. */
 static inline const GLTANG_LibraryMember * gltang_vm_template_member(GLTANG_Value v) {
   return ((const GLTANG_TemplateObject *)gltang_object(v))->member;

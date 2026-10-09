@@ -891,7 +891,7 @@ endif
 #   under torture an allocation also collects, which only makes it slower.
 TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
-TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls
 
 # With the JIT built, `make test` is two arms. The JIT arm is everything below,
 # and then the same unit suites once more with every execution tiering up at

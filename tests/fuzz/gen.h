@@ -710,9 +710,18 @@ namespace detail {
  */
 class CallBuilder {
  public:
-  explicit CallBuilder(uint64_t seed) : e_(seed) {}
+  /// With \p natives the program also calls the library the tests register
+  /// (`inc`, `sum`, `alloc_n`, `reenter`, `deopt`; tests/unit/test_native_calls.cpp):
+  /// natives called with a `use` in the function and through a `global`, one that
+  /// allocates, one that re-enters an earlier function as a nested activation and one
+  /// that asks compiled code to leave. Without it the program is the one the seed has
+  /// always made, and no engine but this one has the library.
+  explicit CallBuilder(uint64_t seed, bool natives = false) : e_(seed), natives_(natives) {}
 
   std::string build() {
+    if (natives_) {
+      line("use inc; use sum; use alloc_n; use reenter; use deopt;");
+    }
     int count = 3 + (int)below(6);
     for (int i = 0; i < count; ++i) {
       function(i);
@@ -763,6 +772,7 @@ class CallBuilder {
   std::string out_;
   std::vector<Fn> fns_;
   bool has_values_ = false;
+  bool natives_ = false;
 
   uint64_t below(uint64_t n) { return e_() % n; }
   bool chance(unsigned percent) { return below(100) < percent; }
@@ -809,9 +819,13 @@ class CallBuilder {
     }
     head += ") {";
     int shape = (int)below(7);
-    if (index == 0 && shape >= 2) {
+    if (natives_ && chance(35)) {
+      shape = 7 + (int)below(3);  // a call of the library
+    }
+    if (index == 0 && shape >= 2 && shape != 7 && shape != 9) {
       shape = (int)below(2);  // nothing declared before it to call
     }
+
     // Shape 6 needs two earlier functions of one parameter count to choose between.
     int pair_a = -1, pair_b = -1;
     for (size_t x = 0; shape == 6 && x < fns_.size() && pair_b < 0; ++x) {
@@ -863,6 +877,38 @@ class CallBuilder {
         line("  return (" + name + "(p0 - 1" + rest + ") + " + expr(params, 1) + ") % 100003;");
         break;
       }
+      case 7: {  // library natives: a `use` in the function, or the top level's, named by `global`
+        if (chance(50)) {
+          line("  use inc; use sum;");
+        }
+        else {
+          line("  global inc; global sum;");
+        }
+        line("  t = inc(" + expr(params, 1) + ");");
+        line("  return (t + sum(" + expr(params, 1) + ", " + expr(params, 1) + ") + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
+      case 8: {  // re-enters an earlier function as a nested activation
+        const Fn * a = &fns_[below(fns_.size())];
+        for (size_t tries = 0; a->params > 14 && tries < fns_.size(); ++tries) {
+          a = &fns_[(&*a - &fns_[0] + 1) % fns_.size()];
+        }
+        if (a->params > 14) {
+          line("  return " + expr(params, 2) + ";");
+          break;
+        }
+        line("  use reenter;");
+        std::string args = args_over(a->params, params, 1);
+        line("  t = reenter(" + a->name + (args.empty() ? "" : ", " + args) + ");");
+        line("  return (t + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
+      case 9: {  // a native that allocates, and one that asks compiled code to leave
+        line("  use alloc_n; use deopt;");
+        line("  r = alloc_n(" + std::to_string(below(8)) + ");");
+        line("  return (deopt(" + expr(params, 1) + ") + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
       case 6: {  // the callee is a value two paths produce: never a compiled call site
         const Fn & a = fns_[pair_a];
         const Fn & b = fns_[pair_b];
@@ -890,11 +936,11 @@ class CallBuilder {
 /// A call-graph program for `seed` (a script): calls between functions of up to
 /// fifteen parameters, in loops, by recursion and tree recursion, with function
 /// values, an array argument, and now and then recursion to the depth budget.
-inline Program generate_calls(uint64_t seed) {
+inline Program generate_calls(uint64_t seed, bool natives = false) {
   Program p;
   p.seed = seed;
   p.mode = Mode::Script;
-  p.source = detail::CallBuilder(seed).build();
+  p.source = detail::CallBuilder(seed, natives).build();
   return p;
 }
 
