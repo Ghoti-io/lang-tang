@@ -52,6 +52,13 @@
  * what the JIT did to stderr after the run, the way `--errors` writes the error
  * list; a scripted debug session reads it to show that compiled code ran.
  *
+ * `--native-stack BYTES` is the context's native-stack budget (AD-28): how much
+ * native stack compiled code may use. Calls between compiled functions are
+ * compiled only under a budget (the default is 1 MiB, `DEFAULT_NATIVE_STACK`);
+ * recursion that would need more deoptimizes once, at the call, and the
+ * interpreter finishes the run with the same output. `0` is no limit, and then
+ * no call is compiled; a malformed or negative value is a usage error (exit 2).
+ *
  * `--dap` makes the command a host of the debugger (story 13): the Debug Adapter
  * Protocol is spoken on stdin and stdout, so the rendered output of the run goes
  * to stderr instead, and the source must come from a file or `--evaluate`. The
@@ -103,6 +110,16 @@
 /** ctang's default for the deepest a call may nest (language reference 10.3). */
 #define DEFAULT_CALL_DEPTH 512
 
+/**
+ * The default native-stack budget in bytes (`--native-stack`). Compiled code
+ * calls compiled code only under a byte budget (AD-28): with none, a deep
+ * recursion could overrun the native stack, so no call site is compiled. One
+ * mebibyte lets the baseline JIT's calls compile out of the box; recursion deeper
+ * than it allows leaves compiled code once, at the call, and the interpreter
+ * finishes the run.
+ */
+#define DEFAULT_NATIVE_STACK ((uint64_t)1 << 20)
+
 static void print_help_text(void) {
   printf(
     "Usage: tang [OPTIONS] [FILE]\n"
@@ -140,6 +157,12 @@ static void print_help_text(void) {
     "                                the same either way\n"
     "  --jit-stats                   After the run, write what the JIT did to stderr\n"
     "                                (one line of counters; all zero without the JIT)\n"
+    "  --native-stack BYTES          The native stack compiled code may use below where the\n"
+    "                                run began (default %llu). Calls between compiled\n"
+    "                                functions are compiled only with a budget; recursion\n"
+    "                                that needs more leaves compiled code at the call and\n"
+    "                                the interpreter finishes the run with the same\n"
+    "                                output. 0: no limit, and then no call is compiled\n"
     "  --cleanup, -c                 Accepted for ctang compatibility; this\n"
     "                                command always releases what it allocates\n"
     "  --help, -h                    Display this help message\n"
@@ -149,7 +172,7 @@ static void print_help_text(void) {
     "5 paused at a poll (reported on stderr); 6 unwound by a limit;\n"
     "7 the runtime could not be set up for a reason other than memory;\n"
     "8 ended by --halt-on-error.\n",
-    DEFAULT_CALL_DEPTH, (unsigned)GLTANG_JIT_DEFAULT_THRESHOLD);
+    DEFAULT_CALL_DEPTH, (unsigned)GLTANG_JIT_DEFAULT_THRESHOLD, (unsigned long long)DEFAULT_NATIVE_STACK);
 }
 
 
@@ -215,6 +238,7 @@ typedef struct Options {
   bool has_jit_threshold;
   uint64_t jit_threshold;
   bool show_jit_stats;
+  uint64_t native_stack;   ///< Bytes; GRCORE_UNLIMITED for none (`--native-stack 0`).
 } Options;
 
 /** Writes the error list to stderr: `template:file:line: message`, then the chain, indented. */
@@ -403,6 +427,9 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     if (step == GRCORE_OK) {
       step = grcore_options_set_guest_depth(core_options, options->depth == UINT64_MAX ? options->depth : options->depth + 1u);
     }
+    if (step == GRCORE_OK) {
+      step = grcore_options_set_native_stack_bytes(core_options, options->native_stack);
+    }
     if (step == GRCORE_OK && gltang_heap_options_configure(heap_options) != GLTANG_OK) {
       step = GRCORE_ERR_INTERNAL;
     }
@@ -530,10 +557,14 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
   if (options->show_jit_stats) {
     GLTANG_JitStats stats;
     if (gltang_execution_jit_stats(execution, &stats) == GLTANG_OK) {
-      fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu\n",
+      fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu, "
+        "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu\n",
         (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
         (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
-        (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls);
+        (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls,
+        (unsigned long long)stats.calls,
+        (unsigned long long)(stats.call_exits_remembered + stats.call_exits_push_refused + stats.call_exits_callee_guard + stats.call_exits_native_stack),
+        (unsigned long long)stats.compile_at_call, (unsigned long long)stats.deepest_chain);
     }
   }
 #ifdef GLTANG_WITH_DEBUG
@@ -572,6 +603,7 @@ int main(int argc, const char * argv[]) {
   Options options;
   memset(&options, 0, sizeof(options));
   options.depth = DEFAULT_CALL_DEPTH;
+  options.native_stack = DEFAULT_NATIVE_STACK;
 
 #ifdef _WIN32
   // The standard streams are byte streams. The Windows C runtime opens them in
@@ -630,6 +662,15 @@ int main(int argc, const char * argv[]) {
         return EXIT_USAGE;
       }
       options.has_jit_threshold = true;
+      ++i;
+    }
+    else if (!strcmp(argv[i], "--native-stack")) {
+      uint64_t bytes = 0;
+      if (i + 1 >= argc || !parse_count(argv[i + 1], &bytes)) {
+        fprintf(stderr, "tang: %s needs a number of bytes\n", argv[i]);
+        return EXIT_USAGE;
+      }
+      options.native_stack = bytes == 0 ? GRCORE_UNLIMITED : bytes;
       ++i;
     }
     else if (!strcmp(argv[i], "--jit-stats")) {

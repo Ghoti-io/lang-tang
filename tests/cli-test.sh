@@ -112,6 +112,41 @@ check "--depth bounds it" "no" \
 check "50,000 deep recursion, depth raised" "50000" \
   "$("$TANG" --depth 100000 -e 'function d(n) { if (n <= 0) { return 0; } return 1 + d(n - 1); } print(d(50000));')"
 
+# --native-stack BYTES is the native stack compiled code may use (AD-28). Calls
+# between compiled functions are compiled only under a budget, so the command
+# has one by default (1 MiB); 0 is no limit, and then no call is compiled. Only
+# a tang built with the JIT has anything to show.
+if "$TANG" --jit-threshold 1 -e '1' >/dev/null 2>&1; then
+  rec='function d(n) { if (n <= 0) { return 0; } return 1 + d(n - 1); } print(d(20000));'
+  # The "calls N," and "call exits N," fields of the --jit-stats line.
+  jit_field() { "$TANG" --jit-threshold 1 --jit-stats "$@" 2>&1 >/dev/null | sed -n "s/.*, $FIELD \([0-9][0-9]*\),.*/\1/p"; }
+  FIELD=calls
+  by_default="$(jit_field --depth 100000 -e "$rec")"
+  unlimited="$(jit_field --native-stack 0 --depth 100000 -e "$rec")"
+  tiny="$(jit_field --native-stack 100000 --depth 100000 -e "$rec")"
+  FIELD="call exits"
+  tiny_exits="$(jit_field --native-stack 100000 --depth 100000 -e "$rec")"
+  roomy_exits="$(jit_field --native-stack 100000000 --depth 100000 -e "$rec")"
+  check "--native-stack: the default budget compiles calls" "yes" "$([ "${by_default:-0}" -gt 1000 ] && echo yes || echo "no ($by_default)")"
+  check "--native-stack 0 is no limit, and no call is compiled" "0" "${unlimited:-none}"
+  check "--native-stack: a small budget still compiles the calls it has room for" "yes" "$([ "${tiny:-0}" -gt 0 ] && echo yes || echo "no ($tiny)")"
+  check "--native-stack: a small budget leaves compiled code at a call, and the interpreter finishes" "yes" "$([ "${tiny_exits:-0}" -gt 0 ] && echo yes || echo "no ($tiny_exits)")"
+  check "--native-stack: room for the whole recursion leaves nothing" "0" "${roomy_exits:-none}"
+  for budget in 0 4096 100000 1048576; do
+    check "--native-stack $budget: the output is the interpreted run's" "20000" \
+      "$("$TANG" --jit-threshold 1 --native-stack "$budget" --depth 100000 -e "$rec")"
+  done
+fi
+status "--native-stack without a number exits 2" 2 "$TANG" --native-stack
+status "--native-stack with a word exits 2" 2 "$TANG" --native-stack many -e 1
+status "--native-stack with a negative number exits 2" 2 "$TANG" --native-stack -3 -e 1
+status "--native-stack with a number runs" 0 "$TANG" --native-stack 65536 -e 1
+case "$("$TANG" --help)" in
+  *"--native-stack BYTES"*"1048576"*) printf '  ok    --help describes --native-stack and its default\n' ;;
+  *) printf '  FAIL  --help describes --native-stack and its default\n'
+     failures=$((failures + 1)) ;;
+esac
+
 # The standard streams are byte streams on every platform: a newline the
 # program prints is one LF, not CR LF (Windows opens them in text mode unless the
 # command says otherwise), and diagnostics carry no CR. Counted with tr and wc
