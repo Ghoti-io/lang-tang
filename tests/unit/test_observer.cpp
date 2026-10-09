@@ -321,6 +321,10 @@ std::vector<Case> call_cases() {
     cases.push_back(c);
   };
   add("fib", "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }\nprint(fib(9));", {}, 37);
+  // fib(9) makes 110 polls, so the limit changes nothing for a correct engine. It bounds a wrong one: a
+  // compiled `n < 2` that never holds recurses without end, and every recorded poll holds the whole stack
+  // (planted defect 08 took more than 6 GiB here before this).
+  cases.back().limit = 150;
   add("a wide callee",
       "function s6(a, b, c, d, e, f) { return a + b + c + d + e + f; }\n"
       "function mid(x) { return s6(x, 1, 2, 3, 4, 5) + s6(1, x, 2, 3, 4, 5); }\n"
