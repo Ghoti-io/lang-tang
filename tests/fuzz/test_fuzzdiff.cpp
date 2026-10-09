@@ -64,7 +64,7 @@ const char * mode_name(gen::Mode mode) {
 /// One generated program through both engines. `mutate` may alter lang-tang's
 /// verdict before the comparison, which is how a planted divergence is made.
 Result run_one(const std::string & runner, const std::string & dir, uint64_t seed, gen::Mode mode,
-    const std::function<void(oracle::Verdict &)> & mutate = nullptr, long jit_threshold = -1) {
+    const std::function<void(oracle::Verdict &)> & mutate = nullptr, long jit_threshold = -1, uint64_t * compiled_calls = nullptr) {
   gen::Program program = gen::generate(seed, mode);
   bool script = mode == gen::Mode::Script;
   std::string path = dir + "/p-" + std::to_string(seed) + (script ? "-s" : "-t") + ".tang";
@@ -73,7 +73,7 @@ Result run_one(const std::string & runner, const std::string & dir, uint64_t see
     f << program.source;
   }
   Result r;
-  r.ours = oracle::lang_tang_run(program.source, script, oracle::kDifferentialFuel, jit_threshold);
+  r.ours = oracle::lang_tang_run(program.source, script, oracle::kDifferentialFuel, jit_threshold, compiled_calls);
   r.theirs = oracle::ctang_run_verdict(runner, script ? "run-script" : "run-template", path, kCtangTimeoutMs);
   std::remove(path.c_str());
   if (mutate) {
@@ -94,13 +94,13 @@ const char * runner_or_null() {
 
 /// Runs `count` programs from `first`: program k is seed first + k / 2, script
 /// for even k and template for odd k.
-void campaign(const std::string & runner, uint64_t first, uint64_t count, size_t * agreed, size_t * killed, size_t * paused, long jit_threshold = -1) {
+void campaign(const std::string & runner, uint64_t first, uint64_t count, size_t * agreed, size_t * killed, size_t * paused, long jit_threshold = -1, uint64_t * compiled_calls = nullptr) {
   std::string dir = work_dir(runner);
   size_t shown = 0;
   for (uint64_t k = 0; k < count; ++k) {
     uint64_t seed = first + k / 2;
     gen::Mode mode = k % 2 == 0 ? gen::Mode::Script : gen::Mode::Template;
-    Result r = run_one(runner, dir, seed, mode, nullptr, jit_threshold);
+    Result r = run_one(runner, dir, seed, mode, nullptr, jit_threshold, compiled_calls);
     *killed += r.theirs.kind == oracle::Kind::Killed;
     *paused += r.ours.kind == oracle::Kind::Paused;
     if (r.agreed) {
@@ -134,18 +134,27 @@ TEST(FuzzDiff, FixedBatchOfGeneratedProgramsAgreesOnBothEngines) {
   // The same batch with every function compiled at its first poll (calls between
   // compiled functions included).
   size_t agreed_jit = 0, killed_jit = 0, paused_jit = 0;
-  campaign(runner, 1, 440, &agreed_jit, &killed_jit, &paused_jit, 1);
+  uint64_t compiled_calls = 0;
+  campaign(runner, 1, 440, &agreed_jit, &killed_jit, &paused_jit, 1, &compiled_calls);
   EXPECT_EQ(agreed_jit, 440u);
   EXPECT_EQ(killed_jit, 0u);
   EXPECT_EQ(paused_jit, 0u);
-  std::printf("  fuzz-diff fixed batch compiled at the first poll: 440 programs, %zu agree\n", agreed_jit);
+  std::printf("  fuzz-diff fixed batch compiled at the first poll: 440 programs, %zu agree, %llu calls between compiled functions\n", agreed_jit,
+      (unsigned long long)compiled_calls);
+  if (const char * why = oracle::no_compiled_calls_reason()) {
+    std::printf("  compiled-call check skipped: %s\n", why);
+  }
+  else {
+    EXPECT_GT(compiled_calls, 0u) << "the threshold-1 rerun made no call between compiled functions";
+  }
 }
 
 TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFirstPoll) {
   const char * runner = runner_or_null();
   ASSERT_NE(runner, nullptr);
   std::string dir = work_dir(runner);
-  size_t agreed = 0, killed = 0, shown = 0;
+  size_t agreed = 0, killed = 0, shown = 0, paused = 0;
+  uint64_t compiled_calls = 0;
   // FUZZ_DIFF_CALL_GRAPHS=N runs N programs from FUZZ_DIFF_SEED (the campaign on the EVO).
   const char * count_text = std::getenv("FUZZ_DIFF_CALL_GRAPHS");
   const char * seed_text = std::getenv("FUZZ_DIFF_SEED");
@@ -163,7 +172,8 @@ TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFir
     killed += theirs.kind == oracle::Kind::Killed;
     bool ok = true;
     for (long threshold : {0L, 1L}) {
-      oracle::Verdict ours = oracle::lang_tang_run(program.source, true, oracle::kDifferentialFuel, threshold);
+      oracle::Verdict ours = oracle::lang_tang_run(program.source, true, oracle::kDifferentialFuel, threshold, threshold ? &compiled_calls : nullptr);
+      paused += ours.kind == oracle::Kind::Paused;
       if (!oracle::agree(ours, theirs)) {
         ok = false;
         if (shown++ < 3) {
@@ -176,6 +186,13 @@ TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFir
   }
   EXPECT_EQ(agreed, kCount);
   EXPECT_EQ(killed, 0u);
+  EXPECT_EQ(paused, 0u) << "a generated call graph never runs out of fuel";
+  if (const char * why = oracle::no_compiled_calls_reason()) {
+    std::printf("  compiled-call check skipped: %s\n", why);
+  }
+  else {
+    EXPECT_GT(compiled_calls, 0u) << "no call graph made a call between compiled functions";
+  }
   std::printf("  fuzz-diff call graphs: %llu programs (seeds %llu to %llu), interpreted and compiled, %zu agree with ctang\n",
       (unsigned long long)kCount, (unsigned long long)kFirst, (unsigned long long)(kFirst + kCount - 1), agreed);
 }

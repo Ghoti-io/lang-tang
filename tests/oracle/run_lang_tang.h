@@ -125,11 +125,25 @@ struct LangTangRun {
   std::string error; ///< Why a harness-level failure (not a verdict) happened.
 };
 
+/// Why a threshold-1 rerun cannot be required to have made compiled calls, or
+/// nullptr when it must: a build without the JIT, or a target without a native
+/// backend, compiles nothing, and the rerun is then only the interpreter again.
+/// (The context's native stack budget is the harness's default, 1 MiB, never
+/// unlimited, which would compile no call either.)
+inline const char * no_compiled_calls_reason() {
+#ifdef GLTANG_WITH_JIT
+  return ::jit_backend_present() ? nullptr : "this target has no native code backend";
+#else
+  return "built with JIT=no";
+#endif
+}
+
 /// Compiles and runs `source` on lang-tang, as the corpus and the generator do.
-/// `fuel` is the budget and `jit_threshold` the tier-up threshold (-1: the
+/// `compiled_calls`, when given, is increased by the calls between compiled functions the run made. `fuel` is the budget and `jit_threshold` the tier-up threshold (-1: the
 /// environment's, then the library's, 0: off, 1: every function at its first
 /// poll); a run that spends the fuel, or is unwound with the limit, is `paused`. A program that does not compile is `reject`.
-inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t fuel = kDifferentialFuel, long jit_threshold = -1) {
+inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t fuel = kDifferentialFuel, long jit_threshold = -1,
+    uint64_t * compiled_calls = nullptr) {
   tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
   if (compiled.result == GLTANG_ERR_FORMAT) {
     return Verdict::reject();
@@ -148,6 +162,9 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
   context.attach();
   GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
   context.has_run = true;
+  if (compiled_calls) {
+    *compiled_calls += context.jit_stats().calls;
+  }
   if (r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) {
     return Verdict::paused();
   }

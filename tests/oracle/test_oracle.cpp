@@ -204,10 +204,11 @@ TEST(Oracle, LangTangAndCtangRunEveryCorpusFileToTheSameOutputAndResultOrALedger
   // ctang exactly as the interpreted one does, under the same ledger.
   {
     std::vector<oracle::Entry> compiled;
+    uint64_t compiled_calls = 0;
     for (const auto & e : entries) {
       bool script = e.file.compare(0, 7, "script/") == 0;
       oracle::Entry c = e;
-      c.lang_tang = oracle::lang_tang_run(read_file(kCorpus + "/" + e.file), script, oracle::kDifferentialFuel, 1);
+      c.lang_tang = oracle::lang_tang_run(read_file(kCorpus + "/" + e.file), script, oracle::kDifferentialFuel, 1, &compiled_calls);
       compiled.push_back(c);
     }
     oracle::Judgement jc = oracle::judge(compiled, ledger);
@@ -215,6 +216,13 @@ TEST(Oracle, LangTangAndCtangRunEveryCorpusFileToTheSameOutputAndResultOrALedger
       ADD_FAILURE() << "compiled at the first poll: " << f;
     }
     EXPECT_EQ(jc.agreed, j.agreed) << "the compiled run agrees with ctang on exactly the files the interpreted one does";
+    if (const char * why = oracle::no_compiled_calls_reason()) {
+      std::printf("  compiled-call check skipped: %s\n", why);
+    }
+    else {
+      EXPECT_GT(compiled_calls, 0u) << "the threshold-1 rerun made no call between compiled functions, so it compared the interpreter with itself";
+      std::printf("  compiled at the first poll: %llu calls between compiled functions\n", (unsigned long long)compiled_calls);
+    }
   }
 
   // A row's files must be run by this differential; otherwise it could never
