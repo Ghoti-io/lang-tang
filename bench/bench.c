@@ -610,6 +610,53 @@ static uint64_t fib22_default_run(uint64_t iterations, double * elapsed) {
 static uint64_t fib22_calls_off_run(uint64_t iterations, double * elapsed) {
   return fib_source_run(22, 17711, setup_calls_off, iterations, elapsed);
 }
+
+/* Library calls from compiled code (spec-runtime-calls story 9, CAP-7): the loop
+ * of `native_call_run` in a function, a tenth of the loop count of the other JIT
+ * cases (a call costs more than an add). Interpreted, compiled (the call of the
+ * native and the load of `use` are compiled and make no exit), and compiled with
+ * natives switched off (the behaviour before the story: the call is an exit at
+ * every iteration). The result is checked. */
+extern void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
+
+static void setup_native_interpreted(GLTANG_Execution * execution) {
+  setup_native(execution);
+  setup_jit_off(execution);
+}
+
+static void setup_native_compiled(GLTANG_Execution * execution) {
+  setup_native(execution);
+  setup_jit_on(execution);
+}
+
+static void setup_native_natives_off(GLTANG_Execution * execution) {
+  setup_native(execution);
+  setup_jit_on(execution);
+  gltang_vm_set_native_switches_unchecked(execution, true, false);
+}
+
+static uint64_t jit_native_run(Setup setup, uint64_t iterations, double * elapsed) {
+  uint64_t n = loop_count() / 10u;
+  char source[256];
+  snprintf(source, sizeof(source), "function f(n) { use inc; s = 0; i = 0; while (i < n) { s = inc(s); i = i + 1; } return s; } f(%llu);", (unsigned long long)n);
+  have_expected_integer = 1;
+  expected_integer = (int64_t)n;
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t jit_native_interpreted_run(uint64_t iterations, double * elapsed) {
+  return jit_native_run(setup_native_interpreted, iterations, elapsed);
+}
+
+static uint64_t jit_native_compiled_run(uint64_t iterations, double * elapsed) {
+  return jit_native_run(setup_native_compiled, iterations, elapsed);
+}
+
+static uint64_t jit_native_off_run(uint64_t iterations, double * elapsed) {
+  return jit_native_run(setup_native_natives_off, iterations, elapsed);
+}
 #endif
 
 /* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
@@ -749,6 +796,9 @@ static const Case cases[] = {
     {"fib-22-interpreted", fib22_interpreted_run, 100u, 1u},
     {"fib-22-jit-default", fib22_default_run, 100u, 1u},
     {"fib-22-jit-calls-off", fib22_calls_off_run, 100u, 1u},
+    {"jit-native-call-1M-interpreted", jit_native_interpreted_run, 5u, 1u},
+    {"jit-native-call-1M-compiled", jit_native_compiled_run, 10u, 1u},
+    {"jit-native-call-1M-natives-off", jit_native_off_run, 5u, 1u},
 #endif
 };
 
