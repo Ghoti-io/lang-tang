@@ -119,13 +119,18 @@ check "50,000 deep recursion, depth raised" "50000" \
 if "$TANG" --jit-threshold 1 -e '1' >/dev/null 2>&1; then
   rec='function d(n) { if (n <= 0) { return 0; } return 1 + d(n - 1); } print(d(20000));'
   # The "calls N," and "call exits N," fields of the --jit-stats line.
-  jit_field() { "$TANG" --jit-threshold 1 --jit-stats "$@" 2>&1 >/dev/null | sed -n "s/.*, $FIELD \([0-9][0-9]*\),.*/\1/p"; }
+  jit_line() { "$TANG" --jit-threshold 1 --jit-stats "$@" 2>&1 >/dev/null; }
+  field_of() { printf '%s\n' "$2" | sed -n "s/.*[ ,]$1 \([0-9][0-9]*\)\(,\|\$\).*/\1/p"; }
+  jit_field() { field_of "$FIELD" "$(jit_line "$@")"; }
   FIELD=calls
   by_default="$(jit_field --depth 100000 -e "$rec")"
   unlimited="$(jit_field --native-stack 0 --depth 100000 -e "$rec")"
-  tiny="$(jit_field --native-stack 100000 --depth 100000 -e "$rec")"
+  tiny_line="$(jit_line --native-stack 100000 --depth 100000 -e "$rec")"
+  tiny="$(field_of calls "$tiny_line")"
+  tiny_exits="$(field_of "call exits" "$tiny_line")"
   FIELD="call exits"
-  tiny_exits="$(jit_field --native-stack 100000 --depth 100000 -e "$rec")"
+  check "--jit-stats: a correct run has no rebuild failure and no hook argument error" "0 0" \
+    "$(field_of "rebuild failures" "$tiny_line") $(field_of "hook argument errors" "$tiny_line")"
   roomy_exits="$(jit_field --native-stack 100000000 --depth 100000 -e "$rec")"
   check "--native-stack: the default budget compiles calls" "yes" "$([ "${by_default:-0}" -gt 1000 ] && echo yes || echo "no ($by_default)")"
   check "--native-stack 0 is no limit, and no call is compiled" "0" "${unlimited:-none}"
