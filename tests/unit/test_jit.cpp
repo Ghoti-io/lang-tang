@@ -442,12 +442,14 @@ TEST(Jit, ARefusedNativeDepthMeansTheFunctionIsNotEnteredAndTheBudgetIsUntouched
   EXPECT_EQ(with_room.native_depth, 0u) << "every record was left";
 }
 
-TEST(Jit, CodeMemoryThatTheBudgetRefusesMarksTheFunctionNeverCompileAndTheRunContinues) {
+TEST(Jit, CodeMemoryIsNotChargedToTheGuestsBudgetSoATightBudgetStillCompiles) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source = kLoop;
   // The most the interpreter needs, measured with the JIT counting but never
-  // compiling, and a budget a page short of what compiling needs.
+  // compiling, and a budget a kilobyte above it: not enough for compiled code's
+  // pages if they were charged (they were, before the decision that they are the
+  // engine's and not the program's), and exactly enough for the program.
   Outcome measured = run(sc, 1000000);
   ASSERT_TRUE(measured.created);
   Scenario tight = sc;
@@ -457,9 +459,10 @@ TEST(Jit, CodeMemoryThatTheBudgetRefusesMarksTheFunctionNeverCompileAndTheRunCon
   Outcome jit = run(tight, 1);
   EXPECT_EQ(plain.raw, "454950499500") << "the interpreter fits the budget";
   EXPECT_EQ(jit.raw, plain.raw);
-  EXPECT_GE(jit.stats.compile_failures, 1u);
-  EXPECT_EQ(jit.stats.functions_compiled, 0u);
-  EXPECT_EQ(jit.stats.entries, 0u);
+  EXPECT_EQ(jit.stats.compile_failures, 0u) << "the budget did not refuse the code's pages";
+  EXPECT_GE(jit.stats.functions_compiled, 1u);
+  EXPECT_GE(jit.stats.entries, 1u);
+  EXPECT_GT(jit.stats.code_bytes_mapped, 0u) << "and they are counted in the statistics";
 }
 
 TEST(Jit, APageProviderThatCannotProtectRefusesTheCompileAndTheRunContinues) {
