@@ -1666,8 +1666,9 @@ that is unwinding) and still marks the record rebuilt so that it can be left.
 remembered refused, because the push was refused (guest depth, memory) or because
 the native stack would run out is not counted toward any function's discard limit:
 the callee or the budget caused it. A failed guard, the callee-value guard, an
-unconditional exit and a poll's pause or unwind are counted against the function
-whose frame is innermost, and at the eighth that function is discarded: its slot
+unconditional exit are counted against the function whose frame is innermost
+(a poll's pause or unwind is not: a debugger step or a fuel pause must not throw
+away hot code, and an unwind ends the run), and at the eighth that function is discarded: its slot
 is refused (so its callers' calls become remembered exits), its range is
 unregistered and the cache's reference is dropped. The code is never destroyed
 directly: the registry and the slot retire their references and `runtime-core`
@@ -1737,8 +1738,14 @@ with it clear a `LINE` costs a load and a branch and no fuel.
 
 **Ownership.** Compiled code is context-specialised (it bakes in the function word
 and the execution's own addresses) and owned by its execution's cache; its pages
-come from the context's counting page provider, so they are on the context's meter
-and a memory budget can refuse them. A compile refused by memory, by a limit or by
+come from the group's counting page provider, and the JIT's records and the compile's
+own allocations from the group's allocator, so none of it is on the context's meter:
+compiled code is the engine's and not the program's, and a memory budget gives the
+same verdict compiled and interpreted at every budget (the pages are counted in
+`GLTANG_JitStats::code_bytes_mapped` and printed by `--jit-stats`; `runtime-core`
+charges its own compiled-code bookkeeping to the group for the same reason, and
+the interpreter's first run reserves the activation records' array, which entering
+compiled code would otherwise allocate). A compile refused by memory, by a limit or by
 `protect` marks the function never-compile, is counted (`compile_failures`) and the
 run goes on in the interpreter. The execution's teardown clears every slot,
 unregisters every range and releases the reservation (the reservation each call

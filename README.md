@@ -41,7 +41,10 @@ compiles no call; `tang --native-stack BYTES`, 1 MiB by default, sets it). The
 output, the errors, the fuel and the polls are the interpreter's, which a frame
 differential (`tests/observer.h`, interpreter against JIT, at every poll, chains
 included), a fuel-parity test and a scripted debugger session with a breakpoint in a
-compiled callee each check; `JIT=no` builds the
+compiled callee each check. Compiled code is not charged to the guest's memory
+budget (its pages and records are the engine's, counted in the JIT statistics), so a
+budget gives the same verdict compiled and interpreted, and a pause never throws a
+hot function's code away, only guard exits do; `JIT=no` builds the
 interpreter-only engine and links nothing of it. A paused or new execution can be
 frozen into a **snapshot** and restored into a fresh context on any thread to
 finish exactly as an uninterrupted run does
