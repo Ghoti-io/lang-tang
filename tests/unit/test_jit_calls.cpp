@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -403,6 +404,11 @@ TEST(JitCalls, AChainOfFiveThousandFramesIsWalkedAndRebuilt) {
   sc.source = deep_source(depth);
   sc.calls = 20000;
   sc.native_stack_bytes = uint64_t{4} << 20;
+  // The budget runs out while the chain is deep and is raised on each pause, so the
+  // whole chain is walked and rebuilt into guest frames several times (a pause in
+  // compiled code is refused and the frames are rebuilt), and the run resumes.
+  sc.fuel = static_cast<uint64_t>(depth) * 3;
+  sc.step = sc.fuel;
   sc.script = true;
   sc.on_poll = [](Script &, GRCORE_Context * context, uint64_t n) {
     if (n % 2 == 1) {
@@ -413,6 +419,8 @@ TEST(JitCalls, AChainOfFiveThousandFramesIsWalkedAndRebuilt) {
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.raw, "112");
   EXPECT_GE(jit.stats.deepest_chain, static_cast<uint64_t>(depth) / 5);
+  EXPECT_GE(jit.stats.refused_pauses, 2u) << "a pause in compiled code rebuilt the chain, more than once";
+  EXPECT_EQ(jit.stats.rebuild_failures, 0u);
 }
 
 TEST(JitCalls, AGuardThatFailsThreeFramesDownRebuildsTheChainAndTheCallersReenterCompiledCodeAtTheirNextCall) {
@@ -704,7 +712,7 @@ TEST(JitCalls, WithNoNativeStackBudgetNoCallSiteIsCompiledAndDepthOneHundredThou
   EXPECT_EQ(exits(jit.stats), 0u);
 }
 
-TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesTheSameVerdictOnBothTiers) {
+TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesTheSameVerdictOnBothTiersOnceTheCompiledRunHasRoomForItsPages) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
@@ -714,24 +722,34 @@ TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesT
   Outcome measured = run(sc, 0);
   ASSERT_TRUE(measured.created);
   ASSERT_GT(measured.memory_peak, 0u);
-  uint64_t differing = 0;
-  // 30 values across the byte where the guest stack must grow (the stack starts
-  // small and is asserted below to have grown).
+  // The compiled run's own pages count against the budget (AD-27), so it needs
+  // more than the interpreter and a budget between the two peaks is where the
+  // tiers may differ: the interpreter finishes and the compiled run meets the limit
+  // (an error value, which prints as nothing). The sweep covers both peaks: below
+  // the interpreter's the budget is refused by both; from the compiled run's peak
+  // up, the two must agree exactly.
+  Outcome compiled_measured = run(sc, 1);
+  ASSERT_TRUE(compiled_measured.created);
+  EXPECT_GE(compiled_measured.memory_peak, measured.memory_peak);
+  const uint64_t low = measured.memory_peak - 1500;
+  const uint64_t high = compiled_measured.memory_peak + 1500;
+  std::set<std::string> kinds;
+  uint64_t agreeing_above = 0, above = 0;
   for (uint64_t i = 0; i < 30; ++i) {
     Scenario tight = sc;
-    tight.memory_bytes = measured.memory_peak - 1500 + i * 100;
+    tight.memory_bytes = low + (high - low) * i / 29;
     Outcome plain = run(tight, 0);
     Outcome jit = run(tight, 1);
-    // The tiers agree on fuel and on a verdict, not on memory timing (AD-27): the
-    // compiled code's own pages count against the budget, so a budget that is
-    // tight enough to refuse a page is the one place they may differ, and then
-    // only by running the interpreter: the output is the same, the error list too.
-    if (plain.key() != jit.key()) {
-      ++differing;
-    }
+    kinds.insert(plain.key());
     EXPECT_EQ(plain.polls, jit.polls) << "memory " << tight.memory_bytes;
+    if (tight.memory_bytes >= compiled_measured.memory_peak) {
+      ++above;
+      agreeing_above += plain.key() == jit.key() ? 1u : 0u;
+    }
   }
-  EXPECT_LE(differing, 30u);
+  EXPECT_GE(kinds.size(), 2u) << "the sweep saw only one outcome, so it did not cross the budget it is meant to";
+  EXPECT_GT(above, 0u);
+  EXPECT_EQ(agreeing_above, above) << "with room for the compiled run's own pages the tiers agree";
   // The probe is not trivial: the guest stack starts small and grew while the
   // chain was built, in the interpreter and in the compiled run.
   EXPECT_GT(measured.memory_peak, 2000u);
@@ -753,13 +771,26 @@ TEST(JitCalls, EveryExitClassArrivesWithItsOwnCauseAndIsHandledByName) {
     EXPECT_GE(jit.stats.deopts, 1u);
     EXPECT_EQ(jit.stats.last_exit_cause, 0u);
   }
-  // A call exit (a native callee).
+  // A call exit (a callee that cannot be compiled: the page provider stops making
+  // memory executable once both functions are compiled, so the callee's compile at
+  // its first call from compiled code fails and the site is classified as a
+  // remembered exit).
   {
     Scenario sc;
-    sc.source = "use math.floor as floor;\nfunction g(x) { return floor(x); }\nprint(g(3));";
+    sc.source = "function h(x) { return x + 1; }\nfunction g(x) { return h(x) + 1; }\nt = 0; for (k = 0; k < 20; k += 1) { t = t + g(k); } print(t);";
+    sc.script = true;
+    Context * seen = nullptr;
+    sc.before = [&seen](Context & context) { seen = &context; };
+    sc.on_poll = [&seen](Script &, GRCORE_Context *, uint64_t) {
+      if (seen->jit_stats().functions_compiled >= 2) {
+        seen->tracker.fail_protect = true;
+      }
+    };
     Outcome jit = run(sc, 1);
+    EXPECT_GE(jit.stats.call_exits_remembered, 1u);
     EXPECT_GE(jit.stats.deopts, 1u);
     EXPECT_EQ(jit.stats.last_exit_cause, 0u);
+    EXPECT_EQ(jit.raw, "230");
   }
   // A pause.
   {
@@ -940,8 +971,13 @@ TEST(JitCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsOfALongCompiledRu
   ASSERT_TRUE(jit.finished) << "the thrashing program runs to its end";
   EXPECT_EQ(plain.key(), jit.key());
   EXPECT_GE(jit.stats.functions_discarded, static_cast<uint64_t>(kFunctions) / 2);
-  EXPECT_LE(jit.retired_peak, 2 * jit.stats.functions_discarded)
-      << "the retired list is bounded by the functions of the program (peak " << jit.retired_peak << " for " << jit.stats.functions_discarded << " discarded)";
+  // Measured 0 (on the EVO with 1,000 functions and here with 40): a discard is
+  // applied after the entry's record is left, so core frees the retired code at
+  // once. The bound is therefore zero, not the 2x the discards the claim allows; a
+  // peak above zero would mean a discard made while a record was open, which this
+  // program never does (a nested activation is story 9's case).
+  EXPECT_EQ(jit.retired_peak, 0u)
+      << "the retired list stays empty (peak " << jit.retired_peak << " for " << jit.stats.functions_discarded << " discarded)";
   std::printf("  thrashing program: %d functions, %llu discarded, retired peak %llu, %llu ranges registered at the end\n", kFunctions,
       (unsigned long long)jit.stats.functions_discarded, (unsigned long long)jit.retired_peak, (unsigned long long)jit.registered);
 }
@@ -1098,11 +1134,14 @@ TEST(JitCalls, AnExecutionDestroyedWithCompiledCodeAndAPausedChainLeaksNothingIn
     ASSERT_FALSE(context.execute());
     ASSERT_TRUE(context.paused());
     EXPECT_GT(context.jit_stats().functions_compiled, 0u);
+    EXPECT_GE(context.jit_stats().refused_pauses, 1u) << "the pause was taken in compiled code, so the chain was rebuilt and is paused";
     if (order == 1) {
       gltang_execution_destroy(context.execution);  // the execution first, then the context
     }
     if (order == 2) {
-      EXPECT_FALSE(context.finished_after_raising(100000) && false);
+      // Resumed to the end, then destroyed with its compiled code still registered.
+      EXPECT_TRUE(context.finished_after_raising(1000000));
+      EXPECT_EQ(context.raw(), "5040");
     }
     // The Context's destructor destroys the context (and the execution with it
     // when it was not destroyed above); the tracker checks every block and page.
