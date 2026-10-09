@@ -1105,6 +1105,9 @@ TEST(JitCalls, ALongCompiledRunOfFibRetiresNothingAndKeepsEveryCompiledRangeRegi
   // a call made deep in a chain, so a call becomes an exit and the output stays
   // the same; only this count shows it.
   EXPECT_EQ(exits(jit.stats), 0u) << "fib(" << depth << "): a call between two compiled functions left compiled code";
+  // The chain must be deeper than planted defect 31's threshold (eight), with margin,
+  // or that defect would not be reached at this depth and the line above would pass.
+  EXPECT_GE(jit.stats.deepest_chain, 10u) << "fib(" << depth << ") reached a compiled chain deeper than the planted threshold";
   std::printf("  fib(%d): %llu compiled calls, %llu call exits, retired peak %llu\n", depth, (unsigned long long)jit.stats.calls,
       (unsigned long long)exits(jit.stats), (unsigned long long)jit.retired_peak);
 }
