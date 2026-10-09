@@ -777,7 +777,7 @@ TEST(JitCalls, WithNoNativeStackBudgetNoCallSiteIsCompiledAndDepthOneHundredThou
   EXPECT_EQ(exits(jit.stats), 0u);
 }
 
-TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesTheSameVerdictOnBothTiersOnceTheCompiledRunHasRoomForItsPages) {
+TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesTheSameVerdictOnBothTiersAtEveryBudget) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
@@ -787,34 +787,26 @@ TEST(JitCalls, TheMemoryBudgetSweptAcrossTheByteWhereTheGuestStackMustGrowGivesT
   Outcome measured = run(sc, 0);
   ASSERT_TRUE(measured.created);
   ASSERT_GT(measured.memory_peak, 0u);
-  // The compiled run's own pages count against the budget (AD-27), so it needs
-  // more than the interpreter and a budget between the two peaks is where the
-  // tiers may differ: the interpreter finishes and the compiled run meets the limit
-  // (an error value, which prints as nothing). The sweep covers both peaks: below
-  // the interpreter's the budget is refused by both; from the compiled run's peak
-  // up, the two must agree exactly.
+  // The executable pages of compiled code are the engine's, not the program's, and
+  // are not charged to the guest's memory budget (they are counted in the JIT
+  // statistics), so the tiers give the same verdict at every budget: the run that
+  // finishes, or the limit error, in the same place. The sweep covers both peaks.
   Outcome compiled_measured = run(sc, 1);
   ASSERT_TRUE(compiled_measured.created);
-  EXPECT_GE(compiled_measured.memory_peak, measured.memory_peak);
-  const uint64_t low = measured.memory_peak - 1500;
-  const uint64_t high = compiled_measured.memory_peak + 1500;
+  EXPECT_GT(compiled_measured.stats.code_bytes_mapped, 0u) << "the compiled run mapped executable pages, and they are visible in the statistics";
+  const uint64_t low = std::min(measured.memory_peak, compiled_measured.memory_peak) - 1500;
+  const uint64_t high = std::max(measured.memory_peak, compiled_measured.memory_peak) + 1500;
   std::set<std::string> kinds;
-  uint64_t agreeing_above = 0, above = 0;
   for (uint64_t i = 0; i < 30; ++i) {
     Scenario tight = sc;
     tight.memory_bytes = low + (high - low) * i / 29;
     Outcome plain = run(tight, 0);
     Outcome jit = run(tight, 1);
     kinds.insert(plain.key());
+    EXPECT_EQ(plain.key(), jit.key()) << "memory " << tight.memory_bytes;
     EXPECT_EQ(plain.polls, jit.polls) << "memory " << tight.memory_bytes;
-    if (tight.memory_bytes >= compiled_measured.memory_peak) {
-      ++above;
-      agreeing_above += plain.key() == jit.key() ? 1u : 0u;
-    }
   }
   EXPECT_GE(kinds.size(), 2u) << "the sweep saw only one outcome, so it did not cross the budget it is meant to";
-  EXPECT_GT(above, 0u);
-  EXPECT_EQ(agreeing_above, above) << "with room for the compiled run's own pages the tiers agree";
   // The probe is not trivial: the guest stack starts small and grew while the
   // chain was built, in the interpreter and in the compiled run.
   EXPECT_GT(measured.memory_peak, 2000u);

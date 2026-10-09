@@ -306,7 +306,7 @@ static bool reach(Ctx * c, uint32_t target, int32_t d, const uint32_t * cur, siz
     return false;
   }
   if (c->depth[target] < 0) {
-    uint32_t * mine = gcu_allocator_malloc(c->exec->allocator, ((size_t)c->ms + 1u) * sizeof(uint32_t));
+    uint32_t * mine = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(c->exec), ((size_t)c->ms + 1u) * sizeof(uint32_t));
     if (!mine) {
       c->oom = true;
       return false;
@@ -482,7 +482,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
 static void free_prod(Ctx * c) {
   if (c->prod_at) {
     for (size_t i = 0; i < c->fn->code_count; ++i) {
-      gcu_allocator_free(c->exec->allocator, c->prod_at[i]);
+      gcu_allocator_free(GLTANG_JIT_ALLOCATOR(c->exec), c->prod_at[i]);
       c->prod_at[i] = NULL;
     }
   }
@@ -939,7 +939,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     *out = NULL;
     return GLTANG_OK;
   }
-  Ctx * c = gcu_allocator_calloc(exec->allocator, 1, sizeof(Ctx));
+  Ctx * c = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), 1, sizeof(Ctx));
   if (!c) {
     return GLTANG_ERR_OOM;
   }
@@ -964,21 +964,21 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   // nothing to measure against.
   c->calls_on = !(exec->jit && exec->jit->test_calls_off) && grcore_context_native_stack_bytes(exec->context) != GRCORE_UNLIMITED;
   size_t n = fn->code_count;
-  c->depth = gcu_allocator_malloc(exec->allocator, n * sizeof(int32_t));
-  c->leader = gcu_allocator_calloc(exec->allocator, n, sizeof(bool));
-  c->target = gcu_allocator_calloc(exec->allocator, n, sizeof(bool));
-  c->queued = gcu_allocator_calloc(exec->allocator, n, sizeof(bool));
-  c->flowed = gcu_allocator_calloc(exec->allocator, n, sizeof(bool));
-  c->force_exit = gcu_allocator_calloc(exec->allocator, n, sizeof(bool));
-  c->block = gcu_allocator_calloc(exec->allocator, n, sizeof(GRJIT_BlockId));
-  c->work = gcu_allocator_malloc(exec->allocator, n * sizeof(uint32_t) + sizeof(uint32_t));
-  c->prod_at = gcu_allocator_calloc(exec->allocator, n, sizeof(uint32_t *));
-  c->cur = gcu_allocator_calloc(exec->allocator, (size_t)c->ms + 2u, sizeof(uint32_t));
-  c->call_k = gcu_allocator_malloc(exec->allocator, n * sizeof(int32_t));
-  c->call_entry = gcu_allocator_calloc(exec->allocator, n, sizeof(uint64_t));
-  c->global_fn = gcu_allocator_malloc(exec->allocator, ((size_t)program->global_count + 1u) * sizeof(uint32_t));
-  c->local_fn = gcu_allocator_malloc(exec->allocator, ((size_t)c->lc + 1u) * sizeof(uint32_t));
-  call_sites = gcu_allocator_calloc(exec->allocator, (n >> 3) + 1u, 1);
+  c->depth = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(int32_t));
+  c->leader = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->target = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->queued = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->flowed = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->force_exit = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
+  c->block = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(GRJIT_BlockId));
+  c->work = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(uint32_t) + sizeof(uint32_t));
+  c->prod_at = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t *));
+  c->cur = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (size_t)c->ms + 2u, sizeof(uint32_t));
+  c->call_k = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(int32_t));
+  c->call_entry = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint64_t));
+  c->global_fn = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
+  c->local_fn = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
+  call_sites = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (n >> 3) + 1u, 1);
   c->call_sites = call_sites;
   if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at
       || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites) {
@@ -1026,7 +1026,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   {
     char name[64];
     snprintf(name, sizeof(name), "tang_%u_%u", program_index, function_index);
-    GRJIT_Result r = grjit_builder_create(name, c->slots, NULL, exec->allocator, &c->b);
+    GRJIT_Result r = grjit_builder_create(name, c->slots, NULL, GLTANG_JIT_ALLOCATOR(exec), &c->b);
     if (r != GRJIT_OK) {
       result = map_result(r);
       goto done;
@@ -1112,8 +1112,10 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     }
     c->b = NULL;
     GRJIT_CompileOptions options = {0};
-    options.pages = grcore_context_page_provider(exec->context);
-    options.allocator = exec->allocator;
+    // The group's provider, not the context's: the executable pages are not charged
+    // to the guest's memory budget (the statistics count them).
+    options.pages = grcore_group_page_provider(grcore_context_group(exec->context));
+    options.allocator = GLTANG_JIT_ALLOCATOR(exec);
     r = grjit_compile(&options, ir, &code);
     if (r != GRJIT_OK) {
       result = r == GRJIT_ERR_IO || r == GRJIT_ERR_UNSUPPORTED ? GLTANG_ERR_UNSUPPORTED : map_result(r);
@@ -1124,13 +1126,13 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     result = GLTANG_ERR_INTERNAL;
     goto done;
   }
-  payload = gcu_allocator_malloc(exec->allocator, sizeof(GLTANG_JitCode));
+  payload = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), sizeof(GLTANG_JitCode));
   if (!payload) {
     result = GLTANG_ERR_OOM;
     goto done;
   }
   payload->code = code;
-  payload->allocator = exec->allocator;
+  payload->allocator = GLTANG_JIT_ALLOCATOR(exec);
   payload->frame_slots = fn->frame_slots;
   payload->local_count = fn->local_count;
   payload->parameter_count = fn->parameter_count;
@@ -1138,7 +1140,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   payload->call_sites = call_sites;
   {
     GRCORE_Code * handle = NULL;
-    if (grcore_code_create(exec->allocator, payload, release_code, &handle) != GRCORE_OK) {
+    if (grcore_code_create(GLTANG_JIT_ALLOCATOR(exec), payload, release_code, &handle) != GRCORE_OK) {
       result = GLTANG_ERR_OOM;
       goto done;
     }
@@ -1157,23 +1159,23 @@ done:
   if (code) {
     grjit_code_destroy(code);
   }
-  gcu_allocator_free(exec->allocator, payload);
-  gcu_allocator_free(exec->allocator, call_sites);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), payload);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), call_sites);
   free_prod(c);
-  gcu_allocator_free(exec->allocator, c->prod_at);
-  gcu_allocator_free(exec->allocator, c->cur);
-  gcu_allocator_free(exec->allocator, c->call_k);
-  gcu_allocator_free(exec->allocator, c->call_entry);
-  gcu_allocator_free(exec->allocator, c->global_fn);
-  gcu_allocator_free(exec->allocator, c->local_fn);
-  gcu_allocator_free(exec->allocator, c->target);
-  gcu_allocator_free(exec->allocator, c->queued);
-  gcu_allocator_free(exec->allocator, c->flowed);
-  gcu_allocator_free(exec->allocator, c->force_exit);
-  gcu_allocator_free(exec->allocator, c->depth);
-  gcu_allocator_free(exec->allocator, c->leader);
-  gcu_allocator_free(exec->allocator, c->block);
-  gcu_allocator_free(exec->allocator, c->work);
-  gcu_allocator_free(exec->allocator, c);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->prod_at);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->cur);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_k);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_entry);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_fn);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->local_fn);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->target);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->queued);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->flowed);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->force_exit);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->depth);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->leader);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->block);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->work);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c);
   return result;
 }

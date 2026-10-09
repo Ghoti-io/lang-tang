@@ -558,14 +558,14 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     GLTANG_JitStats stats;
     if (gltang_execution_jit_stats(execution, &stats) == GLTANG_OK) {
       fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu, "
-        "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu, rebuild failures %llu, hook argument errors %llu\n",
+        "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu, rebuild failures %llu, hook argument errors %llu, code bytes mapped %llu\n",
         (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
         (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
         (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls,
         (unsigned long long)stats.calls,
         (unsigned long long)(stats.call_exits_remembered + stats.call_exits_push_refused + stats.call_exits_callee_guard + stats.call_exits_native_stack),
         (unsigned long long)stats.compile_at_call, (unsigned long long)stats.deepest_chain,
-        (unsigned long long)stats.rebuild_failures, (unsigned long long)stats.hook_argument_errors);
+        (unsigned long long)stats.rebuild_failures, (unsigned long long)stats.hook_argument_errors, (unsigned long long)stats.code_bytes_mapped);
     }
   }
 #ifdef GLTANG_WITH_DEBUG

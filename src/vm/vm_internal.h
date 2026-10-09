@@ -384,6 +384,7 @@ struct GLTANG_Execution {
   GLTANG_Program * program;     ///< The main program.
   GLTANG_ExecutionState state;
   bool destroyed;
+  bool activations_reserved;  ///< The first run has made room for the context's activation records (see gltang_execution_entry).
   bool unwinding;               ///< A runtime poll ordered the run to stop.
   bool in_host;                 ///< Inside a native function or a factory.
 

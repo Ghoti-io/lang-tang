@@ -31,8 +31,10 @@
  * is continue, compiles every queued function synchronously, and clears the
  * request; on a pause or unwind it does nothing and the request stays pending
  * until a poll that continues. It allocates nothing in the GC heap: it uses
- * the context's counting allocator and its counting page provider, so compiled
- * code is on the context's meter (AD-13).
+ * the context's counting allocator and the group's counting page provider: the
+ * executable pages are the engine's, not the program's, so they are charged to
+ * the group and not to the context's memory budget (they are counted in
+ * `GLTANG_JitStats::code_bytes_mapped` instead).
  *
  * Feedback lives with the execution (AD-22): the counters, the queue and the
  * compiled code are the execution's, and compiled code bakes in the
@@ -88,7 +90,7 @@ GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uin
     while (capacity <= p) {
       capacity *= 2u;
     }
-    GLTANG_JitProgram * grown = gcu_allocator_realloc(exec->allocator, jit->programs, capacity * sizeof(GLTANG_JitProgram));
+    GLTANG_JitProgram * grown = gcu_allocator_realloc(GLTANG_JIT_ALLOCATOR(exec), jit->programs, capacity * sizeof(GLTANG_JitProgram));
     if (!grown) {
       return NULL;
     }
@@ -102,7 +104,7 @@ GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uin
       return NULL;
     }
     uint32_t count = exec->programs[p].program->function_count;
-    program->fns = gcu_allocator_calloc(exec->allocator, count ? count : 1u, sizeof(GLTANG_JitFn));
+    program->fns = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), count ? count : 1u, sizeof(GLTANG_JitFn));
     if (!program->fns) {
       return NULL;
     }
@@ -116,7 +118,7 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
     return;
   }
   GRCORE_Context * context = exec->context;
-  GLTANG_Jit * jit = gcu_allocator_calloc(exec->allocator, 1, sizeof(GLTANG_Jit));
+  GLTANG_Jit * jit = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), 1, sizeof(GLTANG_Jit));
   if (!jit) {
     return;
   }
@@ -134,7 +136,7 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
     }
   }
   if (r != GRCORE_OK) {
-    gcu_allocator_free(exec->allocator, jit);
+    gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit);
     return;
   }
   exec->jit = jit;
@@ -184,14 +186,14 @@ void gltang_jit_release(GLTANG_Execution * exec) {
         fns[f].code = NULL;
       }
     }
-    gcu_allocator_free(exec->allocator, fns);
+    gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), fns);
   }
   (void)grcore_deopt_release(exec->context, jit->reservation);
   jit->reservation = NULL;
-  gcu_allocator_free(exec->allocator, jit->programs);
-  gcu_allocator_free(exec->allocator, jit->queue);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->programs);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->queue);
   grcore_port_release(jit->port);
-  gcu_allocator_free(exec->allocator, jit);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit);
 }
 
 GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword) {
@@ -266,6 +268,7 @@ bool gltang_jit_compile_function(GLTANG_Execution * exec, uint64_t fword) {
   f->start = start;
   f->state = GLTANG_JITFN_COMPILED;
   ++exec->jit_stats.functions_compiled;
+  exec->jit_stats.code_bytes_mapped += grjit_code_mapped_size(jc->code);
   return true;
 }
 
@@ -300,7 +303,7 @@ void gltang_jit_note_poll(GLTANG_Execution * exec, uint64_t fword, bool at_entry
   }
   if (jit->queue_count == jit->queue_capacity) {
     size_t capacity = jit->queue_capacity ? jit->queue_capacity * 2u : 8u;
-    uint64_t * grown = gcu_allocator_realloc(exec->allocator, jit->queue, capacity * sizeof(uint64_t));
+    uint64_t * grown = gcu_allocator_realloc(GLTANG_JIT_ALLOCATOR(exec), jit->queue, capacity * sizeof(uint64_t));
     if (!grown) {
       never(exec, f);
       return;

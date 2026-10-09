@@ -60,6 +60,15 @@
 #include <ghoti.io/runtime-jit/code.h>
 #include <ghoti.io/runtime-jit/ir.h>
 
+/**
+ * @brief The allocator of everything the JIT keeps for an execution: its records,
+ *   the IR and the code payloads. The group's, not the context's: compiled code is
+ *   the engine's and not the program's, so it is not charged to the guest's memory
+ *   budget (and the group's allocator outlives the context, which code retired
+ *   after the execution is gone needs).
+ */
+#define GLTANG_JIT_ALLOCATOR(exec) grcore_group_allocator(grcore_context_group((exec)->context))
+
 /** @brief The most interpreter slots a compiled function's frame may have; a bigger one is not compiled. */
 #define GLTANG_JIT_MAX_SLOTS 1024u
 /** @brief Deoptimizations after which a function's code is discarded and never compiled again. */

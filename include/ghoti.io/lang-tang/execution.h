@@ -311,6 +311,7 @@ typedef struct GLTANG_JitStats {
   uint64_t hook_argument_errors; ///< Hooks handed arguments they refuse (a token that names no function, a wrong count, a flag that is not 0). Zero in any correct run.
   uint64_t rebuild_failures;    ///< Chain deoptimizations whose rebuild was refused (the run then ends unwound, never continued).
   uint64_t last_exit_cause;     ///< The cause of the last exit from compiled code: 0 a guard or a call exit, 1 a pause, 2 an unwind, or the deopt hook's code after a refused rebuild.
+  uint64_t code_bytes_mapped;   ///< Bytes of executable pages mapped for compiled code (whole pages), summed over every compile. They are charged to the group's meter, not to the context's memory budget: the executable pages are the engine's, not the program's.
 } GLTANG_JitStats;
 
 /**

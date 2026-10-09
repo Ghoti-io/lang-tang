@@ -852,5 +852,20 @@ GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {
     // would be a lie about a poll that never happened.
     return GRCORE_STEP_FINISHED;
   }
+#ifdef GLTANG_WITH_JIT
+  if (!exec->activations_reserved) {
+    // The first entry into compiled code opens an activation record, and the
+    // array of records is allocated at the first one the context opens, charged
+    // to the guest's memory budget. Opening and leaving one here, before the
+    // program runs, makes that allocation the same whether or not anything is ever
+    // compiled, so a budget gives the same verdict on both tiers.
+    GRCORE_ActivationRef record;
+    GRCORE_Stack * stack = grcore_context_stack(context);
+    if (grcore_activation_enter(stack, GRCORE_ACTIVATION_INTERPRETER, exec->engine, false, NULL, &record) == GRCORE_OK) {
+      (void)grcore_activation_leave(stack, record);
+    }
+    exec->activations_reserved = true;
+  }
+#endif
   return gltang_vm_run(exec, context);
 }
