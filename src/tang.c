@@ -559,7 +559,7 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
     if (gltang_execution_jit_stats(execution, &stats) == GLTANG_OK) {
       fprintf(stderr, "jit: compiled %llu, failed %llu, discarded %llu, entries %llu, returns %llu, deopts %llu, pauses %llu, unwinds %llu, slow polls %llu, "
         "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu, rebuild failures %llu, hook argument errors %llu, code bytes mapped %llu, "
-        "library-calls %llu, member loads %llu, library-exits %llu\n",
+        "library functions called %llu, member loads %llu, library exits %llu\n",
         (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
         (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
         (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls,
