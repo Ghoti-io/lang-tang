@@ -52,7 +52,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 12, 16 to 19 and 21 to 24); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19 and 21 to 24; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13, 14, 15 and 20, against PLANTED_RELOC_PREFIX and
@@ -62,9 +62,9 @@
 #   --selftest  prove the script itself: a patch that applies to nothing fails
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
-# copy is built the same way, in its own tree (release-nojit for no). Cases 08,
-# 09 and 10 plant a defect in the JIT, which a JIT=no build does not contain, so
-# with no they are SKIPPED (15 to 24 are in the JIT too), loudly, and counted as skipped and never as caught:
+# copy is built the same way, in its own tree (release-nojit for no). Cases 08, 09
+# and 15 to 24 plant a defect in the JIT, which a JIT=no build does not contain, so
+# with no they are SKIPPED, loudly, and counted as skipped and never as caught:
 # the summary line gives both numbers, and a run in which nothing was caught
 # fails (an all-skipped run proves nothing). With yes every case runs.
 # PLANTED_PREFIX is the PREFIX the dependencies were installed with (empty for

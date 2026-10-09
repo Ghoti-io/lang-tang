@@ -819,7 +819,7 @@ ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
 	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
-check-planted-quick: ## Planted defects 03 to 12 and 16 to 24 (phase shuffle, native gate, frame observer, oracle, the JIT and its calls, the two of snapshots)
+check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16 to 19 and 21 to 24 (phase shuffle, native gate, frame observer, oracle, the JIT and its calls, the two of snapshots)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
