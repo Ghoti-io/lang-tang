@@ -10,6 +10,7 @@
 // is absent (the bottom of the file).
 
 #include "exec_harness.h"
+#include "jit_harness.h"
 #include "fuzz/gen.h"
 #include "test_helpers.h"
 
@@ -23,224 +24,9 @@
 
 #include <ghoti.io/runtime-core/runtime-core.h>
 
-using tt::Compiled;
-using tt::Config;
-using tt::Context;
-using tt::Mode;
-
-extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled);
+using namespace jt;
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// A poll handler a test scripts: it runs at every poll (a request stays pending
-// so that every poll takes the slow path, as the observer's does), counts them,
-// and records the identity of each.
-// ---------------------------------------------------------------------------
-
-struct Script {
-  std::function<void(Script &, GRCORE_Context *, uint64_t)> on_poll;
-  uint64_t polls = 0;
-  std::vector<GRCORE_PollIdentity> identities;
-  GRCORE_Port * port = nullptr;
-  GRCORE_RequestKind kind = 0;
-
-  Script() = default;
-  Script(const Script &) = delete;
-  Script & operator=(const Script &) = delete;
-  ~Script() { grcore_port_release(port); }
-
-  static const GRCORE_Key & key() {
-    static const GRCORE_Key k = GRCORE_KEY_INIT("jit test script", GRCORE_CARDINALITY_ONE, GRCORE_PHASE_ACT, nullptr, &Script::handler, nullptr, nullptr, nullptr);
-    return k;
-  }
-
-  bool attach(GRCORE_Context * context) {
-    if (grcore_context_request_kind(context, &key(), &kind) != GRCORE_OK || grcore_context_port(context, &port) != GRCORE_OK ||
-        grcore_context_register(context, &key(), this) != GRCORE_OK) {
-      return false;
-    }
-    return grcore_port_post(port, kind) == GRCORE_OK;
-  }
-
-  /// Posts a request of a core kind from inside a poll.
-  void post(GRCORE_RequestKind k) { EXPECT_EQ(grcore_port_post(port, k), GRCORE_OK); }
-
- private:
-  static void handler(GRCORE_Context * context, void * value, GRCORE_PollCall *) {
-    Script * self = static_cast<Script *>(value);
-    GRCORE_PollIdentity id = {0, 0};
-    if (grcore_context_poll_identity(context, &id) == GRCORE_OK) {
-      self->identities.push_back(id);
-    }
-    uint64_t n = self->polls++;
-    if (self->on_poll) {
-      self->on_poll(*self, context, n);
-    }
-  }
-};
-
-struct Part {
-  std::string name, source;
-  uint64_t fuel = 100000;
-  GLTANG_ScopePolicy policy = GLTANG_SCOPE_EMPTY;
-  Mode mode = Mode::Script;
-};
-
-/// What to run and how.
-struct Scenario {
-  std::string source;
-  Mode mode = Mode::Script;
-  std::vector<Part> parts;
-  uint64_t fuel = GRCORE_UNLIMITED;      ///< The context's budget.
-  uint64_t step = 0;                     ///< Nonzero: on a pause raise the budget by this and resume.
-  bool statement_polls = false;
-  int torture = -1, verify = -1, moving = -1;
-  uint64_t memory_bytes = GRCORE_UNLIMITED;
-  uint64_t memory_reserve = GRCORE_DEFAULT_MEMORY_RESERVE;
-  uint64_t native_depth = GRCORE_UNLIMITED;
-  bool fail_protect = false;
-  bool resume = false;                   ///< On a pause with `step` 0, resume without raising the budget (an interrupt).
-  bool script = false;                   ///< Attach a Script, with `on_poll` below.
-  std::function<void(Script &, GRCORE_Context *, uint64_t)> on_poll;
-  std::function<void(Context &)> before;  ///< Called after the context is made and before the run.
-  size_t max_pauses = 4000;
-};
-
-/// Everything observable about a run.
-struct Outcome {
-  bool created = false;
-  bool finished = false;
-  GRCORE_Result ran = GRCORE_OK;
-  std::string raw, rendered, result, errors;
-  std::vector<std::string> pauses;       ///< For each pause: where, identity and fuel used.
-  uint64_t fuel = 0;                     ///< Fuel used at the end.
-  uint64_t polls = 0;
-  std::vector<GRCORE_PollIdentity> identities;
-  GLTANG_JitStats stats = {};
-  uint64_t native_depth = 0;
-  uint64_t memory_peak = 0;
-  std::string key() const {
-    std::string s = raw + "|" + rendered + "|" + result + "|" + errors + "|" + std::to_string(ran) + "|" + std::to_string(finished) + "|fuel " + std::to_string(fuel);
-    for (const auto & p : pauses) {
-      s += "|" + p;
-    }
-    return s;
-  }
-};
-
-// run() and expect_same() serve the JIT arm only; the JIT=no arm has no test that
-// calls them, and -Wunused-function would report them there.
-#ifdef GLTANG_WITH_JIT
-Outcome run(const Scenario & sc, long threshold) {
-  Outcome out;
-  Compiled page(sc.source, sc.mode, "jit.tang");
-  EXPECT_TRUE(page.ok()) << page.error.message;
-  if (!page.ok()) {
-    return out;
-  }
-  Config config;
-  config.fuel = sc.fuel;
-  config.torture = sc.torture;
-  config.verify = sc.verify;
-  config.moving_stack = sc.moving;
-  config.memory_bytes = sc.memory_bytes;
-  config.memory_reserve = sc.memory_reserve;
-  config.native_depth = sc.native_depth;
-  config.jit_threshold = threshold;
-  Context context(page.program, config);
-  EXPECT_TRUE(context.ok());
-  if (!context.ok()) {
-    return out;
-  }
-  out.created = true;
-  context.tracker.fail_protect = sc.fail_protect;
-  EXPECT_EQ(gltang_execution_set_name(context.execution, "page"), GLTANG_OK);
-  if (sc.statement_polls) {
-    EXPECT_EQ(gltang_execution_set_statement_polls(context.execution, true), GLTANG_OK);
-  }
-  std::vector<std::unique_ptr<Compiled>> compiled;
-  for (const Part & part : sc.parts) {
-    compiled.push_back(std::make_unique<Compiled>(part.source, part.mode, (part.name + ".tang").c_str()));
-    EXPECT_TRUE(compiled.back()->ok()) << part.name << ": " << compiled.back()->error.message;
-    EXPECT_EQ(gltang_library_add_template(context.library(), part.name.c_str(), compiled.back()->program, part.fuel, part.policy), GLTANG_OK);
-  }
-  Script script;
-  script.on_poll = sc.on_poll;
-  if (sc.script) {
-    EXPECT_TRUE(script.attach(context.context));
-  }
-  if (sc.before) {
-    sc.before(context);
-  }
-  bool done = context.execute();
-  while (!done && context.paused() && out.pauses.size() < sc.max_pauses) {
-    GRCORE_Location where = grcore_context_pause_location(context.context);
-    GRCORE_PollIdentity id = {0, 0};
-    (void)grcore_context_poll_identity(context.context, &id);
-    out.pauses.push_back(std::string(where.file ? where.file : "?") + ":" + std::to_string(where.line) + "@" + std::to_string(id.function) + "/" +
-        std::to_string(id.offset) + " fuel " + std::to_string(grcore_context_fuel_used(context.context)));
-    if (sc.step == 0) {
-      if (sc.resume) {
-        done = context.resume();
-        continue;
-      }
-      break;
-    }
-    uint64_t used = grcore_context_fuel_used(context.context);
-    grcore_context_set_fuel(context.context, used + sc.step);
-    uint64_t depth = grcore_context_fuel_scope_depth(context.context);
-    if (depth > 0) {
-      uint64_t top = grcore_context_fuel_scope_top(context.context);
-      uint64_t remaining = 1, scope_used = 0;
-      if (grcore_context_fuel_scope_remaining(context.context, top, &remaining) == GRCORE_OK && remaining == 0 &&
-          grcore_context_fuel_scope_used(context.context, top, &scope_used) == GRCORE_OK) {
-        grcore_context_fuel_scope_set_budget(context.context, top, scope_used + sc.step);
-      }
-    }
-    done = context.resume();
-  }
-  out.finished = done;
-  out.ran = context.ran;
-  out.raw = context.raw();
-  out.rendered = context.rendered();
-  out.result = context.describe();
-  for (size_t i = 0; i < context.error_count(); ++i) {
-    auto e = context.error(i);
-    out.errors += e.template_name() + ":" + std::to_string(e.e.line) + "[" + e.chain_text() + "]" + std::to_string((int)e.e.how) + ":" + e.message() + ";";
-  }
-  out.fuel = grcore_context_fuel_used(context.context);
-  out.polls = script.polls;
-  out.identities = script.identities;
-  out.stats = context.jit_stats();
-  out.native_depth = grcore_context_depth(context.context, GRCORE_DEPTH_NATIVE);
-  out.memory_peak = grcore_context_memory_peak(context.context);
-  return out;
-}
-
-/// The program is run with the JIT off and with every function tiering up at
-/// its first poll; the two must be the same run in every observable way.
-void expect_same(const Scenario & sc, Outcome * interpreter = nullptr, Outcome * jit = nullptr) {
-  Outcome a = run(sc, 0);
-  Outcome b = run(sc, 1);
-  ASSERT_TRUE(a.created);
-  ASSERT_TRUE(b.created);
-  EXPECT_EQ(a.key(), b.key());
-  EXPECT_EQ(a.polls, b.polls);
-  ASSERT_EQ(a.identities.size(), b.identities.size());
-  for (size_t i = 0; i < a.identities.size(); ++i) {
-    ASSERT_TRUE(a.identities[i].function == b.identities[i].function && a.identities[i].offset == b.identities[i].offset)
-        << "poll " << i << ": " << a.identities[i].function << "/" << a.identities[i].offset << " against " << b.identities[i].function << "/"
-        << b.identities[i].offset;
-  }
-  if (interpreter) {
-    *interpreter = a;
-  }
-  if (jit) {
-    *jit = b;
-  }
-}
-#endif
 
 const char * const kLoop =
     "function sum(n) { s = 0; i = 0; while (i < n) { s = s + i; i = i + 1; } return s; }\n"
@@ -600,12 +386,18 @@ TEST(Jit, ASwitchFlippedWhileCompiledCodeRunsTakesEffectAtTheNextLineAndCostsNot
   EXPECT_EQ(plain.raw, never.raw);
 }
 
-TEST(Jit, AMissedWriteBackAtAPollWouldLoseWhatTheCollectorDidToASlot) {
+TEST(Jit, ThePollHelperNeverCopiesTheGuestFrameBackIntoACompiledFrame) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // A collector that moves objects updates the references in the guest frame,
-  // and the compiled code that continues must see them. The poll handler plays
-  // that collector: it overwrites a local in the top frame at one poll. If the
-  // compiled code kept its stale register the program would print another sum.
+  // A polling compiled frame is paired with its guest frame, and what the guest
+  // frame holds is stale: the collector updates the compiled frame through its
+  // stack map and does not scan the guest one. So a write-back of the guest copy
+  // after a poll that continued would put stale references over updated ones (the
+  // mistake this design is most likely to make). The poll handler here writes a
+  // local in the top guest frame at one poll, as a moving collector would write
+  // the reference it moved: the compiled frame does not read it back (an AD-5
+  // in-place handler writes no slot; a handler that does is a deoptimizing one,
+  // and none of ours is), so the answer is the compiled frame's own, 30, while the
+  // interpreter, whose frame is the guest frame, gives the overwritten one.
   Scenario sc;
   sc.source = "function f(n) { x = 0; i = 0; while (i < n) { x = x + 1; i = i + 1; } return x; }\nprint(f(30));";
   sc.script = true;
@@ -620,10 +412,10 @@ TEST(Jit, AMissedWriteBackAtAPollWouldLoseWhatTheCollectorDidToASlot) {
     ASSERT_NE(slots, nullptr);
     slots[kHeader + 1] = (uint64_t{1000} << 4) | 1u;  // x = 1000
   };
-  Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  Outcome plain = run(sc, 0);
+  Outcome jit = run(sc, 1);
   EXPECT_NE(plain.raw, "30") << "the overwrite changed the answer in the interpreter";
-  EXPECT_EQ(jit.raw, plain.raw) << "and in compiled code";
+  EXPECT_EQ(jit.raw, "30") << "and was not read back by compiled code";
   EXPECT_GE(jit.stats.slow_polls, 12u);
 }
 
@@ -800,7 +592,13 @@ TEST(Jit, AContextPausedInsideCompiledCodeResumesOnAnotherThreadWithTheSameOutpu
   EXPECT_EQ(context.raw(), reference.raw());
   EXPECT_EQ(context.describe(), reference.describe());
   EXPECT_GT(context.jit_stats().refused_pauses, 2u) << "pauses were taken inside compiled code";
-  EXPECT_GT(context.jit_stats().entries, 40u) << "and later calls entered compiled code on the other threads";
+  // Each pause is an exit from compiled code that counts toward the discard limit
+  // of the function it was in, like a guard: at the eighth the function is let
+  // go and the rest of the run is the interpreter's. Every one of the eight hops
+  // entered compiled code on its own thread.
+  EXPECT_EQ(context.jit_stats().refused_pauses, 8u);
+  EXPECT_EQ(context.jit_stats().functions_discarded, 1u);
+  EXPECT_GE(context.jit_stats().entries, 8u) << "and later calls entered compiled code on the other threads";
 }
 
 // ---------------------------------------------------------------------------

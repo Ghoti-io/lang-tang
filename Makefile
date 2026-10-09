@@ -312,11 +312,6 @@ JIT_CFLAGS :=
 endif
 INCLUDE += $(JIT_CFLAGS)
 
-# The JIT module holds the poll helper, which finds the compiled frame through
-# its own frame-pointer chain (src/jit/helpers.c), so it is built with frame
-# pointers whatever the optimiser would do. The sanitizer trees already are.
-JIT_MODULE_CFLAGS := -fno-omit-frame-pointer
-
 # runtime-debug and text: for the two hosts, the `tang` command (src/tang.c)
 # and the web-server example (examples/web_server.c), and for nothing else
 # (AD-2, story 13). They are not in INCLUDE or DEP_LIBS, so the shared and the
@@ -576,11 +571,6 @@ $(OBJ_DIR)/compile/compile.o: src/compile/compile.c $(FLAGS_STAMP) | $(GEN_HEADE
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-# The baseline JIT's module, with frame pointers (see JIT_MODULE_CFLAGS).
-$(OBJ_DIR)/jit/%.o: src/jit/%.c $(FLAGS_STAMP) | $(GEN_HEADERS)
-	@mkdir -p $(@D)
-	$(CC) $(LIB_CFLAGS) $(JIT_MODULE_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
-
 # Explicit rules replace the pattern rule's prerequisites rather than adding to
 # them, so these name the flags stamp and the generated headers themselves. The
 # stamp goes after the source so that $< is still the source.
@@ -794,14 +784,14 @@ check-gates: ## Prove each gate fails on its planted defect and passes its contr
 ####################################################################
 # The tier-up tests fail, not skip, without a backend (story 19, item 5)
 #
-# tools/check-backend-required.sh runs testJit, testProfile, testRetention and
-# testObserver as built and again with GLTANG_TEST_FORCE_NO_BACKEND=1, and
-# requires the second run to fail: in testJit, in exactly the tests that use
-# GLTANG_REQUIRE_JIT_BACKEND. It needs the JIT, so it is not in the JIT=no arm.
+# tools/check-backend-required.sh runs testJit, testJit_calls, testProfile,
+# testRetention and testObserver as built and again with
+# GLTANG_TEST_FORCE_NO_BACKEND=1, and requires the second run to fail: in testJit
+# and testJit_calls, in exactly the tests that use GLTANG_REQUIRE_JIT_BACKEND. It needs the JIT, so it is not in the JIT=no arm.
 ####################################################################
 
 ifeq ($(JIT),yes)
-check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) $(APP_DIR)/testProfile$(EXE_EXTENSION) $(APP_DIR)/testRetention$(EXE_EXTENSION) $(APP_DIR)/testObserver$(EXE_EXTENSION) ## Fail if the tests that need a backend skip, or check less, when it is forced off
+check-backend-required: $(APP_DIR)/testJit$(EXE_EXTENSION) $(APP_DIR)/testJit_calls$(EXE_EXTENSION) $(APP_DIR)/testProfile$(EXE_EXTENSION) $(APP_DIR)/testRetention$(EXE_EXTENSION) $(APP_DIR)/testObserver$(EXE_EXTENSION) ## Fail if the tests that need a backend skip, or check less, when it is forced off
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/check-backend-required.sh $(APP_DIR) tests/unit $(EXE_EXTENSION)
 else
 check-backend-required: ## Skipped under JIT=no
@@ -815,34 +805,34 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs all twelve.
+# part of `make test-torture`; `make check-planted` runs all twenty-three (the relocation cases, 13, 14, 15 and 20, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
 
 # The planted cases need `patch`, a full second build tree and the ctang
 # oracle, and Windows has neither `patch` nor the oracle; they are skipped
-# there, by name, as check-symbols is. (08 to 10 also need a JIT backend, which
+# there, by name, as check-symbols is. (08, 09 and 15 to 24 also need a JIT backend, which
 # Windows x86-64 has now: what they prove about the JIT on Windows is the
 # JIT tests running there, under wine, in tools/xwin/m1-run.sh.)
 ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
 	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
-check-planted-quick: ## Planted defects 03 to 12 (phase shuffle, native gate, frame observer, oracle, the JIT, the two of snapshots)
+check-planted-quick: ## Planted defects 03 to 12 and 16 to 24 (phase shuffle, native gate, frame observer, oracle, the JIT and its calls, the two of snapshots)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
 	@$(PLANTED_ENV) tools/check-planted.sh --slow
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted: ## All twelve planted defects: each caught by its instrument, each control passing
+check-planted: ## Every planted defect that needs no relocation heap: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all
 
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted-relocate: ## Planted defects 13 and 14 (a reference visited and not updated), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
+check-planted-relocate: ## Planted defects 13, 14, 15 and 20 (a reference visited and not updated), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
 ifndef RELOCATE_PREFIX
 	@printf 'check-planted-relocate: RELOCATE_PREFIX is needed (the prefix of a runtime-heap built with RELOCATE=yes)\n' >&2; exit 1
 else
@@ -901,7 +891,7 @@ endif
 #   under torture an allocation also collects, which only makes it slower.
 TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
-TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls
 
 # With the JIT built, `make test` is two arms. The JIT arm is everything below,
 # and then the same unit suites once more with every execution tiering up at
@@ -1436,13 +1426,13 @@ endif
 # A campaign: FUZZ_DIFF_COUNT programs from seed FUZZ_DIFF_SEED, both modes
 # alternating. A divergence prints its seed and the whole program.
 FUZZ_DIFF_SEED ?= 1
-fuzz-diff: oracle-present $(ORACLE_RUNNER) $(FUZZDIFF_TEST) ## Differential fuzz campaign: make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S
+fuzz-diff: oracle-present $(ORACLE_RUNNER) $(FUZZDIFF_TEST) ## Differential fuzz campaign: make fuzz-diff FUZZ_DIFF_COUNT=N FUZZ_DIFF_SEED=S [FUZZ_DIFF_CALL_GRAPHS=M]
 	@if [ -z "$(FUZZ_DIFF_COUNT)" ]; then \
 		printf 'fuzz-diff: set FUZZ_DIFF_COUNT, for example: make fuzz-diff FUZZ_DIFF_COUNT=2000 FUZZ_DIFF_SEED=1\n' >&2; exit 1; \
 	fi
-	@printf '\n### Differential fuzz campaign: %s programs from seed %s ###\n\n' "$(FUZZ_DIFF_COUNT)" "$(FUZZ_DIFF_SEED)"
-	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) FUZZ_DIFF_COUNT=$(FUZZ_DIFF_COUNT) FUZZ_DIFF_SEED=$(FUZZ_DIFF_SEED) \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1 --gtest_filter=FuzzDiff.Campaign
+	@printf '\n### Differential fuzz campaign: %s programs from seed %s (and %s call graphs, interpreted and compiled) ###\n\n' "$(FUZZ_DIFF_COUNT)" "$(FUZZ_DIFF_SEED)" "$(if $(FUZZ_DIFF_CALL_GRAPHS),$(FUZZ_DIFF_CALL_GRAPHS),300)"
+	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) FUZZ_DIFF_COUNT=$(FUZZ_DIFF_COUNT) FUZZ_DIFF_SEED=$(FUZZ_DIFF_SEED) FUZZ_DIFF_CALL_GRAPHS=$(FUZZ_DIFF_CALL_GRAPHS) \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1 --gtest_filter=FuzzDiff.Campaign:FuzzDiff.CallGraphs*
 
 ####################################################################
 # Fuzzing
@@ -1679,7 +1669,7 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS) $(JIT_MODULE_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(TSAN_FLAGS_STAMP): force-flags

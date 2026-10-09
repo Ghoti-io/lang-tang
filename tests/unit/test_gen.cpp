@@ -53,6 +53,32 @@ TEST(Generator, EveryProgramParsesAndCompilesInItsMode) {
   }
 }
 
+TEST(Generator, CallGraphProgramsAreDeterministicCompileAndHaveCallsOfEveryShape) {
+  std::set<std::string> distinct;
+  size_t wide = 0, loops = 0, trees = 0, recursive = 0, values = 0, to_the_limit = 0;
+  for (uint64_t seed = 1; seed <= 300; ++seed) {
+    gen::Program p = gen::generate_calls(seed);
+    EXPECT_EQ(p.source, gen::generate_calls(seed).source) << "seed " << seed;
+    distinct.insert(p.source);
+    tt::Compiled compiled(p.source);
+    ASSERT_TRUE(compiled.ok()) << "seed " << seed << ": " << compiled.error.message << " at " << compiled.error.line << ":" << compiled.error.column << "\n" << p.source;
+    wide += contains(p.source.c_str(), "p14");
+    loops += contains(p.source.c_str(), "total = (total + g");
+    trees += contains(p.source.c_str(), "(p0 - 2");
+    recursive += contains(p.source.c_str(), "(p0 - 1");
+    values += contains(p.source.c_str(), "apply(g");
+    to_the_limit += contains(p.source.c_str(), "deep_ = deep(0)");
+  }
+  EXPECT_EQ(distinct.size(), 300u);
+  // The shapes are there, not just possible.
+  EXPECT_GT(wide, 10u) << "functions of up to fifteen parameters";
+  EXPECT_GT(loops, 20u) << "calls in loops";
+  EXPECT_GT(trees, 10u) << "tree recursion";
+  EXPECT_GT(recursive, 20u) << "single recursion";
+  EXPECT_GT(values, 10u) << "functions passed as values";
+  EXPECT_GT(to_the_limit, 10u) << "recursion to the depth budget";
+}
+
 TEST(Generator, ProgramsAreBoundedInSize) {
   size_t biggest = 0;
   for (uint64_t seed = 1; seed <= 400; ++seed) {

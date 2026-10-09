@@ -174,8 +174,9 @@ resume_loop:
 #ifdef GLTANG_WITH_JIT
         // Compiled code is entered right after a function's entry poll, with
         // the guest frame the interpreter pushed already in place: the
-        // compiled function starts "after the entry poll, pc 1". Everything
-        // else about the call is the interpreter's.
+        // compiled function starts "after the entry poll, pc 1" (the hidden
+        // flag it is passed says so; a compiled call makes the callee's entry
+        // poll itself). Everything else about the call is the interpreter's.
         if (pc == 1u && jit_watching && exec->jit_threshold) {
           GLTANG_Value returned = 0;
           switch (gltang_jit_enter(exec, context, fword, &returned)) {
@@ -188,15 +189,20 @@ resume_loop:
               PUSH(returned);
               break;
             case GLTANG_JIT_DEOPTED:
-              // The deoptimizer wrote pc, sp and the slots into the guest
-              // frame, and the fuel the compiled code had not yet charged
-              // into the execution; the interpreter resumes there.
+              // The deopt hook rebuilt every compiled frame of the chain into
+              // its guest frame (pc, sp and the slots), and the fuel compiled
+              // code counted is already in the execution; the interpreter
+              // resumes in the innermost guest frame, which may be a callee's.
+              frame = grcore_stack_top(stack);
               LOAD_FRAME();
               break;
             case GLTANG_JIT_PAUSED:
+              // The paused context holds only interpreter frames.
               exec->state = GLTANG_EXECUTION_PAUSED;
               return GRCORE_STEP_PAUSED;
             case GLTANG_JIT_UNWOUND:
+              // A poll's unwind verdict, or a chain whose rebuild was refused: the
+              // run's own end. Every guest frame is popped by `unwound`.
               goto unwound;
           }
         }

@@ -298,6 +298,19 @@ typedef struct GLTANG_JitStats {
   uint64_t refused_pauses;      ///< Polls inside compiled code that paused the run.
   uint64_t refused_unwinds;     ///< Polls inside compiled code that unwound the run.
   uint64_t slow_polls;          ///< Polls inside compiled code that took the slow path (a request was pending).
+  // Calls between compiled functions (spec-runtime-calls, AD-28). A call site is
+  // a call through the callee's entry slot, behind a guard on the callee value.
+  uint64_t calls;               ///< Calls made from compiled code to compiled code (a guest frame pushed by the push hook).
+  uint64_t call_exits_remembered;   ///< Exits at a call site whose callee cannot be compiled (remembered: later ones cost one compare and no hook).
+  uint64_t call_exits_push_refused; ///< Exits at a call site because the push was refused (guest depth, memory); the interpreter then makes the call.
+  uint64_t call_exits_callee_guard; ///< Exits at a call site because the callee value was not the function the site names.
+  uint64_t call_exits_native_stack; ///< Exits at a call site because the native stack would have run out.
+  uint64_t compile_at_call;     ///< Callees compiled by the compile hook, at their first call from compiled code.
+  uint64_t compile_hook_calls;  ///< Times a call site found an empty slot and asked the compile hook (a callee that cannot be compiled asks once: its slot is then refused).
+  uint64_t deepest_chain;       ///< The most compiled calls open at once.
+  uint64_t hook_argument_errors; ///< Hooks handed arguments they refuse (a token that names no function, a wrong count, a flag that is not 0). Zero in any correct run.
+  uint64_t rebuild_failures;    ///< Chain deoptimizations whose rebuild was refused (the run then ends unwound, never continued).
+  uint64_t last_exit_cause;     ///< The cause of the last exit from compiled code: 0 a guard or a call exit, 1 a pause, 2 an unwind, or the deopt hook's code after a refused rebuild.
 } GLTANG_JitStats;
 
 /**
@@ -312,6 +325,14 @@ typedef struct GLTANG_JitStats {
  * and polls as the interpreter (the frame differential and the fuel-parity
  * tests are what say so). The default is ::GLTANG_JIT_DEFAULT_THRESHOLD; 0
  * turns tier-up off for this execution.
+ *
+ * A call of a declared function from compiled code is a call between compiled
+ * functions, through the callee's entry slot, and is compiled only when the
+ * context has a native-stack byte budget (`grcore_options_set_native_stack_bytes`,
+ * AD-28): compiled recursion is measured in bytes, and with no budget there is
+ * nothing to measure it against, so every `CALL` stays an exit to the interpreter.
+ * Recursion that needs more than the budget leaves compiled code once, at the
+ * call, and the interpreter finishes with the same output.
  *
  * Stability: like the rest of this header, `free` (tools/check-labels.sh keeps
  * `execution.h` with the engine's other headers). The story that added it asked

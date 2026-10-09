@@ -40,6 +40,8 @@
 #define GLTANG_TEST_HAS_RELOCATE 1
 #endif
 
+extern "C" void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
+
 #include <malloc.h>
 #if defined(__has_include) && __has_include(<valgrind/valgrind.h>)
 #include <valgrind/valgrind.h>
@@ -297,6 +299,10 @@ struct Config {
   /// ignores all three: the setter says so and the run is the interpreter's.
   long jit_threshold = -1;
   uint64_t native_depth = GRCORE_UNLIMITED;  ///< The native-depth budget (a compiled call is one native activation).
+  /// The native stack, in bytes, compiled code may use (AD-28). Calls between
+  /// compiled functions are compiled only under a budget, so every harness-made
+  /// execution has one by default; GRCORE_UNLIMITED compiles no call site.
+  uint64_t native_stack_bytes = uint64_t{1} << 20;
 };
 
 inline bool moving_stack_requested() {
@@ -334,14 +340,32 @@ struct JitTotals {
     sum.refused_pauses += st.refused_pauses;
     sum.refused_unwinds += st.refused_unwinds;
     sum.slow_polls += st.slow_polls;
+    sum.calls += st.calls;
+    sum.call_exits_remembered += st.call_exits_remembered;
+    sum.call_exits_push_refused += st.call_exits_push_refused;
+    sum.call_exits_callee_guard += st.call_exits_callee_guard;
+    sum.call_exits_native_stack += st.call_exits_native_stack;
+    sum.compile_at_call += st.compile_at_call;
+    sum.compile_hook_calls += st.compile_hook_calls;
+    if (st.deepest_chain > sum.deepest_chain) {
+      sum.deepest_chain = st.deepest_chain;
+    }
+    sum.hook_argument_errors += st.hook_argument_errors;
+    sum.rebuild_failures += st.rebuild_failures;
   }
   ~JitTotals() {
     if (std::getenv("GLTANG_TEST_JIT_REPORT")) {
-      std::fprintf(stderr, "jit report: %llu executions, %llu compiled, %llu failures, %llu discarded, %llu entries, %llu returns, %llu deopts, %llu refused pauses, %llu refused unwinds, %llu slow polls\n",
+      std::fprintf(stderr, "jit report: %llu executions, %llu compiled, %llu failures, %llu discarded, %llu entries, %llu returns, %llu deopts, %llu refused pauses, %llu refused unwinds, %llu slow polls, "
+        "%llu calls, %llu call exits (%llu remembered, %llu push refused, %llu callee guard, %llu native stack), %llu compiled at call, deepest chain %llu, %llu hook argument errors, %llu rebuild failures\n",
         (unsigned long long)executions, (unsigned long long)sum.functions_compiled, (unsigned long long)sum.compile_failures,
         (unsigned long long)sum.functions_discarded, (unsigned long long)sum.entries, (unsigned long long)sum.returns,
         (unsigned long long)sum.deopts, (unsigned long long)sum.refused_pauses, (unsigned long long)sum.refused_unwinds,
-        (unsigned long long)sum.slow_polls);
+        (unsigned long long)sum.slow_polls, (unsigned long long)sum.calls,
+        (unsigned long long)(sum.call_exits_remembered + sum.call_exits_push_refused + sum.call_exits_callee_guard + sum.call_exits_native_stack),
+        (unsigned long long)sum.call_exits_remembered, (unsigned long long)sum.call_exits_push_refused,
+        (unsigned long long)sum.call_exits_callee_guard, (unsigned long long)sum.call_exits_native_stack,
+        (unsigned long long)sum.compile_at_call, (unsigned long long)sum.deepest_chain,
+        (unsigned long long)sum.hook_argument_errors, (unsigned long long)sum.rebuild_failures);
     }
   }
 };
@@ -420,6 +444,7 @@ class Context {
       grcore_options_set_memory_reserve(options, config.memory_reserve);
       grcore_options_set_guest_depth(options, config.calls == GRCORE_UNLIMITED ? config.calls : config.calls + 1u);
       grcore_options_set_native_depth(options, config.native_depth);
+      grcore_options_set_native_stack_bytes(options, config.native_stack_bytes);
       if (grcore_context_create(group, options, &context) != GRCORE_OK) {
         created = GLTANG_ERR_OOM;
         break;
@@ -464,6 +489,7 @@ class Context {
           (void)gltang_execution_set_jit_threshold(execution, static_cast<uint32_t>(threshold));
         }
       }
+      apply_jit_switches(false, false);
     } while (false);
     grheap_options_destroy(heap_options);
     grcore_options_destroy(options);
@@ -508,6 +534,13 @@ class Context {
   }
 
   bool ok() const { return created == GLTANG_OK && execution != nullptr; }
+
+  /// The test switches over compiled calls (see gltang_vm_set_jit_test_switches_unchecked):
+  /// calls off, a refused rebuild, and a collection in the push hook, which a
+  /// heap in torture mode asks for (the frame push is a GC point the engine owns).
+  void apply_jit_switches(bool calls_off, bool fail_rebuild) {
+    gltang_vm_set_jit_test_switches_unchecked(execution, calls_off, fail_rebuild, torture_on && !arena);
+  }
 
   /// What the baseline JIT did for this execution (all zero without it).
   GLTANG_JitStats jit_stats() const {

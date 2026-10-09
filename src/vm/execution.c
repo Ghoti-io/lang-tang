@@ -224,11 +224,16 @@ static GLTANG_Execution * frame_execution(const GRCORE_AbstractFrame * frame) {
   return exec && !exec->destroyed ? exec : NULL;
 }
 
-/** Reads a frame's function word and finds its program. */
+/**
+ * Reads a frame's function word and finds its program. Every slot of a frame is
+ * read through `grcore_frame_slot`, which reads an interpreter frame from the
+ * guest stack and a compiled frame from the native one by its site (the guest
+ * frame a compiled frame stands for is stale until a rebuild, and the abstract
+ * frame of a compiled frame names none).
+ */
 static bool frame_function(const GRCORE_AbstractFrame * frame, const GLTANG_Execution * exec, const GLTANG_Program ** program, uint64_t * function) {
-  GRCORE_Stack * stack = grcore_context_stack(frame->context);
   uint64_t word;
-  if (!stack || grcore_stack_slot_get(stack, frame->frame, GLTANG_F_FUNCTION, &word) != GRCORE_OK) {
+  if (grcore_frame_slot(frame, GLTANG_F_FUNCTION, NULL, &word) != GRCORE_OK) {
     return false;
   }
   *program = gltang_exec_program(exec, GLTANG_FN_PROGRAM(word));
@@ -289,8 +294,7 @@ static GRCORE_Result descriptor_variable(const GRCORE_AbstractFrame * frame, siz
       }
       if (seen++ == index) {
         uint64_t value;
-        GRCORE_Stack * stack = grcore_context_stack(frame->context);
-        if (grcore_stack_slot_get(stack, frame->frame, GLTANG_FRAME_HEADER + i, &value) != GRCORE_OK) {
+        if (grcore_frame_slot(frame, GLTANG_FRAME_HEADER + i, NULL, &value) != GRCORE_OK) {
           return GRCORE_ERR_INVALID;
         }
         *out = (GRCORE_Variable){f->local_names[i], GRCORE_SLOT_VALUE, value};
@@ -304,11 +308,8 @@ static GRCORE_Result descriptor_variable(const GRCORE_AbstractFrame * frame, siz
     // the frame's flags word.
     const GLTANG_Value * globals = NULL;
     uint64_t depth = 0;
-    {
-      GRCORE_Stack * stack = grcore_context_stack(frame->context);
-      if (!stack || grcore_stack_slot_get(stack, frame->frame, GLTANG_F_FLAGS, &depth) != GRCORE_OK) {
-        return GRCORE_ERR_INVALID;
-      }
+    if (grcore_frame_slot(frame, GLTANG_F_FLAGS, NULL, &depth) != GRCORE_OK) {
+      return GRCORE_ERR_INVALID;
     }
     for (const GLTANG_Activation * a = exec->act; a; a = a->parent) {
       if (a->depth == depth) {
@@ -876,3 +877,16 @@ GLTANG_Result gltang_execution_output_render(const GLTANG_Execution * execution,
 void gltang_buffer_free(void * buffer) {
   gcu_free(buffer);
 }
+
+#ifndef GLTANG_WITH_JIT
+// The tests' switches over compiled calls (src/jit/jit.c): a build without the JIT
+// has nothing to switch, and the harness that sets them for every execution it
+// makes still links.
+void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
+void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push) {
+  (void)execution;
+  (void)calls_off;
+  (void)fail_rebuild;
+  (void)gc_at_push;
+}
+#endif

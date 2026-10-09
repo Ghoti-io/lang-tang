@@ -694,6 +694,189 @@ class Builder {
 
 }  // namespace detail
 
+namespace detail {
+
+/**
+ * The call-graph generator (calls between compiled functions, spec-runtime-calls).
+ * A script of three to eight functions, each calling the ones declared before
+ * it (Tang resolves a name when it reads it, so a function cannot name one that
+ * comes after, and mutual recursion is not expressible with named functions),
+ * of up to fifteen parameters, in loops, by single and tree recursion, with
+ * functions passed as values and called through a parameter (a call the compiler
+ * cannot name, so it stays an exit), an array passed and read, and, now and then,
+ * recursion to the depth budget. Every value is an integer kept small by `%`, so
+ * a result is the same on every engine; every function ends in a `return`; the
+ * program ends in an expression statement (D-009, D-010, D-011).
+ */
+class CallBuilder {
+ public:
+  explicit CallBuilder(uint64_t seed) : e_(seed) {}
+
+  std::string build() {
+    int count = 3 + (int)below(6);
+    for (int i = 0; i < count; ++i) {
+      function(i);
+    }
+    if (chance(30)) {
+      line("function apply(p0, p1) { return p0(p1); }");
+      line("function pick(p0, p1) { return p0[p1 % 3] + 1; }");
+      has_values_ = true;
+    }
+    if (chance(15)) {
+      line("function deep(p0) { return deep(p0 + 1); }");
+      line("deep_ = deep(0);");
+    }
+    line("acc = 0;");
+    line("arr = [3, 5, 7];");
+    int drivers = 2 + (int)below(4);
+    for (int d = 0; d < drivers; ++d) {
+      const Fn & f = fns_[below(fns_.size())];
+      std::string call = f.name + "(" + literal_args(f) + ")";
+      if (chance(60)) {
+        line("for (k" + std::to_string(d) + " = 0; k" + std::to_string(d) + " < " + std::to_string(2 + below(30)) + "; k" + std::to_string(d) + " += 1) { acc = (acc + " + f.name + "(" + loop_args(f, "k" + std::to_string(d)) + ")) % 100003; }");
+      }
+      else {
+        line("acc = (acc + " + call + ") % 100003;");
+      }
+      line("print(acc);");
+      line("print(\",\");");
+    }
+    if (has_values_) {
+      for (const Fn & f : fns_) {
+        if (f.params == 1) {
+          line("acc = (acc + apply(" + f.name + ", " + std::to_string(below(9)) + ")) % 100003;");
+          break;
+        }
+      }
+      line("acc = (acc + pick(arr, " + std::to_string(below(9)) + ")) % 100003;");
+    }
+    line("acc;");
+    return out_;
+  }
+
+ private:
+  struct Fn {
+    std::string name;
+    int params;
+  };
+  std::mt19937_64 e_;
+  std::string out_;
+  std::vector<Fn> fns_;
+  bool has_values_ = false;
+
+  uint64_t below(uint64_t n) { return e_() % n; }
+  bool chance(unsigned percent) { return below(100) < percent; }
+  void line(const std::string & s) { out_ += s + "\n"; }
+
+  std::string param(int params) { return "p" + std::to_string(below(params)); }
+  /// An integer over the parameters, small whatever they are.
+  std::string expr(int params, int depth) {
+    if (depth <= 0 || chance(35)) {
+      return params > 0 && chance(70) ? param(params) : std::to_string(below(21));
+    }
+    static const char * const ops[] = {"+", "-", "*"};
+    return "((" + expr(params, depth - 1) + " " + ops[below(3)] + " " + expr(params, depth - 1) + ") % 1000)";
+  }
+  std::string args_over(int callee_params, int params, int depth) {
+    std::string s;
+    for (int i = 0; i < callee_params; ++i) {
+      s += (i ? ", " : "") + expr(params, depth);
+    }
+    return s;
+  }
+  std::string literal_args(const Fn & f) {
+    std::string s;
+    for (int i = 0; i < f.params; ++i) {
+      s += (i ? ", " : "") + std::to_string(below(15));
+    }
+    return s;
+  }
+  std::string loop_args(const Fn & f, const std::string & counter) {
+    std::string s;
+    for (int i = 0; i < f.params; ++i) {
+      s += (i ? ", " : "") + (i == 0 ? counter : std::to_string(below(15)));
+    }
+    return s;
+  }
+
+  void function(int index) {
+    // Few parameters most of the time, and now and then up to fifteen.
+    int params = chance(25) ? (int)below(16) : (int)below(4);
+    std::string name = "g" + std::to_string(index);
+    std::string head = "function " + name + "(";
+    for (int i = 0; i < params; ++i) {
+      head += (i ? ", p" : "p") + std::to_string(i);
+    }
+    head += ") {";
+    int shape = (int)below(6);
+    if (index == 0 && shape >= 2) {
+      shape = (int)below(2);  // nothing declared before it to call
+    }
+    if (params == 0 && (shape == 4 || shape == 5)) {
+      shape = 0;
+    }
+    line(head);
+    switch (shape) {
+      case 0:
+      case 1:  // a leaf
+        line("  local = " + expr(params, 2) + ";");
+        line("  if (" + expr(params, 1) + " < " + expr(params, 1) + ") { return " + expr(params, 2) + "; }");
+        line("  return local + " + expr(params, 1) + ";");
+        break;
+      case 2: {  // calls the functions before it
+        const Fn & a = fns_[below(fns_.size())];
+        const Fn & b = fns_[below(fns_.size())];
+        line("  t = " + a.name + "(" + args_over(a.params, params, 1) + ");");
+        line("  u = " + b.name + "(" + args_over(b.params, params, 1) + ");");
+        line("  return (t + u + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
+      case 3: {  // a loop of calls
+        const Fn & a = fns_[below(fns_.size())];
+        line("  total = 0;");
+        line("  for (j = 0; j < " + std::to_string(2 + below(5)) + "; j += 1) {");
+        line("    total = (total + " + a.name + "(" + args_over(a.params, params, 1) + ")) % 100003;");
+        line("  }");
+        line("  return total;");
+        break;
+      }
+      case 4: {  // single recursion on the first parameter, at most thirty deep
+        line("  if (p0 <= 0 || p0 > 30) { return " + expr(params, 1) + "; }");
+        std::string rest;
+        for (int i = 1; i < params; ++i) {
+          rest += ", " + expr(params, 1);
+        }
+        line("  return (" + name + "(p0 - 1" + rest + ") + " + expr(params, 1) + ") % 100003;");
+        break;
+      }
+      default: {  // tree recursion, as fib, at most nine deep
+        line("  if (p0 <= 1 || p0 > 9) { return " + expr(params, 1) + "; }");
+        std::string rest;
+        for (int i = 1; i < params; ++i) {
+          rest += ", " + expr(params, 1);
+        }
+        line("  return (" + name + "(p0 - 1" + rest + ") + " + name + "(p0 - 2" + rest + ")) % 100003;");
+        break;
+      }
+    }
+    line("}");
+    fns_.push_back({name, params});
+  }
+};
+
+}  // namespace detail
+
+/// A call-graph program for `seed` (a script): calls between functions of up to
+/// fifteen parameters, in loops, by recursion and tree recursion, with function
+/// values, an array argument, and now and then recursion to the depth budget.
+inline Program generate_calls(uint64_t seed) {
+  Program p;
+  p.seed = seed;
+  p.mode = Mode::Script;
+  p.source = detail::CallBuilder(seed).build();
+  return p;
+}
+
 /// The program for `seed` in `mode`.
 inline Program generate(uint64_t seed, Mode mode) {
   Program p;

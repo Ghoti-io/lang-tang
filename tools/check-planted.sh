@@ -19,7 +19,8 @@
 #   07 a silent oracle runner the oracle driver        (testOracle)
 #   08 a wrong tag on a compiled ADD   the frame differential, interpreter against JIT (testObserver)
 #   09 a skipped fuel charge in compiled code  the fuel-parity test (testJit)
-#   10 a missed write-back at a poll   the write-back test    (testJit)
+#   (10, a missed write-back at a poll, is retired: the poll helper no longer writes
+#    the guest frame at all, and the planted defects of compiled calls plant its opposite)
 #   11 a host pointer left in a type's payload with no hook   the address scan of a snapshot (testSnapshot)
 #   12 a skipped output-buffer capture   the output-so-far test and the corpus sweep    (testSnapshot)
 #   13 the temporaries reported through a copy   the relocation arm   (testExecute_simple, GRHEAP_RELOCATE+TORTURE)
@@ -41,7 +42,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 12); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11 and 12); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13 and 14, against PLANTED_RELOC_PREFIX and
@@ -52,7 +53,7 @@
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
 # copy is built the same way, in its own tree (release-nojit for no). Cases 08,
-# 09 and 10 plant a defect in the JIT, which a JIT=no build does not contain, so
+# 09 plant a defect in the JIT, which a JIT=no build does not contain, so
 # with no they are SKIPPED, loudly, and counted as skipped and never as caught:
 # the summary line gives both numbers, and a run in which nothing was caught
 # fails (an all-skipped run proves nothing). With yes every case runs.
@@ -77,7 +78,7 @@ case "$JIT" in
   *) printf 'check-planted: PLANTED_JIT must be yes or no, not %s\n' "$JIT" >&2; exit 2 ;;
 esac
 # Cases whose defect is in code only a JIT=yes build contains.
-JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back"
+JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel"
 
 if [ -z "$LIBDIR" ]; then
   printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
@@ -108,7 +109,7 @@ RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy"
 # What a relocation case runs under: relocation and torture together (a move at
 # every GC point). The "relocation is the instrument" check removes the first.
 RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 10-jit-missed-write-back 11-host-pointer-no-hook 12-skipped-output-capture"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture"
 SLOW="01-missing-root 02-missing-gc-store"
 
 if [ "$MODE" = relocate ]; then
@@ -137,7 +138,7 @@ target_of() {
   case "$1" in
     01-*|02-*) echo "build/linux/$TREE/apps/testExecute_complex" ;;
     03-*|05-*|08-*) echo "build/linux/$TREE/apps/testObserver" ;;
-    09-*|10-*) echo "build/linux/$TREE/apps/testJit" ;;
+    09-*) echo "build/linux/$TREE/apps/testJit" ;;
     11-*|12-*) echo "build/linux/$TREE/apps/testSnapshot" ;;
     04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
     06-*|07-*) echo "build/linux/$TREE/apps/oracle/oracle_ctang build/linux/$TREE/apps/testOracle" ;;
@@ -156,8 +157,6 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.PlainTorture*') ;;
     09-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
-    10-*)
-      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.AMissedWriteBack*') ;;
     11-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testSnapshot --gtest_brief=1 --gtest_filter='Snapshot.NoHostAddress*') ;;
     12-*)
@@ -178,7 +177,6 @@ name_of_test() {
     03-*|05-*|selftest) echo "testObserver" ;;
     08-*) echo "testObserver (the frame differential, interpreter against JIT)" ;;
     09-*) echo "testJit (the fuel-parity test)" ;;
-    10-*) echo "testJit (the write-back test)" ;;
     04-*) echo "testNative_gate" ;;
     11-*) echo "testSnapshot (the address scan)" ;;
     12-*) echo "testSnapshot (the output-so-far test and the corpus sweep)" ;;

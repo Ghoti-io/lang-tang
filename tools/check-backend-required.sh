@@ -57,7 +57,7 @@ run() {
   rc=$?
 }
 
-for suite in Jit Profile Retention Observer; do
+for suite in Jit Jit_calls Profile Retention Observer; do
   exe="$apps/test$suite$ext"
   [ -x "$exe" ] || fail "$exe is not built"
   run "$exe" no
@@ -66,7 +66,7 @@ $out"
 done
 
 if [ "$gated" != yes ]; then
-  for suite in Jit Profile Retention Observer; do
+  for suite in Jit Jit_calls Profile Retention Observer; do
     run "$apps/test$suite$ext" yes
     [ "$rc" -eq 0 ] || fail "on a target without a backend the forced run of test$suite must pass or skip, and it failed:
 $out"
@@ -75,25 +75,35 @@ $out"
   exit 0
 fi
 
-# The tests that use the macro: the name of the TEST above each use, one per line.
-wanted="$(awk '
-  /^TEST\(/ { s = $0; sub(/^TEST\(/, "", s); sub(/\).*/, "", s); gsub(/[ \t]/, "", s); sub(/,/, ".", s); name = s }
-  /^[ \t]*GLTANG_REQUIRE_JIT_BACKEND[ \t]*\(\)/ { print name }
-' "$unit/test_jit.cpp" | sort -u)"
-want_count="$(printf '%s\n' "$wanted" | grep -c .)"
-[ "$want_count" -ge 1 ] || fail "no test in $unit/test_jit.cpp uses GLTANG_REQUIRE_JIT_BACKEND, so this checks nothing"
+# check_named <executable> <source file>: with the backend forced off the tests
+# that failed are exactly the tests that use the macro (the name of the TEST above
+# each use, one per line).
+check_named() {
+  wanted="$(awk '
+    /^TEST\(/ { s = $0; sub(/^TEST\(/, "", s); sub(/\).*/, "", s); gsub(/[ \t]/, "", s); sub(/,/, ".", s); name = s }
+    /^[ \t]*GLTANG_REQUIRE_JIT_BACKEND[ \t]*\(\)/ { print name }
+  ' "$2" | sort -u)"
+  want_count="$(printf '%s\n' "$wanted" | grep -c .)"
+  [ "$want_count" -ge 1 ] || fail "no test in $2 uses GLTANG_REQUIRE_JIT_BACKEND, so this checks nothing"
 
-run "$apps/testJit$ext" yes
-[ "$rc" -ne 0 ] || fail "with the backend forced off the tier-up tests PASSED (or skipped): they cannot fail
+  run "$1" yes
+  [ "$rc" -ne 0 ] || fail "with the backend forced off the tier-up tests of $1 PASSED (or skipped): they cannot fail
 $out"
-failed="$(printf '%s\n' "$out" | sed -n 's/^\[ *FAILED *\] *\([A-Za-z0-9_]*\.[A-Za-z0-9_]*\).*/\1/p' | sort -u)"
-if [ "$failed" != "$wanted" ]; then
-  fail "with the backend forced off, the tests that failed are not the tests that use GLTANG_REQUIRE_JIT_BACKEND
+  failed="$(printf '%s\n' "$out" | sed -n 's/^\[ *FAILED *\] *\([A-Za-z0-9_]*\.[A-Za-z0-9_]*\).*/\1/p' | sort -u)"
+  if [ "$failed" != "$wanted" ]; then
+    fail "with the backend forced off, the tests of $1 that failed are not the tests that use GLTANG_REQUIRE_JIT_BACKEND
   only in the macro's users:
 $(printf '%s\n' "$wanted" | grep -vxF "$failed" | sed 's/^/    /')
   only in the failures:
 $(printf '%s\n' "$failed" | grep -vxF "$wanted" | sed 's/^/    /')"
-fi
+  fi
+  counted=$((counted + want_count))
+}
+
+counted=0
+check_named "$apps/testJit$ext" "$unit/test_jit.cpp"
+check_named "$apps/testJit_calls$ext" "$unit/test_jit_calls.cpp"
+want_count="$counted"
 
 for suite in Profile Retention Observer; do
   run "$apps/test$suite$ext" yes
@@ -101,4 +111,4 @@ for suite in Profile Retention Observer; do
 $out"
 done
 
-printf 'check-backend-required: ok: backend forced off, the %s tier-up tests that use the macro fail by name, and testProfile, testRetention and testObserver each fail; as built, all four pass\n' "$want_count"
+printf 'check-backend-required: ok: backend forced off, the %s tier-up tests that use the macro fail by name, and testProfile, testRetention and testObserver each fail; as built, all five pass\n' "$want_count"
