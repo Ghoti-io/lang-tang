@@ -67,6 +67,7 @@
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -293,6 +294,10 @@ static void engine_open(Engine * e, GLTANG_Program * program, uint64_t fuel) {
   }
   grcore_options_set_fuel(options, fuel);
   grcore_options_set_guest_depth(options, 1024);
+  /* Calls between compiled functions are compiled only under a native-stack
+   * budget (AD-28); a case that measures them needs one. 1 MiB is the `tang`
+   * command's default. */
+  grcore_options_set_native_stack_bytes(options, (uint64_t)1 << 20);
   gltang_heap_options_configure(heap_options);
   if (grcore_context_create(e->group, options, &e->context) != GRCORE_OK
       || grheap_heap_create(e->context, heap_options, &e->heap) != GRHEAP_OK
@@ -311,6 +316,17 @@ static void engine_close(Engine * e) {
 /* Runs the source @p iterations times; the clock covers only the runs. A
  * result of the wrong kind means the program did not do what the case says it
  * does, so the figure would be of something else. */
+#ifdef GLTANG_WITH_JIT
+/* The JIT's counters at the end of the last run of the last case that asked
+ * (a call-heavy case prints them: the figure is only the compiled calls' if
+ * calls were made, and no call between compiled functions left compiled code). */
+static GLTANG_JitStats last_jit_stats;
+#endif
+/* When set, the integer a run must give: a figure for a program that computed
+ * something else is a figure of something else. */
+static int have_expected_integer;
+static int64_t expected_integer;
+
 static uint64_t run_source_with(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice, Setup setup) {
   GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
   uint64_t sink = 0;
@@ -333,6 +349,12 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
     if (r != GRCORE_OK || gltang_execution_result_kind(e.execution) != expect) {
       setup_failed(source);
     }
+    if (have_expected_integer && gltang_execution_result_integer(e.execution) != expected_integer) {
+      setup_failed("a result other than the one the case computes");
+    }
+#ifdef GLTANG_WITH_JIT
+    (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
+#endif
     sink += (uint64_t)gltang_execution_result_integer(e.execution) + gltang_execution_result_size(e.execution);
     engine_close(&e);
   }
@@ -540,32 +562,53 @@ static uint64_t small_function_compiled_run(uint64_t iterations, double * elapse
   return run_source_with(SMALL_FUNCTION_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_jit_on);
 }
 
-/* The call-heavy case: run-fib-15 with the JIT at its default threshold is the
- * compiled side; this is the same program interpreted. A compiled function
- * leaves its code at every CALL (story 15: no JIT frame calls a JIT frame), so
- * for code that is mostly calls the JIT can only cost. */
+/* The call-heavy case: fib with the JIT at its default threshold is the
+ * compiled side; this is the same program interpreted, and with no call site
+ * compiled (milestone 1's behaviour, where a compiled function left its code at
+ * every CALL and the JIT could only cost). The result is checked, and the
+ * counters of the last run are printed with the figure. */
 #define FIB_SOURCE "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } fib(%d);"
 
-static uint64_t fib_source_run(int n, Setup setup, uint64_t iterations, double * elapsed) {
+extern void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);
+
+/* The control: the JIT at its default threshold with no call site compiled, so
+ * every CALL is an exit as in milestone 1. */
+static void setup_calls_off(GLTANG_Execution * execution) {
+  gltang_vm_set_jit_test_switches_unchecked(execution, true, false, false);
+}
+
+static uint64_t fib_source_run(int n, int64_t value, Setup setup, uint64_t iterations, double * elapsed) {
   char source[256];
   snprintf(source, sizeof(source), FIB_SOURCE, n);
-  return run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+  have_expected_integer = 1;
+  expected_integer = value;
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+  have_expected_integer = 0;
+  return sink;
 }
 
 static uint64_t fib15_interpreted_run(uint64_t iterations, double * elapsed) {
-  return fib_source_run(15, setup_jit_off, iterations, elapsed);
+  return fib_source_run(15, 610, setup_jit_off, iterations, elapsed);
 }
 
 static uint64_t fib15_default_run(uint64_t iterations, double * elapsed) {
-  return fib_source_run(15, NULL, iterations, elapsed);
+  return fib_source_run(15, 610, NULL, iterations, elapsed);
+}
+
+static uint64_t fib15_calls_off_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(15, 610, setup_calls_off, iterations, elapsed);
 }
 
 static uint64_t fib22_interpreted_run(uint64_t iterations, double * elapsed) {
-  return fib_source_run(22, setup_jit_off, iterations, elapsed);
+  return fib_source_run(22, 17711, setup_jit_off, iterations, elapsed);
 }
 
 static uint64_t fib22_default_run(uint64_t iterations, double * elapsed) {
-  return fib_source_run(22, NULL, iterations, elapsed);
+  return fib_source_run(22, 17711, NULL, iterations, elapsed);
+}
+
+static uint64_t fib22_calls_off_run(uint64_t iterations, double * elapsed) {
+  return fib_source_run(22, 17711, setup_calls_off, iterations, elapsed);
 }
 #endif
 
@@ -702,8 +745,10 @@ static const Case cases[] = {
     {"jit-small-function-compiled", small_function_compiled_run, 5000u, 5u},
     {"fib-15-interpreted", fib15_interpreted_run, 1000u, 2u},
     {"fib-15-jit-default", fib15_default_run, 1000u, 2u},
+    {"fib-15-jit-calls-off", fib15_calls_off_run, 1000u, 2u},
     {"fib-22-interpreted", fib22_interpreted_run, 100u, 1u},
     {"fib-22-jit-default", fib22_default_run, 100u, 1u},
+    {"fib-22-jit-calls-off", fib22_calls_off_run, 100u, 1u},
 #endif
 };
 
@@ -717,8 +762,12 @@ static int compare_double(const void * a, const void * b) {
 
 int main(int argc, char ** argv) {
   int smoke = 0;
+  const char * only = NULL; /* run the cases whose name begins with this */
   for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--smoke") == 0) {
+    if (strcmp(argv[i], "--only") == 0 && i + 1 < argc) {
+      only = argv[++i];
+    }
+    else if (strcmp(argv[i], "--smoke") == 0) {
       smoke = 1;
 #ifdef GLTANG_WITH_JIT
       smoke_mode = 1;
@@ -736,6 +785,9 @@ int main(int argc, char ** argv) {
 
   int repeats = smoke ? 1 : REPEATS;
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+    if (only && strncmp(cases[c].name, only, strlen(only)) != 0) {
+      continue;
+    }
     uint64_t n = smoke ? cases[c].smoke_iterations : cases[c].iterations;
     double ns[REPEATS];
     uint64_t sink = 0;
@@ -751,6 +803,17 @@ int main(int argc, char ** argv) {
     }
     printf("%-30s best %12.2f ns/iter   median %12.2f ns/iter   (n=%llu, sink=%llx)\n",
         cases[c].name, best, median, (unsigned long long)n, (unsigned long long)sink);
+#ifdef GLTANG_WITH_JIT
+    if (strncmp(cases[c].name, "fib-", 4) == 0) {
+      printf("  %s: compiled calls %llu, call exits %llu (remembered %llu, push refused %llu, callee guard %llu, native stack %llu), compiled at call %llu, deepest chain %llu, hook argument errors %llu\n",
+          cases[c].name, (unsigned long long)last_jit_stats.calls,
+          (unsigned long long)(last_jit_stats.call_exits_remembered + last_jit_stats.call_exits_push_refused + last_jit_stats.call_exits_callee_guard + last_jit_stats.call_exits_native_stack),
+          (unsigned long long)last_jit_stats.call_exits_remembered, (unsigned long long)last_jit_stats.call_exits_push_refused,
+          (unsigned long long)last_jit_stats.call_exits_callee_guard, (unsigned long long)last_jit_stats.call_exits_native_stack,
+          (unsigned long long)last_jit_stats.compile_at_call, (unsigned long long)last_jit_stats.deepest_chain,
+          (unsigned long long)last_jit_stats.hook_argument_errors);
+    }
+#endif
   }
   return 0;
 }
