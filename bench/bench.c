@@ -668,8 +668,8 @@ static uint64_t jit_native_off_run(uint64_t iterations, double * elapsed) {
  * 4,000,000 ns and up that a phase takes). The public API has no way to call a guest
  * function from the host, so the script loop is the way; each call enters the function
  * from the interpreter's top level, as a host's call of it would. The first-call cases
- * report the first call; the warm-call cases report the cost of one call in the timed
- * phase. The tier-up and compile are the difference between the two. */
+ * report the first call, in a script that stops after it; the warm-call cases report the
+ * cost of one call in the timed phase. The tier-up and compile are the difference between the two. */
 static double steady_ticks[4];
 static int steady_tick_count;
 
@@ -731,12 +731,12 @@ static uint64_t steady_fib(int n, int64_t value, int jit_on, int which, uint64_t
   return steady_run(source, value * (int64_t)timed, 0, jit_on, which, timed, iterations, elapsed);
 }
 
-static uint64_t steady_fib15_interpreted_first(uint64_t it, double * el) { return steady_fib(15, 610, 0, 0, 20, 200, it, el); }
-static uint64_t steady_fib15_compiled_first(uint64_t it, double * el) { return steady_fib(15, 610, 1, 0, 20, 200, it, el); }
+static uint64_t steady_fib15_interpreted_first(uint64_t it, double * el) { return steady_fib(15, 610, 0, 0, 0, 0, it, el); }
+static uint64_t steady_fib15_compiled_first(uint64_t it, double * el) { return steady_fib(15, 610, 1, 0, 0, 0, it, el); }
 static uint64_t steady_fib15_interpreted_warm(uint64_t it, double * el) { return steady_fib(15, 610, 0, 1, 20, 200, it, el); }
 static uint64_t steady_fib15_compiled_warm(uint64_t it, double * el) { return steady_fib(15, 610, 1, 1, 20, 200, it, el); }
-static uint64_t steady_fib22_interpreted_first(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 0, 2, 20, it, el); }
-static uint64_t steady_fib22_compiled_first(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 0, 2, 20, it, el); }
+static uint64_t steady_fib22_interpreted_first(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 0, 0, 0, it, el); }
+static uint64_t steady_fib22_compiled_first(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 0, 0, 0, it, el); }
 static uint64_t steady_fib22_interpreted_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 1, 2, 20, it, el); }
 static uint64_t steady_fib22_compiled_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 1, 2, 20, it, el); }
 
@@ -744,8 +744,7 @@ static uint64_t steady_fib22_compiled_warm(uint64_t it, double * el) { return st
  * its entry poll, once for each call, so the default threshold (200) is crossed by the
  * warm-up and its compiled code, if it can be compiled, stays in the execution's table
  * for the calls after. The template's output is 13 bytes. */
-static uint64_t steady_template(int jit_on, int which, uint64_t iterations, double * elapsed) {
-  const uint64_t warm = 400, timed = 2000;
+static uint64_t steady_template(int jit_on, int which, uint64_t warm, uint64_t timed, uint64_t iterations, double * elapsed) {
   char source[512];
   snprintf(source, sizeof(source),
       "use t; use tick; tick(); n = t().length; tick(); i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); "
@@ -754,10 +753,10 @@ static uint64_t steady_template(int jit_on, int which, uint64_t iterations, doub
   return steady_run(source, (int64_t)(13u * (1u + warm + timed)), 1, jit_on, which, timed, iterations, elapsed);
 }
 
-static uint64_t steady_template_interpreted_first(uint64_t it, double * el) { return steady_template(0, 0, it, el); }
-static uint64_t steady_template_compiled_first(uint64_t it, double * el) { return steady_template(1, 0, it, el); }
-static uint64_t steady_template_interpreted_warm(uint64_t it, double * el) { return steady_template(0, 1, it, el); }
-static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return steady_template(1, 1, it, el); }
+static uint64_t steady_template_interpreted_first(uint64_t it, double * el) { return steady_template(0, 0, 0, 0, it, el); }
+static uint64_t steady_template_compiled_first(uint64_t it, double * el) { return steady_template(1, 0, 0, 0, it, el); }
+static uint64_t steady_template_interpreted_warm(uint64_t it, double * el) { return steady_template(0, 1, 400, 2000, it, el); }
+static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return steady_template(1, 1, 400, 2000, it, el); }
 #endif
 
 /* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
@@ -902,12 +901,12 @@ static const Case cases[] = {
     {"jit-native-call-1M-natives-off", jit_native_off_run, 5u, 1u},
     {"steady-fib-15-interpreted-first-call", steady_fib15_interpreted_first, 1000u, 2u},
     {"steady-fib-15-compiled-first-call", steady_fib15_compiled_first, 1000u, 2u},
-    {"steady-fib-15-interpreted-warm-call", steady_fib15_interpreted_warm, 50u, 2u},
-    {"steady-fib-15-compiled-warm-call", steady_fib15_compiled_warm, 50u, 2u},
+    {"steady-fib-15-interpreted-warm-call", steady_fib15_interpreted_warm, 20u, 2u},
+    {"steady-fib-15-compiled-warm-call", steady_fib15_compiled_warm, 20u, 2u},
     {"steady-fib-22-interpreted-first-call", steady_fib22_interpreted_first, 100u, 1u},
     {"steady-fib-22-compiled-first-call", steady_fib22_compiled_first, 100u, 1u},
-    {"steady-fib-22-interpreted-warm-call", steady_fib22_interpreted_warm, 10u, 1u},
-    {"steady-fib-22-compiled-warm-call", steady_fib22_compiled_warm, 10u, 1u},
+    {"steady-fib-22-interpreted-warm-call", steady_fib22_interpreted_warm, 5u, 1u},
+    {"steady-fib-22-compiled-warm-call", steady_fib22_compiled_warm, 5u, 1u},
     {"steady-template-interpreted-first-call", steady_template_interpreted_first, 1000u, 2u},
     {"steady-template-compiled-first-call", steady_template_compiled_first, 1000u, 2u},
     {"steady-template-interpreted-warm-call", steady_template_interpreted_warm, 50u, 2u},
