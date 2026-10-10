@@ -627,6 +627,25 @@ std::vector<std::string> tang_files(const std::string & sub) {
 
 }  // namespace
 
+TEST(Jit, EveryNaNPrintsAsNanInBothTiersWhateverItsSign) {
+  // CAP-8 and ledger row D-031. Floats still exit to the interpreter, which owns
+  // the text, so this is the statement that the two tiers print one text for a NaN
+  // of either sign and payload, inside a function that is compiled (its
+  // integer parts are) and in the main program.
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc;
+  sc.source =
+      "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"
+      "function show(x, k) { i = 0; while (i < k) { print(x); print(\" \"); print(-x); print(\" \"); i = i + 1; } return i; }\n"
+      "a = big - big; b = -a; c = \"nan\" as float; d = \"-nan(0x1234)\" as float;\n"
+      "show(a, 2); show(b, 1); show(c, 1); show(d, 1); print(big); print(\" \"); print(-big); print(\" \"); print(-0.0);\n";
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_EQ(plain.raw, "nan nan nan nan nan nan nan nan nan nan inf -inf -0.");
+  EXPECT_EQ(jit.raw, plain.raw);
+  EXPECT_GE(jit.stats.functions_compiled, 1u) << "show() was compiled: the comparison is not vacuous";
+}
+
 TEST(Jit, TheCorpusRunsToTheSameVerdictWithEveryFunctionCompiledAtItsFirstPoll) {
   GLTANG_REQUIRE_JIT_BACKEND();
   uint64_t entries = 0, programs = 0, deopts = 0, compared = 0;

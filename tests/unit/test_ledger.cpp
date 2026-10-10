@@ -81,7 +81,7 @@ TEST(Ledger, TheRecordedDeparturesAreSeeded) {
 TEST(Ledger, IsClosedExactlyWhenNoRowIsOpen) {
   // After the host API (story 10) section 13.9, the last open row, is a
   // recorded departure: the error is listed. The execution differential
-  // (story 11) found divergences and recorded each one (D-023 to D-030), so
+  // (story 11) found divergences and recorded each one (D-023 to D-030), and the float spec's first story added D-031, so
   // the ledger is still closed.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   ASSERT_TRUE(ledger.valid());
@@ -100,7 +100,7 @@ TEST(Ledger, TheDivergencesTheExecutionDifferentialFindsNameTheirFiles) {
   // nature say why in their summary.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   ASSERT_TRUE(ledger.valid());
-  for (const char * id : {"D-009", "D-010", "D-011", "D-012", "D-013", "D-014", "D-015", "D-017", "D-023", "D-024", "D-025", "D-026", "D-027", "D-028", "D-029", "D-030"}) {
+  for (const char * id : {"D-009", "D-010", "D-011", "D-012", "D-013", "D-014", "D-015", "D-017", "D-023", "D-024", "D-025", "D-026", "D-027", "D-028", "D-029", "D-030", "D-031"}) {
     const oracle::Row * row = nullptr;
     for (const auto & r : ledger.rows) {
       if (r.id == id) {

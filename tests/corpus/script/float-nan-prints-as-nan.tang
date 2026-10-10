@@ -1,0 +1,4 @@
+big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;
+a = big - big; b = -a; c = "nan" as float; d = "-nan(0x1234)" as float; e = "nan(0x7ff)" as float; f = -d; g = -e;
+print(a); print(" "); print(b); print(" "); print(c); print(" "); print(d); print(" "); print(e); print(" "); print(f); print(" "); print(g); print(" ");
+print(a as string); print(" "); print(f as string); print(" "); print(big); print(" "); print(-big); print(" "); print(-0.0); print(" "); print(a == a); a == a;

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 using namespace std;
@@ -3938,4 +3939,59 @@ TEST(Slice, APartThatIsNotAnIntegerOrNullIsStillInvalid) {
   TT_EXPECT_ERROR("x = true; \"abc\"[0:x];", "Error: Invalid index");
   TT_EXPECT_ERROR("[1, 2, 3][::0];", "Error: Invalid index");
   TT_EXPECT_ERROR("y = null; [1, 2, 3][::y][0:1:0];", "Error: Invalid index");
+}
+
+TEST(FloatPrinting, EveryNaNPrintsAsNanWhateverItsSignAndPayload) {
+  // Reference 4.12 and ledger row D-031. C prints "-nan" for a NaN with its
+  // sign bit set, and the default NaN of inf - inf is negative on x86-64 and
+  // positive on arm64, so the text must not follow the bits. The host hands in
+  // NaNs whose sign and payload it chose (a quiet NaN, a negative one, one with
+  // a payload, a signalling pattern), so this does not depend on what this CPU's
+  // arithmetic produces; the script makes some of its own as well.
+  const uint64_t patterns[] = {
+      0x7ff8000000000000ull,  // the quiet NaN
+      0xfff8000000000000ull,  // the same with the sign bit set (x86-64's inf - inf)
+      0x7ff8000000001234ull,  // a payload
+      0xfff8000000001234ull,  // a payload and the sign
+      0x7ff0000000000001ull,  // a signalling NaN
+      0xfff7ffffffffffffull,  // a signalling NaN, negative, every payload bit
+  };
+  for (uint64_t bits : patterns) {
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    ASSERT_NE(d, d);
+    {
+      TEST_PROGRAM_SETUP_NO_RUN("use a; print(a); print(\" \"); print(a as string); print(\" \"); print(-a); print(\" \"); print(a + 1.5);");
+      ASSERT_TRUE(context->add_library("a", tt::Host::number(d)));
+      ASSERT_TRUE(context->execute());
+      ASSERT_TRUE(context->ok());
+      EXPECT_EQ(context->raw(), "nan nan nan nan") << std::hex << bits;
+      TEST_PROGRAM_TEARDOWN();
+    }
+  }
+  {
+    // Made by the script: both signs, a NaN from a string with a payload.
+    TEST_PROGRAM_SETUP(
+        "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"
+        "a = big - big; b = -a; c = \"nan\" as float; d = \"-nan(0x1234)\" as float;\n"
+        "print(a); print(\" \"); print(b); print(\" \"); print(c); print(\" \"); print(d); print(\" \"); print(-d);");
+    EXPECT_EQ(context->raw(), "nan nan nan nan nan");
+    TEST_PROGRAM_TEARDOWN();
+  }
+  {
+    // Nothing else changes: infinities, negative zero and ordinary numbers.
+    TEST_PROGRAM_SETUP(
+        "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"
+        "print(big); print(\" \"); print(-big); print(\" \"); print(-0.0); print(\" \"); print(3.5); print(\" \"); print(1. / 3.); print(\" \"); print(100.);");
+    EXPECT_EQ(context->raw(), "inf -inf -0. 3.5 0.333333 100.");
+    TEST_PROGRAM_TEARDOWN();
+  }
+  {
+    // A NaN is still not a number to a cast, and not equal to itself.
+    TEST_PROGRAM_SETUP(
+        "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"
+        "n = big - big; print(n as int); print(\" \"); print(n == n); print(\" \"); print(n != n);");
+    EXPECT_EQ(context->raw(), "[NOT A NUMBER] false true");
+    TEST_PROGRAM_TEARDOWN();
+  }
 }

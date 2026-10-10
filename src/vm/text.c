@@ -67,6 +67,23 @@ size_t gltang_vm_format_integer(int64_t n, char * buffer) {
 size_t gltang_vm_format_float(double d, char * buffer, size_t size) {
   // Fixed notation, six decimals, trailing zeros removed and the point kept:
   // 3.5, 0.333333, 100., 1. (language reference, section 4.12).
+  //
+  // Every NaN is "nan". printf says "-nan" for a NaN with its sign bit set and
+  // may carry a payload, and which NaN an operation produces depends on the CPU
+  // (inf - inf is negative on x86-64 and positive on arm64) and, when both
+  // operands are NaN, on operand order. The sign and payload of a NaN are not
+  // observable in Tang (documentation/language-reference.md, divergence D-031).
+  // (d != d, not isnan(d): MinGW's isnan converts to float where -Wfloat-conversion
+  // sees it, as in float_to_int.)
+  if (d != d) {
+    if (size == 0) {
+      return 0;
+    }
+    size_t n = size > 3u ? 3u : size - 1u;
+    memcpy(buffer, "nan", n);
+    buffer[n] = '\0';
+    return n;
+  }
   int written = snprintf(buffer, size, "%f", d);
   if (written < 0) {
     buffer[0] = '\0';
