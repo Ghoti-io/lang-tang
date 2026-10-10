@@ -32,6 +32,12 @@ value model and the execution API. The third is **the host API**, under "The
 host API": libraries (`math`, `random`, the host's own), native functions, the
 error list, and template calls that each open a budget scope.
 
+The language's reference is [language-reference.md](language-reference.md). It
+opens by saying that ctang's reference still describes everything it does not
+yet cover, and that where the two differ it wins and the divergence ledger lists
+the difference. It carries what lang-tang has decided so far, which is how
+numbers print (every NaN as `nan`, D-031).
+
 Nothing in this library is built on ctang's bytecode, interpreter, JIT or
 `binary.h` (AD-9), and no name in it is ctang's: the prefix is `GLTANG`, never
 `GTA`.

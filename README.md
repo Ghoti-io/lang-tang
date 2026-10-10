@@ -226,6 +226,10 @@ template calls above it indented under it.
 
 - [documentation/design.md](documentation/design.md): what was ported from
   ctang and what was changed, and the alternatives it rejected.
+- [documentation/language-reference.md](documentation/language-reference.md):
+  the language reference. It states what lang-tang decided (so far, how numbers
+  print); ctang's reference describes the rest, and where they differ this one
+  wins.
 - [documentation/divergence-ledger.md](documentation/divergence-ledger.md): every
   way lang-tang may differ from ctang, and the condition that retires ctang.
 - [examples/README.md](examples/README.md) indexes the runnable examples by
