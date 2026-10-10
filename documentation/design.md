@@ -1277,11 +1277,16 @@ breaks nothing as not caught. Observed:
 | 29 unwind-status-read-as-ok | the library-call thunk answers "continue" for the value a runtime poll returns when it orders the run to stop | the run that runs out of budget inside a native's answer (`testNative_calls`) | the plain and compiled runs differ |
 | 30 member-load-by-name-not-charged | the thunk of a compiled `.name` on a library adds nothing to the pending fuel | the loops of `use m.inc as f` and `m.inc(s)` over a sub-library (`testNative_calls`) | the plain and compiled runs' fuel differ |
 | 31 deep-push-refused | the push hook refuses once the compiled chain is eight calls deep, so every call below that is an exit; output, fuel and frames are unchanged | the long compiled run of `fib` (`testJit_calls`), which asserts zero call exits and a chain deeper than eight | `tests/unit/test_jit_calls.cpp:1107: Failure`, `exits(jit.stats)` is not 0 (the control prints `fib(22): 57096 compiled calls, 0 call exits`) |
+| 32 float-add-one-ulp-off-in-the-jit-arm | with the JIT on, a finite float sum is the next double up. The text of a float is six decimals, so the output, the result and the inspected text of every slot are unchanged and only the slot's 64 bits differ | the float programs, compared by bits, interpreter against JIT (`testObserver`, `Observer.TheFloatPrograms*`) | `scope program variable r3 float bits: 0x... against 0x...` at the first poll that holds the sum |
+| 33 float-subnormal-flushed-in-the-jit-arm | with the JIT on, a subnormal product or quotient is zero of the same sign (both print `0.`) | the same | `variable sub float bits` |
+| 34 float-nan-where-a-number-belongs-in-the-jit-arm | with the JIT on, a zero product of finite operands is a NaN | the same | a float slot or variable that is a NaN where the interpreter holds a number |
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 31 (`check-planted-quick`, about two minutes with the
+32 to 34 stand for the compiled float of `spec-runtime-float` stories 6 and 7, which does not exist yet: each is a tier-dependent float result, which is what a wrong compiled operation would be. The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
+
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 34 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all thirty but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
+runs all thirty-three but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.

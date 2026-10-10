@@ -1,0 +1,24 @@
+# 34 a NaN where a number belongs
+# defect: with the JIT on, a float product of finite operands that is zero is a
+# NaN, as a compiled multiply that mishandled a zero would give. (Stands for the
+# compiled float of stories 6 and 7, which does not exist yet.)
+# caught by: the frame differential's bits channel, interpreter against JIT (testObserver)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -125,7 +125,14 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
+   switch (op) {
+     case GLTANG_OP_ADD: return gltang_vm_make_float(exec, x + y);
+     case GLTANG_OP_SUB: return gltang_vm_make_float(exec, x - y);
+-    case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
++    case GLTANG_OP_MUL: {
++      /* planted: a zero product is a NaN when the JIT is on */
++      double planted_r = x * y;
++      if (exec->jit_threshold && planted_r == 0.0) {
++        planted_r = nan("");
++      }
++      return gltang_vm_make_float(exec, planted_r);
++    }
+     case GLTANG_OP_DIV:
+       if (y == 0.0) {
+         return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);

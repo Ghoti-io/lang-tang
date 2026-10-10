@@ -42,6 +42,13 @@
 #   29 an unwind status read as OK   the run that runs out of budget inside a native's answer   (testNative_calls)
 #   30 a compiled member load by name is not charged   the differential over a loop of `.name` loads and of a dotted `use` path   (testNative_calls)
 #   31 a call made deep in a compiled chain is an exit   the long compiled run of fib, which asserts zero call exits   (testJit_calls)
+#   32 a float sum one ulp off with the JIT on   the frame differential's bits channel   (testObserver)
+#   33 a subnormal product or quotient flushed to zero with the JIT on   the frame differential's bits channel   (testObserver)
+#   34 a zero product that is a NaN with the JIT on   the frame differential's bits channel   (testObserver)
+#   (32 to 34 stand for the compiled float of spec-runtime-float stories 6 and 7, which does
+#   not exist yet: each is a tier-dependent float result, which is what a compiled operation
+#   that is wrong would be. The text of a float is six decimals, so for 32 and 33 the text
+#   of every slot, the output and the result are unchanged and only the bits differ.)
 #
 # Cases 13, 14, 15, 20 and 27 (`--relocate`) are caught only by runtime-heap's relocation
 # torture, which moves every unpinned object at every collection: a reference
@@ -59,7 +66,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 31; 10 is retired); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 34; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13, 14, 15, 20 and 27, against PLANTED_RELOC_PREFIX and
@@ -70,7 +77,7 @@
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
 # copy is built the same way, in its own tree (release-nojit for no). Cases 08, 09
-# and 15 to 31 plant a defect in the JIT, which a JIT=no build does not contain, so
+# and 15 to 34 plant a defect in the JIT, which a JIT=no build does not contain, so
 # with no they are SKIPPED, loudly, and counted as skipped and never as caught:
 # the summary line gives both numbers, and a run in which nothing was caught
 # fails (an all-skipped run proves nothing). With yes every case runs.
@@ -95,7 +102,7 @@ case "$JIT" in
   *) printf 'check-planted: PLANTED_JIT must be yes or no, not %s\n' "$JIT" >&2; exit 2 ;;
 esac
 # Cases whose defect is in code only a JIT=yes build contains.
-JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused"
+JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm"
 
 if [ -z "$LIBDIR" ]; then
   printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
@@ -126,7 +133,7 @@ RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15
 # What a relocation case runs under: relocation and torture together (a move at
 # every GC point). The "relocation is the instrument" check removes the first.
 RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm"
 SLOW="01-missing-root 02-missing-gc-store"
 
 if [ "$MODE" = relocate ]; then
@@ -154,7 +161,7 @@ LDPATH="$APPS:$LIBDIR"
 target_of() {
   case "$1" in
     01-*|02-*) echo "build/linux/$TREE/apps/testExecute_complex" ;;
-    03-*|05-*|08-*) echo "build/linux/$TREE/apps/testObserver" ;;
+    03-*|05-*|08-*|32-*|33-*|34-*) echo "build/linux/$TREE/apps/testObserver" ;;
     09-*) echo "build/linux/$TREE/apps/testJit" ;;
     15-*|16-*|17-*|19-*|20-*|21-*|22-*|23-*|24-*|31-*) echo "build/linux/$TREE/apps/testJit_calls" ;;
     25-*|26-*|27-*|28-*|29-*|30-*) echo "build/linux/$TREE/apps/testNative_calls" ;;
@@ -177,6 +184,8 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.PlainTorture*') ;;
     09-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
+    32-*|33-*|34-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.TheFloatPrograms*') ;;
     16-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_calls --gtest_brief=1 --gtest_filter='JitCalls.AFuelBudget*:JitCalls.ADeclaredGlobalFunction*') ;;
     17-*)
@@ -226,6 +235,7 @@ name_of_test() {
     01-*|02-*) echo "testExecute_complex under torture and verify" ;;
     03-*|05-*|selftest) echo "testObserver" ;;
     08-*) echo "testObserver (the frame differential, interpreter against JIT)" ;;
+    32-*|33-*|34-*) echo "testObserver (the float programs, compared by bits, interpreter against JIT)" ;;
     09-*) echo "testJit (the fuel-parity test)" ;;
     15-*|20-*) echo "testJit_calls under relocation torture" ;;
     16-*) echo "testJit_calls (the fuel-parity tests)" ;;

@@ -1,0 +1,26 @@
+# 32 a float sum one ulp off
+# defect: with the JIT on, a float addition gives the next double up, as a compiled
+# add that rounded or fused differently would. The text of a float is its value
+# to six decimals, so the output, the result and the inspected text of every slot
+# are unchanged; only the 64 bits of the slot differ. (Stands for the compiled
+# float of spec-runtime-float stories 6 and 7, which does not exist yet.)
+# caught by: the frame differential's bits channel, interpreter against JIT (testObserver)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -123,7 +123,14 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
+   double x = gltang_vm_number(a);
+   double y = gltang_vm_number(b);
+   switch (op) {
+-    case GLTANG_OP_ADD: return gltang_vm_make_float(exec, x + y);
++    case GLTANG_OP_ADD: {
++      /* planted: one ulp off (finite sums only) when the JIT is on */
++      double planted_r = x + y;
++      if (exec->jit_threshold && isfinite(planted_r)) {
++        planted_r = nextafter(planted_r, HUGE_VAL);
++      }
++      return gltang_vm_make_float(exec, planted_r);
++    }
+     case GLTANG_OP_SUB: return gltang_vm_make_float(exec, x - y);
+     case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
+     case GLTANG_OP_DIV:

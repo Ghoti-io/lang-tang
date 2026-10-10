@@ -813,7 +813,7 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs all thirty (the relocation cases, 13, 14, 15, 20 and 27, need a relocation heap and run in the relocation arm).
+# part of `make test-torture`; `make check-planted` runs all thirty-three (the relocation cases, 13, 14, 15, 20 and 27, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
@@ -827,7 +827,7 @@ ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
 	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
-check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 31 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots)
+check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 34 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots, the three of the float bits channel)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test

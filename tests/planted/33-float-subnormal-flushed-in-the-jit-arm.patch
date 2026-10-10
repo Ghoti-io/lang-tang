@@ -1,0 +1,38 @@
+# 33 a subnormal flushed to zero
+# defect: with the JIT on, a float product or quotient that is subnormal is
+# replaced by zero of the same sign, as a compiled operation run with
+# flush-to-zero set would. Both print as 0., so only the slot's bits differ.
+# (Stands for the compiled float of stories 6 and 7, which does not exist yet.)
+# caught by: the frame differential's bits channel, interpreter against JIT (testObserver)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -125,12 +125,25 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
+   switch (op) {
+     case GLTANG_OP_ADD: return gltang_vm_make_float(exec, x + y);
+     case GLTANG_OP_SUB: return gltang_vm_make_float(exec, x - y);
+-    case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
+-    case GLTANG_OP_DIV:
++    case GLTANG_OP_MUL: {
++      /* planted: a subnormal product is flushed when the JIT is on */
++      double planted_r = x * y;
++      if (exec->jit_threshold && planted_r != 0.0 && fabs(planted_r) < 2.2250738585072014e-308) {
++        planted_r = copysign(0.0, planted_r);
++      }
++      return gltang_vm_make_float(exec, planted_r);
++    }
++    case GLTANG_OP_DIV: {
+       if (y == 0.0) {
+         return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
+       }
+-      return gltang_vm_make_float(exec, x / y);
++      /* planted: a subnormal quotient is flushed when the JIT is on */
++      double planted_q = x / y;
++      if (exec->jit_threshold && planted_q != 0.0 && fabs(planted_q) < 2.2250738585072014e-308) {
++        planted_q = copysign(0.0, planted_q);
++      }
++      return gltang_vm_make_float(exec, planted_q);
++    }
+     default:
+       // `%` on floats is not supported (4.2).
+       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
