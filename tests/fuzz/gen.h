@@ -63,6 +63,17 @@
  *    computed value held in a variable or returned by a call (ctang does the
  *    arithmetic in place, as for D-028). A stored value is `(e + 0)`, which is
  *    a number of its own; an array literal's elements and `+` are not affected.
+ *  - D-031 is not steered around but read: a NaN prints as `nan` on lang-tang
+ *    and as `nan` or `-nan` on ctang, by the sign bit its CPU and compiler
+ *    gave it. The generator makes NaNs on purpose (`"nan" as float`, `inf - inf`
+ *    of the special constants below) and may print them; the differential reads
+ *    ctang's `-nan` as `nan` in float text only (oracle.h, `agree_reading_nan`)
+ *    and keeps every other byte exact. A NaN that reaches a string `+` is still
+ *    kept out by `san` (it is not the NaN that D-029 is about, but `san` cannot
+ *    tell a NaN from the errors it exists for); `sanf` is its float twin, which
+ *    lets a NaN through (`x != x` is true of a NaN and false of an error or a
+ *    map) and turns the errors and maps into 0, and `"f=" + sanf(float)` is how
+ *    a generated program builds text from a float that may be a NaN.
  *  - D-003 and D-021: `random.global`, `random.default` and native values.
  *    Only `random.seeded(n)` with a literal seed is used.
  *
@@ -196,8 +207,23 @@ class Builder {
     return chance(20) ? "(0 - " + s + ")" : s;
   }
 
+  /// The floats a program is built to meet: NaN of either sign and a payload,
+  /// the infinities, negative zero, subnormals (the least one, a middle one, the
+  /// largest), the least and the largest normal, and one ulp either side of 1.
+  /// Read from text because the language has no literal for most of them.
+  std::string special_float() {
+    static const char * const f[] = {"(\"nan\" as float)", "(\"-nan(0x1234)\" as float)", "(\"inf\" as float)", "(\"-inf\" as float)", "(-0.0)", "(0.0 * (-1.0))",
+        "(\"5e-324\" as float)", "(\"1e-320\" as float)", "(\"2.2250738585072009e-308\" as float)", "(\"2.2250738585072014e-308\" as float)",
+        "(\"1.7976931348623157e308\" as float)", "(\"-1.7976931348623157e308\" as float)", "(\"1.0000000000000002\" as float)", "(\"0.9999999999999999\" as float)",
+        "(\"4503599627370496.5\" as float)", "(\"9007199254740993\" as float)"};
+    return pick(f);
+  }
+
   std::string float_literal() {
     static const char * const f[] = {"0.5", "1.5", "2.25", "3.", ".75", "100.", "0.1", "0.3333", "7.125", "1.", "99999999999999999999999.0", "0.0", "123456.789", "2.5"};
+    if (chance(15)) {
+      return special_float();
+    }
     return pick(f);
   }
 
@@ -291,7 +317,7 @@ class Builder {
     if (d <= 0) {
       return chance(60) ? float_literal() : float_var();
     }
-    switch (below(14)) {
+    switch (below(16)) {
       case 0: return float_literal();
       case 1: case 2: return float_var();
       case 3: case 4: case 5: {
@@ -305,6 +331,12 @@ class Builder {
       case 10: return have_random_ ? "r0.next_float" : floating(d - 1);
       case 11: return have_math_ ? "math.pi" : floating(d - 1);
       case 12: return "(" + integer(d - 1) + " * " + floating(d - 1) + ")";
+      case 13: return special_float();
+      case 14: {
+        // inf - inf, 0 * inf, a subnormal halved, the largest doubled: the results the compiled tiers must reproduce.
+        static const char * const ops[] = {"+", "-", "*", "/"};
+        return "(" + special_float() + " " + pick(ops) + " " + (chance(40) ? special_float() : floating(d - 1)) + ")";
+      }
       default: return "(" + floating(d - 1) + " % " + floating(d - 1) + ")";  // Not supported: an error value
     }
   }
@@ -321,7 +353,7 @@ class Builder {
         return "(" + string(d - 1) + " + san(" + rhs + "))";
       }
       case 7: return "(\"n=\" + san(" + integer(d - 1) + "))";
-      case 8: return "(\"f=\" + san(" + floating(d - 1) + "))";
+      case 8: return "(\"f=\" + sanf(" + floating(d - 1) + "))";
       case 9: return "(\"b=\" + san(" + boolean(d - 1) + "))";
       case 10: return "(" + string(d - 1) + ")[" + slice(d - 1) + "]";
       case 11: return "(" + string(d - 1) + ")[" + integer(d - 1) + "]";
@@ -471,6 +503,11 @@ class Builder {
     code("}");
     code("function san(p0) {");
     code("if (p0 == p0) { return p0; }");
+    code("return 0;");
+    code("}");
+    code("function sanf(p0) {");
+    code("if (p0 == p0) { return p0; }");
+    code("if (p0 != p0) { return p0; }");
     code("return 0;");
     code("}");
     code("function fs(p0, p1) {");

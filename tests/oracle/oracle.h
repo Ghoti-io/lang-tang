@@ -133,6 +133,75 @@ inline bool agree(const Verdict & lang_tang, const Verdict & ctang) {
   return lang_tang.kind != Kind::Accept || lang_tang.nodes == ctang.nodes;
 }
 
+// ---------------------------------------------------------------------------
+// Reading a NaN (ledger row D-031)
+// ---------------------------------------------------------------------------
+//
+// lang-tang prints every NaN as `nan`. ctang prints what C does: `nan` or `-nan`
+// by the sign bit, which depends on the CPU and on the order the compiler gave an
+// operation's operands. The corpus differential does not read it away: the
+// program that shows D-031 must keep diverging, or its row goes stale. The
+// generated programs (which print NaNs on purpose) are compared with the rule
+// below instead, which changes exactly one thing: ctang's `-nan` is `nan`, where a
+// float's text is. Every other byte is compared as it is.
+//
+//   - in ctang's output, `-nan` is `nan`; lang-tang's output is not touched, so a
+//     lang-tang that printed `-nan` is a divergence;
+//   - in the result of a float, on either side, the `%.17g` text `-nan` is `nan`
+//     (the host-visible value keeps its sign and payload, and the two engines
+//     need not agree on them), and likewise a float element of an array result.
+
+/// `text` with each `-nan` read as `nan`. A float prints with no delimiter around
+/// it (`print(x); print(y);` is `xy`, and a template tag sits against its text), so
+/// its text cannot be told from its neighbours' and there is no boundary to test:
+/// every `-nan` is read. That is exact for the generated programs, which contain no
+/// string with `nan` in it (TheGeneratorMakesEveryKindOfFloat checks it), so every
+/// `nan` in their output is a float's.
+inline std::string read_nan_text(const std::string & text) {
+  std::string out;
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text.compare(i, 4, "-nan") == 0) {
+      out += "nan";
+      i += 3;
+    }
+    else {
+      out += text[i];
+    }
+  }
+  return out;
+}
+
+/// A verdict with the NaN signs read away from its result, and, when `output` is
+/// set, from its output too.
+inline Verdict reading_nan_as_nan(Verdict v, bool output) {
+  if (v.kind != Kind::Output) {
+    return v;
+  }
+  if (output) {
+    v.output = read_nan_text(v.output);
+  }
+  if (v.result_kind == "float" && v.result_text == "-nan") {
+    v.result_text = "nan";
+  }
+  if (v.result_kind == "array") {
+    // The elements are `kind:hex-of-text`; hex of "-nan" is 2d6e616e, of "nan" 6e616e.
+    const std::string from = "float:2d6e616e";
+    for (size_t at = v.result_text.find(from); at != std::string::npos; at = v.result_text.find(from, at + 1)) {
+      size_t end = at + from.size();
+      if (end >= v.result_text.size() || v.result_text[end] == ';' || v.result_text[end] == ']') {
+        v.result_text.replace(at, from.size(), "float:6e616e");
+      }
+    }
+  }
+  return v;
+}
+
+/// The fuzz differential's rule: `agree`, with ctang's `-nan` read as `nan`.
+inline bool agree_reading_nan(const Verdict & lang_tang, const Verdict & ctang) {
+  return agree(reading_nan_as_nan(lang_tang, false), reading_nan_as_nan(ctang, true));
+}
+
 /// Where two finished runs part company, in a few words: the first byte at
 /// which the outputs differ with a little of each around it, or the results.
 /// A verdict's own text is cut at 200 bytes and a long output can differ only

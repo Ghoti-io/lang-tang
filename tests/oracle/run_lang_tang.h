@@ -22,6 +22,7 @@
 #define GHOTI_IO_GLTANG_TESTS_ORACLE_RUN_LANG_TANG_H
 
 #include "exec_harness.h"
+#include "observer.h"
 #include "oracle/oracle.h"
 #include "test_helpers.h"
 
@@ -166,6 +167,52 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
   if (compiled_calls) {
     *compiled_calls += context.jit_stats().calls;
   }
+  if (r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) {
+    return Verdict::paused();
+  }
+  if (r != GRCORE_OK) {
+    throw std::runtime_error("lang-tang's run ended with core result " + std::to_string((int)r));
+  }
+  std::string kind, text;
+  canonical_result(context.execution, &kind, &text);
+  return Verdict::ran(context.rendered(), kind, text);
+}
+
+/// Like lang_tang_run, with the frame observer attached for the whole run so that the
+/// trace holds, at each poll (the first `limit` of them; the rest are counted), the
+/// frames with every float slot and variable as its 64 bits. The interpreter against
+/// the JIT over a generated program is two of these (`jit_threshold` 0 and 1), compared
+/// by observer::first_divergence, floats by bits and any two NaNs equal. The same fuel,
+/// libraries and verdict rules as lang_tang_run.
+inline Verdict lang_tang_run_traced(const std::string & source, bool script, long jit_threshold, observer::Trace * trace, size_t limit,
+    uint64_t * compiled_calls = nullptr) {
+  tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
+  if (compiled.result == GLTANG_ERR_FORMAT) {
+    return Verdict::reject();
+  }
+  if (!compiled.ok()) {
+    throw std::runtime_error(std::string("lang-tang answered ") + gltang_result_string(compiled.result) + " to a compile");
+  }
+  tt::Config config;
+  config.fuel = kDifferentialFuel;
+  config.jit_threshold = jit_threshold;
+  tt::Context context(compiled.program, config);
+  if (!context.ok()) {
+    throw std::runtime_error("lang-tang could not make a context");
+  }
+  context.attach();
+  observer::Observer obs;
+  obs.trace.limit = limit;
+  obs.float_bits = &gltang_vm_test_float_bits;
+  if (obs.attach(context.context) != GRCORE_OK) {
+    throw std::runtime_error("the frame observer could not be attached");
+  }
+  GRCORE_Result r = grcore_run(context.context, gltang_execution_entry, context.execution, &context.outcome);
+  context.has_run = true;
+  if (compiled_calls) {
+    *compiled_calls += context.jit_stats().calls;
+  }
+  *trace = std::move(obs.trace);
   if (r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) {
     return Verdict::paused();
   }

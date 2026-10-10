@@ -1101,6 +1101,27 @@ D-028 (no array is repeated or sliced), D-029 (the right operand of a string
 `+` is `san(x)`, which turns an error into 0) and D-030 (a value stored into an
 array element is `(e + 0)`).
 
+**Floats (spec-runtime-float, story 1).** The generator makes floats on purpose:
+NaN of either sign and a payload (read from text, `"-nan(0x1234)" as float`),
+the infinities, negative zero, subnormals, the least and largest normal, and one
+ulp either side of 1, alone and as operands of each other (`inf - inf`, a
+subnormal halved, the largest doubled), and a program may print them. D-031 is
+the one recorded departure it does not steer around: ctang prints a NaN as `nan`
+or `-nan` by the sign bit, lang-tang as `nan`. The comparison with ctang
+(`oracle::agree_reading_nan`) reads ctang's `-nan` as `nan` anywhere in its
+output (a float prints with no delimiter around it, and the generator makes no
+string with `nan` in it, which the generator test checks), reads a NaN's sign away
+from a float result, and compares every other byte exactly; the corpus comparison
+stays strict so the program that shows D-031 keeps diverging. `sanf` is
+`san`'s twin that lets a NaN through to a string. A second comparison needs no
+ctang: the same programs run by the interpreter and with every function compiled
+at its first poll, with the frame observer attached, so that the first polls'
+float slots and variables are compared by their bits (any two NaNs agree) as well as
+the output and the result (`FuzzDiff.TiersAgree*`; `FUZZ_DIFF_COUNT` makes
+`TierCampaign` run more). Floats still exit to the interpreter, so today it is
+the instrument waiting for stories 6 and 7, shown to fail on a planted one-ulp
+difference, a NaN where a number belongs and an altered output.
+
 `make test-oracle` runs the fixed batch (`FuzzDiff.FixedBatch`: seeds 1 to 220,
 both modes, 440 programs) in 9 seconds; `make fuzz-diff FUZZ_DIFF_COUNT=N
 FUZZ_DIFF_SEED=S` runs a campaign. A divergence prints its seed, mode and whole

@@ -296,6 +296,42 @@ TEST(Oracle, TheExecutionComparisonSeesAMutatedOutputAndAMutatedResult) {
   EXPECT_NE(j2.failures[0].find(file), std::string::npos);
 }
 
+TEST(Oracle, TheNaNRuleOfTheFuzzDifferentialReadsCtangsMinusNanAndNothingElse) {
+  // D-031. The corpus comparison (`agree`) stays strict, so the program that shows
+  // the row keeps diverging; the generated programs are compared with
+  // `agree_reading_nan`, which changes ctang's `-nan` to `nan` and no other byte.
+  auto ran = [](const std::string & out, const std::string & kind = "null", const std::string & text = "") {
+    return oracle::Verdict::ran(out, kind, text);
+  };
+  EXPECT_FALSE(oracle::agree(ran("f=nan"), ran("f=-nan"))) << "the strict rule sees D-031";
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("f=nan"), ran("f=-nan")));
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("nannannan[1]"), ran("-nan-nan-nan[1]"))) << "floats print with no delimiter";
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("<y" "nan" "x"), ran("<y-nanx"))) << "or against their text";
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("f=nan"), ran("f=nan")));
+  // Every other byte is exact.
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=nan1"), ran("f=-nan2")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=nan"), ran("f=-nan ")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=nan"), ran("f=-na")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=0."), ran("f=-nan"))) << "a number where ctang has a NaN";
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=nan"), ran("f=-0.")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=-0."), ran("f=0.")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=-inf"), ran("f=inf")));
+  // It is ctang's `-nan` that is read: lang-tang printing one is a divergence.
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=-nan"), ran("f=nan")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("f=-nan"), ran("f=-nan")));
+  // The result of a float: `%.17g` carries a NaN's sign, which is not compared.
+  EXPECT_FALSE(oracle::agree(ran("", "float", "nan"), ran("", "float", "-nan")));
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("", "float", "nan"), ran("", "float", "-nan")));
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("", "float", "-nan"), ran("", "float", "nan")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("", "float", "0"), ran("", "float", "-nan")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("", "float", "1.0000000000000002"), ran("", "float", "1")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("", "string", "nan"), ran("", "string", "-nan"))) << "only a float's result text";
+  // A float element of an array result (`kind:hex-of-text`: 2d6e616e is "-nan").
+  EXPECT_TRUE(oracle::agree_reading_nan(ran("", "array", "2[float:6e616e;integer:31]"), ran("", "array", "2[float:2d6e616e;integer:31]")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("", "array", "2[float:6e616e;integer:31]"), ran("", "array", "2[float:2d6e616e;integer:32]")));
+  EXPECT_FALSE(oracle::agree_reading_nan(ran("", "array", "1[string:6e616e]"), ran("", "array", "1[string:2d6e616e]")));
+}
+
 TEST(Oracle, ARunawayIsKilledOnTheCtangSideAndPausedOnTheLangTangSideAndThatAgrees) {
   const char * runner = runner_or_fail();
   ASSERT_NE(runner, nullptr);
