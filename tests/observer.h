@@ -20,18 +20,18 @@
  * What it does not record, and why: a slot's raw bits when the slot holds an
  * engine value (its inspected text is recorded instead, because the bits are
  * heap addresses that differ from run to run and under a moving stack); the
- * address of a frame.
- *
- * A float is the exception that has a second channel. The inspected text of a
- * float is its value rounded to six decimals, so one ulp, a subnormal flushed to
- * zero and (since every NaN prints as nan) the sign and payload of a NaN are all
- * invisible in it. An Observer given a `FloatBits` reader (an engine's test-only
- * accessor: the engine's value word in, the double's 64 bits out, false if the
- * value is not a float) records the 64 bits of every float slot and variable
- * as well, and the comparison requires them equal, except that any two NaNs are
- * equal (CAP-5, CAP-8: the sign and payload of a NaN are not observable). The raw header words of a frame (function, pc, sp,
+ * address of a frame. The raw header words of a frame (function, pc, sp,
  * flags) are recorded as the text the inspector gives them, and they are
  * stable.
+ *
+ * Floats have a second channel. The inspected text of a float is its value
+ * rounded to six decimals with every NaN as nan, so one ulp, a subnormal flushed
+ * to zero and the sign and payload of a NaN are invisible in it. An Observer
+ * given a `FloatBits` reader (an engine's test-only accessor: the value word in,
+ * the double's 64 bits out, false if the value is not a float) also records the
+ * bits of every float slot and variable, and the comparison requires them equal,
+ * except that any two NaNs are equal: a program cannot observe a NaN's sign or
+ * payload, so a tier that produces a different one is not wrong.
  *
  * The comparison reports the first divergence with its poll index and the
  * frame, and says what differs. A trace that is a prefix of the other
@@ -103,6 +103,12 @@ struct Trace {
   /// every run alike.
   size_t limit = 20000;
   size_t total = 0;
+  /// After the first `limit` polls, every `sample_every`-th poll is recorded too, up
+  /// to `sample_cap` of them (0: none). Two runs of one program poll at the same
+  /// indices, so their samples line up; a late difference is then still seen.
+  size_t sample_every = 0;
+  size_t sample_cap = 0;
+  size_t sampled = 0;
 };
 
 namespace detail {
@@ -240,8 +246,15 @@ class Observer {
 
   static void handler(GRCORE_Context * context, void * value, GRCORE_PollCall * call) {
     Observer * self = static_cast<Observer *>(value);
-    ++self->trace.total;
-    if (self->trace.polls.size() >= self->trace.limit) {
+    size_t index = self->trace.total++;
+    if (index >= self->trace.limit) {
+      Trace & t = self->trace;
+      if (!t.sample_every || t.sampled >= t.sample_cap || (index - t.limit) % t.sample_every != 0) {
+        return;
+      }
+      ++t.sampled;
+    }
+    else if (self->trace.polls.size() >= self->trace.limit) {
       return;
     }
     PollRecord poll;

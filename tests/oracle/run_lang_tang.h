@@ -185,7 +185,7 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
 /// by observer::first_divergence, floats by bits and any two NaNs equal. The same fuel,
 /// libraries and verdict rules as lang_tang_run.
 inline Verdict lang_tang_run_traced(const std::string & source, bool script, long jit_threshold, observer::Trace * trace, size_t limit,
-    uint64_t * compiled_calls = nullptr) {
+    uint64_t * compiled_calls = nullptr, size_t sample_every = 0, size_t sample_cap = 0, GLTANG_JitStats * jit_stats = nullptr) {
   tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
   if (compiled.result == GLTANG_ERR_FORMAT) {
     return Verdict::reject();
@@ -203,6 +203,8 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
   context.attach();
   observer::Observer obs;
   obs.trace.limit = limit;
+  obs.trace.sample_every = sample_every;
+  obs.trace.sample_cap = sample_cap;
   obs.float_bits = &gltang_vm_test_float_bits;
   if (obs.attach(context.context) != GRCORE_OK) {
     throw std::runtime_error("the frame observer could not be attached");
@@ -211,6 +213,9 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
   context.has_run = true;
   if (compiled_calls) {
     *compiled_calls += context.jit_stats().calls;
+  }
+  if (jit_stats) {
+    *jit_stats = context.jit_stats();
   }
   *trace = std::move(obs.trace);
   if (r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) {

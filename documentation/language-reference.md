@@ -2,9 +2,7 @@
 
 This is the reference for the Tang language as lang-tang runs it. Once
 lang-tang and ctang reach parity this document is the standard and ctang is
-deprecated. It is not complete yet: [ctang's language
-reference](../../ctang/documentation/language-reference.md) still describes
-everything this document does not cover, and a reader should take that one as
+deprecated. It is not complete yet: the language reference in the `documentation` directory of the ctang repository (`documentation/language-reference.md` there) still describes everything this document does not cover, and a reader should take that one as
 the base and this one as the amendments. **Where the two differ, this one
 wins**, and the [divergence ledger](divergence-ledger.md) lists each
 difference with the program that shows it.

@@ -3987,6 +3987,17 @@ TEST(FloatPrinting, EveryNaNPrintsAsNanWhateverItsSignAndPayload) {
     TEST_PROGRAM_TEARDOWN();
   }
   {
+    // What the reference says of a NaN and of negative zero: false in every ordered
+    // comparison, nan in a container, -0. equal to 0. and printed with its sign.
+    TEST_PROGRAM_SETUP(
+        "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"
+        "n = big - big; z = -0.0; m = {k: n};\n"
+        "print(n < 1.0); print(n > 1.0); print(n <= n); print(n >= n); print(1.0 < n); print(\" \");\n"
+        "print(z == 0.0); print(\" \"); print(z); print(\" \"); print([n, 1.5]); print(\" \"); print(m); print(\" \"); print([n, 1.5] as string); print(\" \"); print(n + 1.5);");
+    EXPECT_EQ(context->raw(), "falsefalsefalsefalsefalse true -0. [nan, 1.5] {\"k\": nan} [nan, 1.5] nan");
+    TEST_PROGRAM_TEARDOWN();
+  }
+  {
     // A NaN is still not a number to a cast, and not equal to itself.
     TEST_PROGRAM_SETUP(
         "big = 99999999999999999999999.0; big = big * big; big = big * big; big = big * big; big = big * big; big = big * big;\n"

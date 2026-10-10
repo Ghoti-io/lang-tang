@@ -803,7 +803,6 @@ bool is_tiny_normal(uint64_t b) { return is_ordinary(b) && (b & kExponent) <= 0x
 uint64_t one_ulp_up(uint64_t b) { return b + 1u; }
 uint64_t flushed_to_zero(uint64_t b) { return b & kSign; }
 uint64_t a_nan(uint64_t) { return 0x7ff8000000000000ull; }
-uint64_t the_other_nan(uint64_t b) { return (b ^ kSign) ^ 0x1234u; }  // the other sign, another payload
 
 const Case & float_case(const std::vector<Case> & cases, const char * name) {
   for (const Case & c : cases) {
@@ -818,15 +817,18 @@ const Case & float_case(const std::vector<Case> & cases, const char * name) {
 struct FloatSurvey {
   size_t floats = 0, nans = 0, positive_zero = 0, negative_zero = 0, positive_infinity = 0, negative_infinity = 0, subnormals = 0, huge = 0, tiny = 0, ordinary = 0;
   bool negative_nan = false, positive_nan = false;
+  size_t nan_text_other_than_nan = 0, negative_zero_text_other = 0;  ///< the inspected text of a NaN is `nan`, of -0.0 `-0.`
 };
 
 FloatSurvey survey(const observer::Trace & trace) {
   FloatSurvey out;
-  auto see = [&](bool is_float, uint64_t b) {
+  auto see = [&](bool is_float, uint64_t b, const std::string & text) {
     if (!is_float) {
       return;
     }
     ++out.floats;
+    out.nan_text_other_than_nan += is_nan_float(b) && text != "nan";
+    out.negative_zero_text_other += b == kSign && text != "-0.";
     if (is_nan_float(b)) {
       ++out.nans;
       (b & kSign ? out.negative_nan : out.positive_nan) = true;
@@ -849,11 +851,11 @@ FloatSurvey survey(const observer::Trace & trace) {
   for (const auto & p : trace.polls) {
     for (const auto & f : p.frames) {
       for (const auto & s : f.slots) {
-        see(s.is_float, s.float_bits);
+        see(s.is_float, s.float_bits, s.text);
       }
       for (const auto & sc : f.scopes) {
         for (const auto & v : sc.variables) {
-          see(v.is_float, v.float_bits);
+          see(v.is_float, v.float_bits, v.text);
         }
       }
     }
@@ -880,6 +882,8 @@ TEST(Observer, TheFloatProgramsShowEveryKindOfFloatInTheTracesAsBits) {
     total.huge += one.huge;
     total.tiny += one.tiny;
     total.ordinary += one.ordinary;
+    EXPECT_EQ(one.nan_text_other_than_nan, 0u) << c.name << ": the debugger's text for a NaN, whatever its sign, is nan";
+    EXPECT_EQ(one.negative_zero_text_other, 0u) << c.name << ": and for negative zero -0.";
   }
   EXPECT_GT(total.floats, 200u) << "the traces carry the bits of the floats";
   EXPECT_GT(total.nans, 0u);
@@ -995,7 +999,7 @@ TEST(Observer, AnyTwoNaNsAgreeWhateverTheirSignAndPayload) {
   observer::Divergence d;
   // Every NaN the trace holds is replaced by one of the other sign and payload.
   size_t replaced = 0;
-  while (observer::plant_float_bits(&b.trace, [](uint64_t x) { return is_nan_float(x) && (x & 0xfffu) != 0x234u; }, the_other_nan) != SIZE_MAX) {
+  while (observer::plant_float_bits(&b.trace, [](uint64_t x) { return is_nan_float(x) && x != 0x7ff8000000005678ull; }, [](uint64_t) -> uint64_t { return 0x7ff8000000005678ull; }) != SIZE_MAX) {
     ++replaced;
     ASSERT_LT(replaced, 100000u);
   }

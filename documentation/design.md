@@ -1141,6 +1141,8 @@ batch (a crash or hang would lose the batch's verdicts).
 
 ### Divergences found, and what became of each
 
+The fuzz seeds cited below are those of the generator as it was before `spec-runtime-float` story 1, which changed its draw sequence (floats and `sanf` were added): the same seed now makes a different program. The corpus programs named in the ledger rows are the reproductions.
+
 - **Fixed in lang-tang** (with a test): a slice part held in a variable that is
   null was `Invalid index`, where ctang, whose parser pushes a null for every
   omitted part, takes any null as omitted (fuzz seed 8; `Slice.AVariableHolding
