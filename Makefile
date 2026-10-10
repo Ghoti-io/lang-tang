@@ -193,7 +193,12 @@ endif
 PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(PC_INSTALL_PATH)
 
 CXX := g++
-CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g -DGLTANG_TEST_DATA='"$(CURDIR)/tests"' $(EXTRA_CXXFLAGS)
+# -ffp-contract=off is named, not inherited: a fused multiply-add rounds once
+# where the interpreter's C rounds twice, so a float computed in compiled code
+# would differ on arm64 or under clang (whose default is "on"). GCC's default
+# is "off" only in the ISO modes used here. tools/check-fp-contract.sh fails
+# when any compile-flag set lacks it. Never -ffast-math.
+CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g -ffp-contract=off -DGLTANG_TEST_DATA='"$(CURDIR)/tests"' $(EXTRA_CXXFLAGS)
 CC := cc
 # -Wstrict-aliasing=1 and -fstrict-aliasing, named rather than inherited.
 # -Wall sets the aliasing warning to level 3, which is silent on the probe
@@ -204,7 +209,7 @@ CC := cc
 # shape is reported at level 1 and silent at 0, 2, and 3. Do not simplify it
 # to `*(int *)&local`, which fires at every level from 1 up and certifies
 # nothing. check-aliasing is the measurement.
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wfloat-conversion -fstrict-aliasing -Wstrict-aliasing=1 -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -ffp-contract=off -g $(EXTRA_CFLAGS)
 ifeq ($(OS_NAME), Windows)
 CFLAGS += -DGLTANG_STATIC
 CXXFLAGS += -DGLTANG_STATIC
@@ -385,7 +390,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 
 # coverage clears this: --coverage links the gcov runtime, whose mangle_path
 # check-symbols is right to reject in a shipping library.
-TEST_GATES ?= check-symbols check-aliasing check-stamps check-labels \
+TEST_GATES ?= check-symbols check-aliasing check-stamps check-fp-contract check-labels \
 	check-edges check-gates check-vscode check-backend-required check-oracle-absent examples cli-test fuzz-replay \
 	test-oracle check-planted-quick
 
@@ -667,7 +672,7 @@ $(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
 	@exit 1
 endif
 
-.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-aliasing test-nojit test-nodebug
+.PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-fp-contract check-aliasing test-nojit test-nodebug
 .PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest check-planted-relocate test-relocate test-relocate-run
 .PHONY: check-labels check-edges check-gates check-vscode check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -748,6 +753,9 @@ endif
 
 check-stamps: ## Fail if a compile rule names no flags stamp, or a stamp omits a variable
 	@python3 tools/check-stamps.py
+
+check-fp-contract: ## Fail if a compile-flag set lacks -ffp-contract=off (a fused multiply-add changes guest floats)
+	@tools/check-fp-contract.sh
 
 ####################################################################
 # Layering gates (AD-2, AD-3, AD-14)
@@ -901,7 +909,7 @@ TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile
 # of its own, running the whole unit suite, the command's test, the examples and
 # the gates that apply; it does not repeat the torture modes, which exercise
 # the loop it shares with the JIT arm.
-NOJIT_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates check-vscode check-oracle-absent examples cli-test fuzz-replay
+NOJIT_GATES := check-symbols check-aliasing check-stamps check-fp-contract check-labels check-edges check-gates check-vscode check-oracle-absent examples cli-test fuzz-replay
 JIT_THRESHOLD_ENV := GLTANG_TEST_JIT_THRESHOLD=1
 
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
@@ -967,7 +975,7 @@ test-nojit: ## The JIT=no arm: build without the JIT in its own tree and run its
 # they happen to be installed. The two hosts are not built, test_tang_dap is
 # left out, and the gates that remain are the ones that need no host. PREFIX is
 # required: it is the prefix that is copied, minus those two.
-NODEBUG_GATES := check-symbols check-aliasing check-stamps check-labels check-edges check-gates fuzz-replay
+NODEBUG_GATES := check-symbols check-aliasing check-stamps check-fp-contract check-labels check-edges check-gates fuzz-replay
 test-nodebug: ## The WITH_DEBUG=no arm: build and test without runtime-debug and text visible
 ifndef PREFIX
 	@printf 'test-nodebug: PREFIX is needed (it names the prefix whose runtime-debug and text are hidden)\n' >&2; exit 1
@@ -1469,7 +1477,7 @@ fuzz-replay: $(FUZZ_REPLAYS) ## Feed every corpus and seed file once through the
 FUZZ_CC ?= clang
 FUZZ_CC_OK := $(shell command -v $(FUZZ_CC) 2>/dev/null)
 SAN_CHECKS := $(UBSAN_CHECKS)
-FUZZ_SAN := -fsanitize=address,$(SAN_CHECKS) -fno-sanitize-recover=$(SAN_CHECKS) \
+FUZZ_SAN := -fsanitize=address,$(SAN_CHECKS) -fno-sanitize-recover=$(SAN_CHECKS) -ffp-contract=off \
             -fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
