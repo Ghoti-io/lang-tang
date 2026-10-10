@@ -577,6 +577,22 @@ uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution) {
   return execution ? execution->natives_called : 0;
 }
 
+/*
+ * For the tests only: whether a slot or variable word (of kind VALUE) is a float
+ * and, if so, its 64 bits. The frame differential compares floats by these bits,
+ * which the inspect text (six decimals, every NaN as nan) does not carry.
+ * Declared in vm/test_hooks.h.
+ */
+bool gltang_vm_test_float_bits(uint64_t value, uint64_t * bits) {
+  GLTANG_Value v = (GLTANG_Value)value;
+  if (gltang_vm_kind(v) != GLTANG_KIND_FLOAT) {
+    return false;
+  }
+  double d = gltang_vm_float(v);
+  memcpy(bits, &d, sizeof(d));
+  return true;
+}
+
 GLTANG_Value gltang_vm_native_continuation(GLTANG_Execution * exec, GLTANG_Value callee, GLTANG_Value state) {
   const GLTANG_NativeObject * native = gltang_object(callee);
   const GLTANG_LibraryMember * member = native->member;

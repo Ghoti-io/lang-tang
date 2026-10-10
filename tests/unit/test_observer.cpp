@@ -130,6 +130,7 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
   context.add_native_library();
   observer::Observer obs;
   obs.trace.limit = std::min(c.limit, cap);
+  obs.float_bits = &gltang_vm_test_float_bits;  // floats are compared by their bits as well as their text
   EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
   if (extra) {
     extra(context.context);
@@ -405,6 +406,48 @@ std::vector<Case> native_cases() {
   return cases;
 }
 
+/// Float programs (spec-runtime-float, CAP-5): +-0, +-inf, NaN, subnormals, the
+/// largest and smallest normal magnitudes, and integers mixed with floats,
+/// inside functions (which tier up) and at the top level. Their float slots and
+/// variables are compared by bits, any two NaNs equal. The text of a float is its
+/// value rounded to six decimals, so a one-ulp error, a flushed subnormal and
+/// a NaN's sign are invisible to it.
+std::vector<Case> float_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, uint64_t step) {
+    Case c;
+    c.name = "floats/" + name;
+    c.source = source;
+    c.step = step;
+    c.limit = 400;
+    cases.push_back(c);
+  };
+  add("zeros, infinities and NaN", R"TANG(function mix(a, b) { s = a + b; p = a * b; d = a - b; return s; }
+big = "1e308" as float; pinf = big * 10.0; ninf = 0.0 - pinf; nan = pinf - pinf; pz = 0.0; nz = -0.0;
+i = 0; while (i < 4) { r1 = mix(pinf, 1.5); r2 = mix(ninf, 2.0); r3 = mix(nz, pz); r4 = mix(nan, 1.0); r5 = mix(nz, nz); lt = nan < 1.0; i += 1; }
+print(r1); print(" "); print(r2); print(" "); print(r3); print(" "); print(r4); print(" "); print(r5); print(" "); print(lt); print(" "); print(pinf == ninf); print(nz == pz);
+)TANG", 17);
+  add("subnormals", R"TANG(function halve(x) { y = x / 2.0; return y; }
+tiny = "1e-320" as float; sub = tiny; i = 0; while (i < 4) { sub = halve(sub); twice = sub * 2.0; quarter = sub * 0.25; i += 1; }
+least = "5e-324" as float; gone = halve(least); back = least + least;
+smallest_normal = "2.2250738585072014e-308" as float; below = halve(smallest_normal); sum = below + below;
+print(sub); print(" "); print(gone == 0.0); print(" "); print(back == least * 2.0); print(" "); print(below == 0.0); print(" "); print(sum == smallest_normal);
+)TANG", 19);
+  add("the largest and smallest magnitudes", R"TANG(function scale(a, b) { c = a * b; return c; }
+e200 = "1e-200" as float; big = "1.7976931348623157e308" as float; small = "2.2250738585072014e-308" as float;
+i = 0; while (i < 3) { x = scale(big, 0.5); y = scale(small, 0.5); z = scale(big, 2.0); w = big / small; v = small / big; u = scale(e200, e200); i += 1; }
+print(x == big / 2.0); print(" "); print(z); print(" "); print(w); print(" "); print(v == 0.0); print(" "); print(y == 0.0); print(" "); print(u == 0.0);
+)TANG", 23);
+  add("integers mixed with floats", R"TANG(function series(n, x) { acc = 0.0; i = 0; while (i < n) { acc = acc + i * x; acc = acc - i / 2; i += 1; } return acc; }
+function widen(k) { f = k + 0.0; g = f * 3; h = g - k; return h; }
+r = series(12, 0.1); s = series(5, 1.5);
+a = widen(9007199254740993); b = widen(0 - 9007199254740993); c = widen(576460752303423487); d = widen(0 - 576460752303423488); e = widen(7);
+m = 7 / 2; n = 7 / 2.0; o = 7.5 / 2; p = 3 * 0.1; q = 0.1 + 0.2; t = (0.1 + 0.2) == 0.3; u = 3 > 2.5; w = 2 == 2.0;
+print(r); print(" "); print(s); print(" "); print(a == b); print(" "); print(c); print(" "); print(e); print(" "); print(m); print(" "); print(n); print(" "); print(t); print(u); print(w);
+)TANG", 29);
+  return cases;
+}
+
 std::vector<Case> all_cases() {
   std::vector<Case> cases = corpus_cases("script", tt::Mode::Script, 40);
   for (Case & c : generated_cases(6)) {
@@ -420,6 +463,9 @@ std::vector<Case> all_cases() {
     cases.push_back(std::move(c));
   }
   for (Case & c : native_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : float_cases()) {
     cases.push_back(std::move(c));
   }
   return cases;
@@ -734,6 +780,288 @@ TEST(ObserverFails, AChangedVariableAndALocationAreReportedToo) {
   EXPECT_EQ(d.poll, poll);
   EXPECT_EQ(d.frame, 2u);
   EXPECT_NE(d.what.find("location"), std::string::npos) << d.str();
+}
+
+// ---------------------------------------------------------------------------
+// Floats are compared by their bits (CAP-5)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint64_t kSign = 0x8000000000000000ull;
+constexpr uint64_t kExponent = 0x7ff0000000000000ull;
+constexpr uint64_t kFraction = 0x000fffffffffffffull;
+
+bool is_nan_float(uint64_t b) { return (b & kExponent) == kExponent && (b & kFraction) != 0; }
+bool is_infinity(uint64_t b) { return (b & ~kSign) == kExponent; }
+bool is_zero(uint64_t b) { return (b & ~kSign) == 0; }
+bool is_subnormal(uint64_t b) { return (b & kExponent) == 0 && (b & kFraction) != 0; }
+bool is_ordinary(uint64_t b) { return (b & kExponent) != kExponent && (b & kExponent) != 0; }
+bool is_huge(uint64_t b) { return is_ordinary(b) && (b & kExponent) >= 0x7fe0000000000000ull; }
+bool is_tiny_normal(uint64_t b) { return is_ordinary(b) && (b & kExponent) <= 0x0010000000000000ull; }
+
+uint64_t one_ulp_up(uint64_t b) { return b + 1u; }
+uint64_t flushed_to_zero(uint64_t b) { return b & kSign; }
+uint64_t a_nan(uint64_t) { return 0x7ff8000000000000ull; }
+uint64_t the_other_nan(uint64_t b) { return (b ^ kSign) ^ 0x1234u; }  // the other sign, another payload
+
+const Case & float_case(const std::vector<Case> & cases, const char * name) {
+  for (const Case & c : cases) {
+    if (c.name.find(name) != std::string::npos) {
+      return c;
+    }
+  }
+  ADD_FAILURE() << "no float case " << name;
+  return cases.front();
+}
+
+struct FloatSurvey {
+  size_t floats = 0, nans = 0, positive_zero = 0, negative_zero = 0, positive_infinity = 0, negative_infinity = 0, subnormals = 0, huge = 0, tiny = 0, ordinary = 0;
+  bool negative_nan = false, positive_nan = false;
+};
+
+FloatSurvey survey(const observer::Trace & trace) {
+  FloatSurvey out;
+  auto see = [&](bool is_float, uint64_t b) {
+    if (!is_float) {
+      return;
+    }
+    ++out.floats;
+    if (is_nan_float(b)) {
+      ++out.nans;
+      (b & kSign ? out.negative_nan : out.positive_nan) = true;
+    }
+    else if (is_infinity(b)) {
+      ++(b & kSign ? out.negative_infinity : out.positive_infinity);
+    }
+    else if (is_zero(b)) {
+      ++(b & kSign ? out.negative_zero : out.positive_zero);
+    }
+    else if (is_subnormal(b)) {
+      ++out.subnormals;
+    }
+    else {
+      ++out.ordinary;
+      out.huge += is_huge(b);
+      out.tiny += is_tiny_normal(b);
+    }
+  };
+  for (const auto & p : trace.polls) {
+    for (const auto & f : p.frames) {
+      for (const auto & s : f.slots) {
+        see(s.is_float, s.float_bits);
+      }
+      for (const auto & sc : f.scopes) {
+        for (const auto & v : sc.variables) {
+          see(v.is_float, v.float_bits);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(Observer, TheFloatProgramsShowEveryKindOfFloatInTheTracesAsBits) {
+  FloatSurvey total;
+  for (const Case & c : float_cases()) {
+    Observed o = observe(c, kPlain);
+    ASSERT_TRUE(o.finished) << c.name;
+    ASSERT_GT(o.trace.polls.size(), 10u) << c.name;
+    FloatSurvey one = survey(o.trace);
+    total.floats += one.floats;
+    total.nans += one.nans;
+    total.positive_zero += one.positive_zero;
+    total.negative_zero += one.negative_zero;
+    total.positive_infinity += one.positive_infinity;
+    total.negative_infinity += one.negative_infinity;
+    total.subnormals += one.subnormals;
+    total.huge += one.huge;
+    total.tiny += one.tiny;
+    total.ordinary += one.ordinary;
+  }
+  EXPECT_GT(total.floats, 200u) << "the traces carry the bits of the floats";
+  EXPECT_GT(total.nans, 0u);
+  EXPECT_GT(total.positive_zero, 0u);
+  EXPECT_GT(total.negative_zero, 0u);
+  EXPECT_GT(total.positive_infinity, 0u);
+  EXPECT_GT(total.negative_infinity, 0u);
+  EXPECT_GT(total.subnormals, 0u);
+  EXPECT_GT(total.huge, 0u) << "a value near the largest double";
+  EXPECT_GT(total.tiny, 0u) << "a value near the smallest normal double";
+  EXPECT_GT(total.ordinary, 0u);
+}
+
+#ifdef GLTANG_WITH_JIT
+TEST(Observer, TheFloatProgramsGiveTheSameFramesBitForBitInTheInterpreterAndWithTheJit) {
+  // Floats still exit to the interpreter (spec-runtime-float, stories 6 and 7
+  // compile them), so today this is the interpreter against the interpreter that
+  // compiled everything else; the day a float is compiled it is the instrument.
+  GLTANG_REQUIRE_JIT_BACKEND();
+  uint64_t entries = 0, floats = 0;
+  for (const Case & c : float_cases()) {
+    Observed plain = observe(c, kPlain);
+    Observed jit = observe(c, kJit);
+    EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitTorture), kJitTorture.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving), kJitMoving.label));
+    Observed lines = observe(c, kLinesPlain);
+    Observed lines_jit = observe(c, kLinesJit);
+    EXPECT_TRUE(same(c, lines, kLinesPlain.label, lines_jit, kLinesJit.label));
+    entries += jit.jit.entries + lines_jit.jit.entries;
+    floats += survey(jit.trace).floats;
+  }
+  EXPECT_GT(entries, 20u) << "compiled code ran: the comparison is not vacuous";
+  EXPECT_GT(floats, 100u);
+}
+#endif
+
+TEST(ObserverFails, AOneUlpDifferenceIsSeenByTheBitsAndNotByTheText) {
+  std::vector<Case> cases = float_cases();
+  const Case & c = float_case(cases, "magnitudes");
+  Observed a = observe(c, kPlain);
+  Observed control = observe(c, kPlain);
+  Observed b = observe(c, kPlain);
+  observer::Divergence d;
+  EXPECT_FALSE(observer::first_divergence(a.trace, control.trace, &d)) << "the control: " << d.str();
+  size_t poll = observer::plant_float_bits(&b.trace, is_ordinary, one_ulp_up);
+  ASSERT_NE(poll, SIZE_MAX);
+  EXPECT_FALSE(observer::first_divergence(a.trace, b.trace, &d, /*bits=*/false)) << "the text rounds one ulp away: " << d.str();
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_NE(d.what.find("float bits"), std::string::npos) << d.str();
+}
+
+TEST(ObserverFails, ASubnormalFlushedToZeroIsSeenByTheBitsAndNotByTheText) {
+  std::vector<Case> cases = float_cases();
+  const Case & c = float_case(cases, "subnormals");
+  Observed a = observe(c, kPlain);
+  Observed b = observe(c, kPlain);
+  observer::Divergence d;
+  size_t poll = observer::plant_float_bits(&b.trace, is_subnormal, flushed_to_zero);
+  ASSERT_NE(poll, SIZE_MAX) << "the program holds a subnormal";
+  EXPECT_FALSE(observer::first_divergence(a.trace, b.trace, &d, false)) << "a subnormal and zero both print as 0.: " << d.str();
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_NE(d.what.find("float bits"), std::string::npos) << d.str();
+}
+
+TEST(ObserverFails, ANaNWhereANumberBelongsIsSeen) {
+  std::vector<Case> cases = float_cases();
+  const Case & c = float_case(cases, "mixed");
+  Observed a = observe(c, kPlain);
+  Observed b = observe(c, kPlain);
+  observer::Divergence d;
+  size_t poll = observer::plant_float_bits(&b.trace, is_ordinary, a_nan);
+  ASSERT_NE(poll, SIZE_MAX);
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_EQ(d.poll, poll);
+  EXPECT_NE(d.what.find("float bits"), std::string::npos) << d.str();
+  // And the other way: a number where a NaN belongs.
+  Observed n = observe(float_case(cases, "infinities"), kPlain);
+  Observed o = observe(float_case(cases, "infinities"), kPlain);
+  ASSERT_NE(observer::plant_float_bits(&o.trace, is_nan_float, [](uint64_t) -> uint64_t { return 0x3ff0000000000000ull; }), SIZE_MAX);
+  ASSERT_TRUE(observer::first_divergence(n.trace, o.trace, &d));
+  EXPECT_NE(d.what.find("float bits"), std::string::npos) << d.str();
+}
+
+TEST(ObserverFails, AFloatInOnePlaceAndNotInTheOtherIsSeen) {
+  std::vector<Case> cases = float_cases();
+  Observed a = observe(float_case(cases, "mixed"), kPlain);
+  Observed b = observe(float_case(cases, "mixed"), kPlain);
+  observer::Divergence d;
+  bool done = false;
+  for (auto & p : b.trace.polls) {
+    for (auto & f : p.frames) {
+      for (auto & s : f.slots) {
+        if (!done && s.is_float) {
+          s.is_float = false;
+          done = true;
+        }
+      }
+    }
+  }
+  ASSERT_TRUE(done);
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_NE(d.what.find("float-ness"), std::string::npos) << d.str();
+}
+
+TEST(Observer, AnyTwoNaNsAgreeWhateverTheirSignAndPayload) {
+  std::vector<Case> cases = float_cases();
+  const Case & c = float_case(cases, "infinities");
+  Observed a = observe(c, kPlain);
+  Observed b = observe(c, kPlain);
+  observer::Divergence d;
+  // Every NaN the trace holds is replaced by one of the other sign and payload.
+  size_t replaced = 0;
+  while (observer::plant_float_bits(&b.trace, [](uint64_t x) { return is_nan_float(x) && (x & 0xfffu) != 0x234u; }, the_other_nan) != SIZE_MAX) {
+    ++replaced;
+    ASSERT_LT(replaced, 100000u);
+  }
+  EXPECT_GT(replaced, 0u);
+  FloatSurvey before = survey(a.trace), after = survey(b.trace);
+  EXPECT_EQ(before.nans, after.nans);
+  EXPECT_FALSE(observer::first_divergence(a.trace, b.trace, &d)) << d.str();
+  // Two programs that build a NaN differently (a different sign and payload, read
+  // from text) and are otherwise one program: the traces hold different bits and
+  // agree.
+  auto program = [](const char * text) {
+    Case k;
+    k.name = "nan";
+    k.source = std::string("x = \"") + text + "\" as float; i = 0; while (i < 6) { y = x + 1.0; i += 1; } print(y);";
+    k.step = 9;
+    return k;
+  };
+  Observed p = observe(program("nan"), kPlain);
+  Observed q = observe(program("-nan(0x1234)"), kPlain);
+  uint64_t bits_p = 0, bits_q = 0;
+  for (const auto & poll : p.trace.polls) {
+    for (const auto & f : poll.frames) {
+      for (const auto & sc : f.scopes) {
+        for (const auto & v : sc.variables) {
+          if (v.name == "x" && v.is_float) {
+            bits_p = v.float_bits;
+          }
+        }
+      }
+    }
+  }
+  for (const auto & poll : q.trace.polls) {
+    for (const auto & f : poll.frames) {
+      for (const auto & sc : f.scopes) {
+        for (const auto & v : sc.variables) {
+          if (v.name == "x" && v.is_float) {
+            bits_q = v.float_bits;
+          }
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(is_nan_float(bits_p));
+  EXPECT_TRUE(is_nan_float(bits_q));
+  EXPECT_NE(bits_p, bits_q) << "the two programs hold NaNs of different sign and payload";
+  EXPECT_FALSE(observer::first_divergence(p.trace, q.trace, &d)) << d.str();
+  EXPECT_EQ(p.describe(), q.describe());
+}
+
+TEST(ObserverFails, TwoRunsOneUlpApartWhoseTextIsTheSameDiverge) {
+  // Not a planted trace: two programs that hold 1 and the double after 1, which
+  // both print as "1.". The text channel cannot tell them apart; the bits can.
+  auto program = [](const char * text) {
+    Case k;
+    k.name = "ulp";
+    k.source = std::string("x = \"") + text + "\" as float; i = 0; while (i < 6) { y = x + 0.0; i += 1; } print(y);";
+    k.step = 9;
+    return k;
+  };
+  Observed a = observe(program("1.0"), kPlain);
+  Observed b = observe(program("1.0000000000000002"), kPlain);
+  EXPECT_EQ(a.describe(), b.describe()) << "the output and result are the same";
+  observer::Divergence d;
+  EXPECT_FALSE(observer::first_divergence(a.trace, b.trace, &d, false)) << "the text is the same at every poll: " << d.str();
+  ASSERT_TRUE(observer::first_divergence(a.trace, b.trace, &d));
+  EXPECT_NE(d.what.find("float bits"), std::string::npos) << d.str();
 }
 
 // ---------------------------------------------------------------------------

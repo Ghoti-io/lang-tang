@@ -20,7 +20,16 @@
  * What it does not record, and why: a slot's raw bits when the slot holds an
  * engine value (its inspected text is recorded instead, because the bits are
  * heap addresses that differ from run to run and under a moving stack); the
- * address of a frame. The raw header words of a frame (function, pc, sp,
+ * address of a frame.
+ *
+ * A float is the exception that has a second channel. The inspected text of a
+ * float is its value rounded to six decimals, so one ulp, a subnormal flushed to
+ * zero and (since every NaN prints as nan) the sign and payload of a NaN are all
+ * invisible in it. An Observer given a `FloatBits` reader (an engine's test-only
+ * accessor: the engine's value word in, the double's 64 bits out, false if the
+ * value is not a float) records the 64 bits of every float slot and variable
+ * as well, and the comparison requires them equal, except that any two NaNs are
+ * equal (CAP-5, CAP-8: the sign and payload of a NaN are not observable). The raw header words of a frame (function, pc, sp,
  * flags) are recorded as the text the inspector gives them, and they are
  * stable.
  *
@@ -45,15 +54,23 @@
 
 namespace observer {
 
+/// An engine's reader of a float's bits: the value word of a slot or a variable
+/// in, the double's 64 bits out; false if the value is not a float.
+typedef bool (*FloatBits)(uint64_t value, uint64_t * bits);
+
 struct SlotRecord {
   GRCORE_SlotKind kind = GRCORE_SLOT_RAW;
   std::string text;
+  bool is_float = false;   ///< The value is a float and `float_bits` holds its bits (only with a FloatBits reader).
+  uint64_t float_bits = 0;
 };
 
 struct VariableRecord {
   std::string name;
   GRCORE_SlotKind kind = GRCORE_SLOT_RAW;
   std::string text;
+  bool is_float = false;
+  uint64_t float_bits = 0;
 };
 
 struct ScopeRecord {
@@ -130,7 +147,7 @@ inline std::string variable_text(const GRCORE_Context * context, const GRCORE_Ab
 
 /// Reads the whole stack through the frame walk. Valid where the walk is: at a
 /// poll, in a handler, or while a run is paused and the caller holds it.
-inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * out) {
+inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * out, FloatBits float_bits = nullptr) {
   GRCORE_FrameWalk walk;
   if (grcore_frame_walk_begin(context, &walk) != GRCORE_OK) {
     return false;
@@ -153,6 +170,9 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
       }
       else {
         slot.text = detail::slot_text(frame, i);
+        if (float_bits && slot.kind == GRCORE_SLOT_VALUE) {
+          slot.is_float = float_bits(value, &slot.float_bits);
+        }
       }
       rec.slots.push_back(slot);
     }
@@ -174,6 +194,9 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
         var.name = variable.name ? variable.name : "";
         var.kind = variable.kind;
         var.text = detail::variable_text(context, frame, variable);
+        if (float_bits && variable.kind == GRCORE_SLOT_VALUE) {
+          var.is_float = float_bits(variable.value, &var.float_bits);
+        }
         scope.variables.push_back(var);
       }
       rec.scopes.push_back(scope);
@@ -187,6 +210,8 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
 class Observer {
  public:
   Trace trace;
+  /// Set before `attach`: records the bits of every float (see the file comment).
+  FloatBits float_bits = nullptr;
 
   Observer() = default;
   Observer(const Observer &) = delete;
@@ -221,7 +246,7 @@ class Observer {
     }
     PollRecord poll;
     poll.verdict = grcore_pollcall_verdict(call);
-    poll.captured = capture(context, &poll.frames);
+    poll.captured = capture(context, &poll.frames, self->float_bits);
     self->trace.polls.push_back(std::move(poll));
   }
 
@@ -277,8 +302,32 @@ inline std::string where(const FrameRecord & f) {
   return f.file + ":" + std::to_string(f.line);
 }
 
-/// Whether two frames differ, and how.
-inline bool compare_frames(const FrameRecord & a, const FrameRecord & b, size_t poll, size_t index, Divergence * d) {
+inline bool is_nan_bits(uint64_t bits) {
+  return (bits & 0x7ff0000000000000ull) == 0x7ff0000000000000ull && (bits & 0x000fffffffffffffull) != 0;
+}
+
+inline std::string hex64(uint64_t bits) {
+  char buf[24];
+  std::snprintf(buf, sizeof(buf), "0x%016llx", (unsigned long long)bits);
+  return buf;
+}
+
+/// Whether two float readings differ: by bits, with any two NaNs equal. Null
+/// when they agree, else what to say.
+template <typename R>
+inline const char * float_difference(const R & x, const R & y) {
+  if (x.is_float != y.is_float) {
+    return "float-ness";
+  }
+  if (x.is_float && x.float_bits != y.float_bits && !(is_nan_bits(x.float_bits) && is_nan_bits(y.float_bits))) {
+    return "float bits";
+  }
+  return nullptr;
+}
+
+/// Whether two frames differ, and how. With `bits` false the float channel is
+/// not read (a test shows what the text alone misses).
+inline bool compare_frames(const FrameRecord & a, const FrameRecord & b, size_t poll, size_t index, Divergence * d, bool bits = true) {
   auto at = [&](const std::string & what, const std::string & x, const std::string & y) {
     return differ(d, poll, true, index, what, x, y);
   };
@@ -304,6 +353,12 @@ inline bool compare_frames(const FrameRecord & a, const FrameRecord & b, size_t 
     if (a.slots[i].text != b.slots[i].text) {
       return at("slot " + std::to_string(i) + " text", a.slots[i].text, b.slots[i].text);
     }
+    if (bits) {
+      if (const char * what = float_difference(a.slots[i], b.slots[i])) {
+        return at("slot " + std::to_string(i) + " " + what, a.slots[i].is_float ? hex64(a.slots[i].float_bits) + " (" + a.slots[i].text + ")" : "not a float",
+            b.slots[i].is_float ? hex64(b.slots[i].float_bits) + " (" + b.slots[i].text + ")" : "not a float");
+      }
+    }
   }
   if (a.scopes.size() != b.scopes.size()) {
     return at("scope count", std::to_string(a.scopes.size()), std::to_string(b.scopes.size()));
@@ -324,6 +379,13 @@ inline bool compare_frames(const FrameRecord & a, const FrameRecord & b, size_t 
       if (x.variables[v].text != y.variables[v].text) {
         return at("scope " + x.name + " variable `" + x.variables[v].name + "`", x.variables[v].text, y.variables[v].text);
       }
+      if (bits) {
+        if (const char * what = float_difference(x.variables[v], y.variables[v])) {
+          return at("scope " + x.name + " variable `" + x.variables[v].name + "` " + what,
+              x.variables[v].is_float ? hex64(x.variables[v].float_bits) + " (" + x.variables[v].text + ")" : "not a float",
+              y.variables[v].is_float ? hex64(y.variables[v].float_bits) + " (" + y.variables[v].text + ")" : "not a float");
+        }
+      }
     }
   }
   return false;
@@ -332,7 +394,10 @@ inline bool compare_frames(const FrameRecord & a, const FrameRecord & b, size_t 
 }  // namespace detail
 
 /// The first divergence between two traces, poll by poll; true if there is one.
-inline bool first_divergence(const Trace & a, const Trace & b, Divergence * out) {
+/// Floats are compared by their bits, any two NaNs equal, when the traces carry
+/// them; `bits` false compares the text alone, which is how a test shows what the
+/// bits channel adds.
+inline bool first_divergence(const Trace & a, const Trace & b, Divergence * out, bool bits = true) {
   size_t common = a.polls.size() < b.polls.size() ? a.polls.size() : b.polls.size();
   for (size_t p = 0; p < common; ++p) {
     const PollRecord & x = a.polls[p];
@@ -349,7 +414,7 @@ inline bool first_divergence(const Trace & a, const Trace & b, Divergence * out)
           std::to_string(x.frames.size()), std::to_string(y.frames.size()));
     }
     for (size_t f = 0; f < x.frames.size(); ++f) {
-      if (detail::compare_frames(x.frames[f], y.frames[f], p, f, out)) {
+      if (detail::compare_frames(x.frames[f], y.frames[f], p, f, out, bits)) {
         return true;
       }
     }
@@ -372,6 +437,34 @@ inline bool plant_slot_mismatch(Trace * trace, size_t poll, size_t frame, size_t
   }
   trace->polls[poll].frames[frame].slots[slot].text += "!";
   return true;
+}
+
+/// Replaces the bits of the first float slot or variable of a trace whose bits
+/// `select` accepts (in the order the comparison reads them: per poll, per frame,
+/// slots then variables) with `change(bits)`, and leaves its text alone: what an
+/// engine that computes one ulp off, flushes a subnormal or produces a NaN does
+/// where the text rounds the difference away. Returns the index of the poll it
+/// altered, or SIZE_MAX if the trace has no such float.
+inline size_t plant_float_bits(Trace * trace, bool (*select)(uint64_t), uint64_t (*change)(uint64_t)) {
+  for (size_t p = 0; p < trace->polls.size(); ++p) {
+    for (FrameRecord & f : trace->polls[p].frames) {
+      for (SlotRecord & s : f.slots) {
+        if (s.is_float && select(s.float_bits)) {
+          s.float_bits = change(s.float_bits);
+          return p;
+        }
+      }
+      for (ScopeRecord & sc : f.scopes) {
+        for (VariableRecord & v : sc.variables) {
+          if (v.is_float && select(v.float_bits)) {
+            v.float_bits = change(v.float_bits);
+            return p;
+          }
+        }
+      }
+    }
+  }
+  return SIZE_MAX;
 }
 
 /// Removes one poll from a trace (a poll the other run had and this one missed).

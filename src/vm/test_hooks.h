@@ -50,6 +50,13 @@ void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool 
 /** How many natives the execution has entered through the shared wrapper, from either tier. */
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 
+/**
+ * Whether a frame word of kind VALUE is a float, and if so its 64 bits (sign and
+ * payload of a NaN included). The inspect text rounds to six decimals and prints
+ * every NaN as nan, so the frame differential reads a float slot through this.
+ */
+bool gltang_vm_test_float_bits(uint64_t value, uint64_t * bits);
+
 /** Adds the test native of the given kind (see testnatives.c) to a library. */
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);
 
