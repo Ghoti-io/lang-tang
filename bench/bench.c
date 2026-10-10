@@ -656,6 +656,108 @@ static uint64_t jit_native_compiled_run(uint64_t iterations, double * elapsed) {
 static uint64_t jit_native_off_run(uint64_t iterations, double * elapsed) {
   return jit_native_run(setup_native_natives_off, iterations, elapsed);
 }
+
+/* Steady state (spec-runtime-calls story 10 follow-up). Every case above builds a fresh
+ * engine for each timed run, so each run pays the interpreter's warm-up and, for the compiled
+ * cases, the tier-up compile, and throws the compiled code away. A host that compiles a
+ * template or a function once and calls it many times does not. These cases use ONE
+ * execution per timed run: a script calls the function once (the first call, which
+ * includes the tier-up), many more times (the warm-up), and then a counted number of
+ * times, and a host native, `tick`, stamps the clock between the phases. The clock
+ * therefore covers the calls only (and two native calls, about 60 ns each, of the
+ * 4,000,000 ns and up that a phase takes). The public API has no way to call a guest
+ * function from the host, so the script loop is the way; each call enters the function
+ * from the interpreter's top level, as a host's call of it would. The first-call cases
+ * report the first call; the warm-call cases report the cost of one call in the timed
+ * phase. The tier-up and compile are the difference between the two. */
+static double steady_ticks[4];
+static int steady_tick_count;
+
+static bool bench_tick(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  if (steady_tick_count < 4) {
+    steady_ticks[steady_tick_count++] = now_ns();
+  }
+  gltang_call_return_integer(call, 0);
+  return true;
+}
+
+static void setup_tick(GLTANG_Execution * execution, int with_template) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "tick", bench_tick, NULL) != GLTANG_OK
+      || (with_template && gltang_library_add_template(library, "t", bench_template(), 100000, GLTANG_SCOPE_EMPTY) != GLTANG_OK)
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK) {
+    setup_failed("a tick library");
+  }
+  gltang_library_release(library);
+}
+
+/* which: 0 the first call, 1 one call of the timed phase. */
+static uint64_t steady_run(const char * source, int64_t expected, int with_template, int jit_on, int which, uint64_t timed, uint64_t iterations, double * elapsed) {
+  GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
+  uint64_t sink = 0;
+  double total = 0.0;
+  for (uint64_t i = 0; i < iterations; i++) {
+    Engine e;
+    engine_open(&e, program, GRCORE_UNLIMITED);
+    setup_tick(e.execution, with_template);
+    if (!jit_on) {
+      setup_jit_off(e.execution);
+    }
+    steady_tick_count = 0;
+    GRCORE_Outcome outcome;
+    GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
+    if (r != GRCORE_OK || steady_tick_count != 4 || gltang_execution_result_kind(e.execution) != GLTANG_KIND_INTEGER
+        || gltang_execution_result_integer(e.execution) != expected) {
+      setup_failed("a steady-state case that did not compute its answer");
+    }
+    total += which == 0 ? steady_ticks[1] - steady_ticks[0] : (steady_ticks[3] - steady_ticks[2]) / (double)timed;
+    (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
+    sink += (uint64_t)expected;
+    engine_close(&e);
+  }
+  *elapsed = total;
+  gltang_program_release(program);
+  return sink;
+}
+
+static uint64_t steady_fib(int n, int64_t value, int jit_on, int which, uint64_t warm, uint64_t timed, uint64_t iterations, double * elapsed) {
+  char source[640];
+  snprintf(source, sizeof(source),
+      "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } use tick; tick(); a = fib(%d); tick(); w = 0; "
+      "while (w < %llu) { fib(%d); w = w + 1; } tick(); s = 0; i = 0; while (i < %llu) { s = s + fib(%d); i = i + 1; } tick(); s;",
+      n, (unsigned long long)warm, n, (unsigned long long)timed, n);
+  return steady_run(source, value * (int64_t)timed, 0, jit_on, which, timed, iterations, elapsed);
+}
+
+static uint64_t steady_fib15_interpreted_first(uint64_t it, double * el) { return steady_fib(15, 610, 0, 0, 20, 200, it, el); }
+static uint64_t steady_fib15_compiled_first(uint64_t it, double * el) { return steady_fib(15, 610, 1, 0, 20, 200, it, el); }
+static uint64_t steady_fib15_interpreted_warm(uint64_t it, double * el) { return steady_fib(15, 610, 0, 1, 20, 200, it, el); }
+static uint64_t steady_fib15_compiled_warm(uint64_t it, double * el) { return steady_fib(15, 610, 1, 1, 20, 200, it, el); }
+static uint64_t steady_fib22_interpreted_first(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 0, 2, 20, it, el); }
+static uint64_t steady_fib22_compiled_first(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 0, 2, 20, it, el); }
+static uint64_t steady_fib22_interpreted_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 1, 2, 20, it, el); }
+static uint64_t steady_fib22_compiled_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 1, 2, 20, it, el); }
+
+/* A template called repeatedly in one execution. The template's function 0 is counted at
+ * its entry poll, once for each call, so the default threshold (200) is crossed by the
+ * warm-up and its compiled code, if it can be compiled, stays in the execution's table
+ * for the calls after. The template's output is 13 bytes. */
+static uint64_t steady_template(int jit_on, int which, uint64_t iterations, double * elapsed) {
+  const uint64_t warm = 400, timed = 2000;
+  char source[512];
+  snprintf(source, sizeof(source),
+      "use t; use tick; tick(); n = t().length; tick(); i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); "
+      "i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); n;",
+      (unsigned long long)warm, (unsigned long long)timed);
+  return steady_run(source, (int64_t)(13u * (1u + warm + timed)), 1, jit_on, which, timed, iterations, elapsed);
+}
+
+static uint64_t steady_template_interpreted_first(uint64_t it, double * el) { return steady_template(0, 0, it, el); }
+static uint64_t steady_template_compiled_first(uint64_t it, double * el) { return steady_template(1, 0, it, el); }
+static uint64_t steady_template_interpreted_warm(uint64_t it, double * el) { return steady_template(0, 1, it, el); }
+static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return steady_template(1, 1, it, el); }
 #endif
 
 /* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
@@ -798,6 +900,18 @@ static const Case cases[] = {
     {"jit-native-call-1M-interpreted", jit_native_interpreted_run, 5u, 1u},
     {"jit-native-call-1M-compiled", jit_native_compiled_run, 10u, 1u},
     {"jit-native-call-1M-natives-off", jit_native_off_run, 5u, 1u},
+    {"steady-fib-15-interpreted-first-call", steady_fib15_interpreted_first, 1000u, 2u},
+    {"steady-fib-15-compiled-first-call", steady_fib15_compiled_first, 1000u, 2u},
+    {"steady-fib-15-interpreted-warm-call", steady_fib15_interpreted_warm, 50u, 2u},
+    {"steady-fib-15-compiled-warm-call", steady_fib15_compiled_warm, 50u, 2u},
+    {"steady-fib-22-interpreted-first-call", steady_fib22_interpreted_first, 100u, 1u},
+    {"steady-fib-22-compiled-first-call", steady_fib22_compiled_first, 100u, 1u},
+    {"steady-fib-22-interpreted-warm-call", steady_fib22_interpreted_warm, 10u, 1u},
+    {"steady-fib-22-compiled-warm-call", steady_fib22_compiled_warm, 10u, 1u},
+    {"steady-template-interpreted-first-call", steady_template_interpreted_first, 1000u, 2u},
+    {"steady-template-compiled-first-call", steady_template_compiled_first, 1000u, 2u},
+    {"steady-template-interpreted-warm-call", steady_template_interpreted_warm, 50u, 2u},
+    {"steady-template-compiled-warm-call", steady_template_compiled_warm, 50u, 2u},
 #endif
 };
 
@@ -853,6 +967,13 @@ int main(int argc, char ** argv) {
     printf("%-30s best %12.2f ns/iter   median %12.2f ns/iter   (n=%llu, sink=%llx)\n",
         cases[c].name, best, median, (unsigned long long)n, (unsigned long long)sink);
 #ifdef GLTANG_WITH_JIT
+    if (strncmp(cases[c].name, "steady-", 7) == 0) {
+      printf("  %s: compiled calls %llu, call exits %llu, functions compiled %llu, compile failures %llu, entries %llu, deopts %llu, deepest chain %llu\n",
+          cases[c].name, (unsigned long long)last_jit_stats.calls,
+          (unsigned long long)(last_jit_stats.call_exits_remembered + last_jit_stats.call_exits_push_refused + last_jit_stats.call_exits_callee_guard + last_jit_stats.call_exits_native_stack),
+          (unsigned long long)last_jit_stats.functions_compiled, (unsigned long long)last_jit_stats.compile_failures,
+          (unsigned long long)last_jit_stats.entries, (unsigned long long)last_jit_stats.deopts, (unsigned long long)last_jit_stats.deepest_chain);
+    }
     if (strncmp(cases[c].name, "fib-", 4) == 0) {
       printf("  %s: compiled calls %llu, call exits %llu (remembered %llu, push refused %llu, callee guard %llu, native stack %llu), compiled at call %llu, deepest chain %llu, hook argument errors %llu\n",
           cases[c].name, (unsigned long long)last_jit_stats.calls,
