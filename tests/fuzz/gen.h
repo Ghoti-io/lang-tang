@@ -96,6 +96,7 @@ struct Program {
   uint64_t seed = 0;
   Mode mode = Mode::Script;
   std::string source;
+  std::vector<std::string> shapes;  ///< Where the generator records them: the shapes it emitted (generate_arith only).
 };
 
 namespace detail {
@@ -1103,6 +1104,9 @@ class ArithBuilder {
  public:
   explicit ArithBuilder(uint64_t seed) : e_(seed) {}
 
+  /// The names of the statement shapes and operand kinds emitted, in order of first emission.
+  const std::vector<std::string> & shapes() const { return shapes_; }
+
   std::string build() {
     line("big = \"1.7976931348623157e308\" as float; pinf = big * 10.0; ninf = 0.0 - pinf; nan = pinf - pinf; nz = -0.0;");
     line("tiny = \"5e-324\" as float; small = \"2.2250738585072014e-308\" as float; smax = 576460752303423487; smin = (0 - 576460752303423487) - 1;");
@@ -1126,14 +1130,20 @@ class ArithBuilder {
  private:
   std::mt19937_64 e_;
   std::string out_;
-  int functions_ = 0;
+  std::vector<std::string> shapes_;
 
   uint64_t below(uint64_t n) { return e_() % n; }
   bool chance(unsigned percent) { return below(100) < percent; }
   void line(const std::string & s) { out_ += s + "\n"; }
+  void note(const char * shape) {
+    for (const auto & x : shapes_) {
+      if (x == shape) {
+        return;
+      }
+    }
+    shapes_.push_back(shape);
+  }
   std::string pick_index() { return std::to_string(below(23)); }
-  template <size_t N>
-  const char * pick(const char * const (&items)[N]) { return items[below(N)]; }
 
   std::string literal() {
     static const char * const f[] = {"0.5", "1.5", "2.25", "0.1", "0.0", "3.0", "-1.5", "123456789.125", "9007199254740993.0", "0.30000000000000004", "100.0", "576460752303423424.0"};
@@ -1151,10 +1161,10 @@ class ArithBuilder {
   std::string operand(int fl, int in) {
     switch (below(10)) {
       case 0: case 1: case 2: case 3: return "x" + std::to_string(below(fl));
-      case 4: return literal();
-      case 5: return special();
-      case 6: return "i" + std::to_string(below(in));
-      case 7: return integer();
+      case 4: note("operand: a float literal"); return literal();
+      case 5: note("operand: a special float"); return special();
+      case 6: note("operand: an integer local"); return "i" + std::to_string(below(in));
+      case 7: note("operand: an integer literal"); return integer();
       case 8: return below(2) ? "p0" : "p1";
       default: return "j";
     }
@@ -1162,12 +1172,12 @@ class ArithBuilder {
   /// A divisor, steered to zero some of the time, to NaN and infinity, to -1 and to a bound.
   std::string divisor(int fl, int in) {
     switch (below(12)) {
-      case 0: return "0.0";
-      case 1: return "nz";
+      case 0: note("divisor: 0.0"); return "0.0";
+      case 1: note("divisor: negative zero"); return "nz";
       case 2: return "(x" + std::to_string(below(fl)) + " - x" + std::to_string(below(fl)) + ")";
       case 3: return "0";
-      case 4: return "nan";
-      case 5: return "pinf";
+      case 4: note("divisor: NaN"); return "nan";
+      case 5: note("divisor: infinity"); return "pinf";
       case 6: return "-1";
       case 7: return "(j - j)";
       case 8: return literal();
@@ -1178,9 +1188,9 @@ class ArithBuilder {
   std::string idivisor(int in) {
     switch (below(9)) {
       case 0: return "0";
-      case 1: return "-1";
-      case 2: return "(j - j)";
-      case 3: return "smin";
+      case 1: note("integer divisor: -1"); return "-1";
+      case 2: note("integer divisor: counter minus itself"); return "(j - j)";
+      case 3: note("integer divisor: smin"); return "smin";
       case 4: return "smax";
       case 5: return "j";
       case 6: return "2";
@@ -1202,28 +1212,34 @@ class ArithBuilder {
     std::string i = "i" + std::to_string(below(in));
     switch (below(16)) {
       case 0: case 1: case 2: {
+        note("float binary operation");
         std::string op = float_op();
         std::string right = op == "/" ? divisor(fl, in) : operand(fl, in);
         // The left operand is a float local (a raw source), so that the result is raw too: a local that
         // is a word on one path and a double on another would merge unequal kinds, which compiles with
-        // no raw slot at all. One statement in six has two operands that may both be words.
+        // no raw slot at all. One statement in seven (15%) has a left operand that may be a word.
         line(indent + a + " = " + (chance(85) ? "x" + std::to_string(below(fl)) : operand(fl, in)) + " " + op + " " + right + ";");
         break;
       }
       case 3:
+        note("negation");
         line(indent + a + " = -" + (chance(85) ? "x" + std::to_string(below(fl)) : operand(fl, in)) + ";");
         break;
       case 4:
+        note("branch on a comparison");
         line(indent + "if (" + operand(fl, in) + " " + compare_op() + " " + operand(fl, in) + ") { " + a + " = " + a + " + 1.5; } else { " + a + " = " + a + " * 0.5; }");
         break;
       case 5:
+        note("integer division");
         line(indent + i + " = " + integer() + " / " + idivisor(in) + ";");
         break;
       case 6:
+        note("modulo, integer or float dividend");
         // Mostly integers; a float operand now and then, which the interpreter refuses.
         line(indent + i + " = " + (chance(20) ? operand(fl, in) : integer()) + " % " + idivisor(in) + ";");
         break;
       case 7:
+        note("cast to int");
         // Casts to int: any float local, a special, and values beyond the range of either size.
         switch (below(5)) {
           case 0: line(indent + i + " = " + a + " as int;"); break;
@@ -1234,27 +1250,35 @@ class ArithBuilder {
         }
         break;
       case 8:
+        note("cast of an integer to float");
         line(indent + a + " = " + i + " as float;");
         break;
       case 9:
+        note("cast of an operand to float");
         line(indent + a + " = " + operand(fl, in) + " as float;");
         break;
       case 10:
+        note("comparison summed");
         line(indent + "acc = (acc + (" + a + " " + compare_op() + " " + operand(fl, in) + ")) % 1000;");
         break;
       case 11:
+        note("integer arithmetic");
         line(indent + i + " = " + i + " + " + integer() + " * " + integer() + ";");
         break;
       case 12:
+        note("integer modulo");
         line(indent + i + " = " + i + " % " + idivisor(in) + ";");
         break;
       case 13:
+        note("chain of two float operations");
         line(indent + a + " = x" + std::to_string(below(fl)) + " " + float_op() + " " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + ";");
         break;
       case 14:
+        note("printed comparison");
         line(indent + "print(" + a + " " + compare_op() + " " + operand(fl, in) + "); print(\"c\");");
         break;
       default:
+        note("comparison branch");
         line(indent + "if (" + a + " " + compare_op() + " " + operand(fl, in) + ") { acc = acc + 1; }");
         break;
     }
@@ -1312,7 +1336,6 @@ class ArithBuilder {
       default: line("  return acc;"); break;
     }
     line("}");
-    ++functions_;
   }
 };
 
@@ -1344,7 +1367,9 @@ inline Program generate_arith(uint64_t seed) {
   Program p;
   p.seed = seed;
   p.mode = Mode::Script;
-  p.source = detail::ArithBuilder(seed).build();
+  detail::ArithBuilder builder(seed);
+  p.source = builder.build();
+  p.shapes = builder.shapes();
   return p;
 }
 

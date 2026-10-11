@@ -44,6 +44,7 @@
 #include "fuzz/gen.h"
 
 #include <map>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -356,7 +357,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatCarryFloatsRawAcrossLoopsAndCall
   // tiers, so every poll and allocation collects while floats are held raw.
   GLTANG_REQUIRE_JIT_BACKEND();
   size_t agreed = 0, programs = 0, floats = 0, raw_seen = 0, shown = 0, torture_agreed = 0, torture_programs = 0;
-  uint64_t entries = 0, boxed = 0, compiled_calls = 0;
+  uint64_t entries = 0, boxed = 0, compiled_calls = 0, torture_entries = 0;
   // The shapes the generator must have made at least once, by the text that shows each.
   const std::pair<const char *, const char *> shapes[] = {
       {"a merge of unequal kinds", "if (p0 > 4) { q0 ="},
@@ -392,6 +393,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatCarryFloatsRawAcrossLoopsAndCall
       std::string why = tiers_difference(t);
       if (torture) {
         ++torture_programs;
+        torture_entries += t.jit_stats.entries;
         torture_agreed += why.empty();
       }
       else {
@@ -416,6 +418,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatCarryFloatsRawAcrossLoopsAndCall
   EXPECT_EQ(agreed, programs);
   EXPECT_EQ(torture_agreed, torture_programs);
   EXPECT_EQ(torture_programs, 30u);
+  EXPECT_GT(torture_entries, 30u) << "compiled code ran in the torture-and-verify arm too";
   EXPECT_GT(entries, 300u) << "compiled code ran: the comparison is not vacuous";
   EXPECT_GT(boxed, 300u) << "and rebuilt frames that held floats raw";
   EXPECT_GT(floats, 1000u);
@@ -438,30 +441,14 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideCompar
   size_t agreed = 0, programs = 0, floats = 0, raw_seen = 0, shown = 0, torture_agreed = 0, torture_programs = 0, with_errors = 0, nans = 0;
   uint64_t entries = 0, boxed = 0, compiled_calls = 0;
   std::map<std::string, size_t> error_kinds;
-  // The shapes the generator must have made at least once, by the text that shows each.
-  const std::pair<const char *, const char *> shapes[] = {
-      {"a float made by a cast of a parameter", " = p0 as float;"},
-      {"a float made by a cast of an integer", " as float;"},
-      {"a float literal sum", " = 0.5 + "},
-      {"a float divided by a steered zero", " / (x"},
-      {"a float divided by a literal zero", " / 0.0;"},
-      {"a division by negative zero", " / nz;"},
-      {"a division by a counter minus itself", " / (j - j);"},
-      {"an integer division", "i0 = "},
-      {"an integer division by a bound", " / smin;"},
-      {"an integer modulo", " % "},
-      {"a modulo of a float", "%"},
-      {"a negation", " = -"},
-      {"a comparison in a branch", "if (x"},
-      {"a comparison summed", "acc = (acc + ("},
-      {"a cast to int", " as int;"},
-      {"a printed comparison", "print(x"},
-      {"a returned float", "  return x"},
-      {"a global store of a float", "  gt = x"},
-      {"a mixed integer and float operation", " = i"},
-      {"a chain of two operations", " = x"},
-  };
+  // The shapes the generator must have emitted at least once, by the names it records for each statement
+  // case and operand kind it chooses (not by text that other statements could also contain).
+  const char * const shapes[] = {"float binary operation", "negation", "branch on a comparison", "integer division", "modulo, integer or float dividend", "cast to int",
+      "cast of an integer to float", "cast of an operand to float", "comparison summed", "integer arithmetic", "integer modulo", "chain of two float operations",
+      "printed comparison", "comparison branch", "operand: a float literal", "operand: a special float", "operand: an integer local", "operand: an integer literal",
+      "divisor: 0.0", "divisor: negative zero", "divisor: NaN", "divisor: infinity", "integer divisor: -1", "integer divisor: counter minus itself", "integer divisor: smin"};
   size_t seen_shape[sizeof shapes / sizeof shapes[0]] = {};
+  uint64_t torture_entries = 0;
   for (uint64_t seed = 1; seed <= 150; ++seed) {
     for (int torture = 0; torture < 2; ++torture) {
       if (torture && seed > 40) {
@@ -470,10 +457,11 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideCompar
       Tiers t;
       t.seed = seed;
       t.mode = gen::Mode::Script;
-      t.source = gen::generate_arith(seed).source;
+      gen::Program generated = gen::generate_arith(seed);
+      t.source = generated.source;
       if (!torture) {
         for (size_t k = 0; k < sizeof shapes / sizeof shapes[0]; ++k) {
-          seen_shape[k] += t.source.find(shapes[k].second) != std::string::npos;
+          seen_shape[k] += std::find(generated.shapes.begin(), generated.shapes.end(), shapes[k]) != generated.shapes.end();
         }
       }
       std::string plain_errors, jit_errors;
@@ -485,6 +473,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideCompar
       }
       if (torture) {
         ++torture_programs;
+        torture_entries += t.jit_stats.entries;
         torture_agreed += why.empty();
       }
       else {
@@ -514,6 +503,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideCompar
   EXPECT_EQ(agreed, programs);
   EXPECT_EQ(torture_agreed, torture_programs);
   EXPECT_EQ(torture_programs, 40u);
+  EXPECT_GT(torture_entries, 40u) << "compiled code ran in the torture-and-verify arm too: the 40 programs did not pass with the JIT never entering";
   EXPECT_GT(entries, 300u) << "compiled code ran: the comparison is not vacuous";
   EXPECT_GT(boxed, 100u) << "and rebuilt frames that held floats raw";
   EXPECT_GT(floats, 1000u);
@@ -524,7 +514,7 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideCompar
     EXPECT_GT(kind.second, 0u) << "no generated program made the error \"" << kind.first << "\"";
   }
   for (size_t k = 0; k < sizeof shapes / sizeof shapes[0]; ++k) {
-    EXPECT_GT(seen_shape[k], 0u) << "the generator made no program with " << shapes[k].first << ": a change to it has emptied this test of that shape";
+    EXPECT_GT(seen_shape[k], 0u) << "the generator emitted no \"" << shapes[k] << "\": a change to it has emptied this test of that shape";
   }
   std::printf("  fuzz-diff arithmetic: %zu programs (seeds 1 to 150) and %zu again under torture and verify, %zu and %zu agree; %zu programs with errors; %zu float slots compared by bits, %zu read raw, %llu boxed by rebuilds",
       programs, torture_programs, agreed, torture_agreed, with_errors, floats, raw_seen, static_cast<unsigned long long>(boxed));
