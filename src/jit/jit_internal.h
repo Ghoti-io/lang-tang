@@ -113,6 +113,7 @@ typedef struct GLTANG_JitCode {
   uint32_t code_count;        ///< Bytecode words of the function (the size of `call_sites`' index space).
   uint8_t * call_sites;       ///< One bit per bytecode index: a compiled call is emitted there. Owned.
   uint8_t * native_sites;     ///< One bit per bytecode index: a native call (a library call or a member load) is emitted there. Owned.
+  uint32_t max_converting;    ///< The most converting (raw `F64`) locations at any one site: the cells a frame of this function adds to the reservation (AD-27).
 } GLTANG_JitCode;
 
 /** @brief Why the last call exit happened, written by the hook that refused and read by the deopt hook. */
@@ -145,6 +146,12 @@ enum {
  */
 #define GLTANG_JIT_NATIVE_STACK 16384u
 
+/** @brief One extension of the reservation, and the call that made it. */
+typedef struct GLTANG_JitExtension {
+  uint64_t level;  ///< The compiled-call depth it belongs to: 0 for an entry, otherwise `chain` as the push left it.
+  size_t cells;
+} GLTANG_JitExtension;
+
 /** @brief The execution's JIT state. */
 typedef struct GLTANG_Jit {
   GLTANG_JitProgram * programs;  ///< Indexed by the program's index in the execution.
@@ -155,7 +162,14 @@ typedef struct GLTANG_Jit {
   GRCORE_RequestKind kind;       ///< The tier-up request kind.
   GRCORE_Port * port;            ///< Posts it; taken at the first post.
   GRJIT_NativeTable * natives;   ///< The thunks of the library calls and loads; NULL if it could not be made (then no site is compiled as one).
-  GRCORE_DeoptReservation * reservation;  ///< Made once; extended by each compiled call (by zero here: no converting location).
+  GRCORE_DeoptReservation * reservation;  ///< Made once, empty; extended by each entry and compiled call by the callee's `max_converting` (AD-27).
+  GLTANG_Value * pool;           ///< Float boxes made ahead of time, for `convert` to hand out: precise roots of the execution. The first `pool_count` are boxes not yet handed out.
+  size_t pool_count;
+  size_t pool_capacity;
+  GLTANG_JitExtension * ext;     ///< What the entries and pushes open now extended the reservation by, innermost last (only the nonzero ones).
+  size_t ext_count;
+  size_t ext_capacity;
+  size_t ext_floor;              ///< The first extension of the current run's calls: those below belong to the entry and to outer runs.
   uint64_t last_fword;           ///< The function the last counted poll was in, and its record: a loop polls one function over and over.
   GLTANG_JitFn * last_fn;
   size_t records_open;           ///< JIT activation records open now: each costs one unit of native depth that an interpreted run does not.
@@ -168,6 +182,9 @@ typedef struct GLTANG_Jit {
   bool test_calls_off;           ///< Test seam: compile no call sites.
   bool test_natives_off;         ///< Test seam: compile no library call or member load (as a backend that refuses natives would).
   bool test_fail_rebuild;        ///< Test seam: the deopt hook's rebuild fails.
+  uint64_t test_fail_extend_at;  ///< Test seam: the Nth nonzero extension of the reservation is refused (0: never).
+  uint64_t test_fail_pool_at;    ///< Test seam: the top-up of the pool after the Nth nonzero extension is refused (0: never).
+  uint64_t test_extends;         ///< The nonzero extensions asked for so far, for the two seams above.
   bool gc_at_push;               ///< Test seam, for GC torture: the push hook collects after the push, as the frame-push GC point of AD-28.
 } GLTANG_Jit;
 
@@ -203,6 +220,20 @@ void gltang_jit_mark_never(GLTANG_Execution * exec, GLTANG_Jit * jit, GLTANG_Jit
 
 /** @brief The function's record, or NULL. */
 GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uint64_t fword, bool create);
+
+/**
+ * @brief Extends the reservation by `cells` and tops the pool up to the new
+ *   capacity, recording the extension at `level`. A GC point (the pool's boxes
+ *   are heap objects, charged to the guest's memory budget). Zero cells does
+ *   nothing, allocates nothing and records nothing.
+ * @return False, with nothing changed, if the reservation or the pool could not
+ *   grow (counted in the statistics); the caller refuses the entry or the call.
+ */
+bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level);
+/** @brief Gives back the extensions above `count`, innermost first. Never allocates. */
+void gltang_jit_retract_to(GLTANG_Execution * exec, size_t count);
+/** @brief Gives back the innermost extension if it is this run's and was made at `level`. */
+void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level);
 
 // The hooks (hooks.c), one set for every build.
 extern const GRJIT_CallHooks gltang_jit_hooks;

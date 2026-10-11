@@ -49,6 +49,18 @@
  * (so it reads as the zero value slot the interpreter's frame holds, and is not
  * `DEAD`, which a read takes as a raw word).
  *
+ * A float constant is held raw. Each local and each operand position has a kind at
+ * every point of the code, `REF` (a value word, as above) or `F64` (a raw double),
+ * and a slot that is ever raw has a second, `F64` register beside its `REF` one;
+ * a frame state names exactly one of the two. The only source of a raw double is a
+ * float `CONST` (its bits, as the interpreter's constant has them); `LOAD_LOCAL`,
+ * `STORE_LOCAL`, `DUP`, `POP` and the jumps carry a kind unchanged, and every other
+ * instruction that reads a raw operand is an unconditional exit with the operand in
+ * its frame state, so compiled code never boxes: a rebuild does, once, from boxes
+ * made ahead of time (AD-27, boxes.c). Where the ways into a jump target disagree on
+ * a slot's kind, every raw source of the function becomes an exit and the analysis is
+ * run again, so the function is then compiled as it was before floats were carried.
+ *
  * Fuel is the same on every tier: every executed bytecode costs
  * `gltang_opcode_cost_table[op]`. Compiled code adds it directly to the
  * execution's `pending_fuel`, one add for each straight run of operations, before
@@ -94,6 +106,8 @@ typedef struct Ctx {
   GRJIT_Result err;               ///< The first builder error, sticky.
   GRJIT_VReg local[GLTANG_JIT_MAX_SLOTS];
   GRJIT_VReg stack[GLTANG_JIT_MAX_SLOTS];
+  GRJIT_VReg local_f[GLTANG_JIT_MAX_SLOTS];   ///< The `F64` register beside a local's `REF` one, where the local is ever raw.
+  GRJIT_VReg stack_f[GLTANG_JIT_MAX_SLOTS];   ///< The same for an operand position.
   GRJIT_VReg flag;                ///< The hidden parameter: 1 from the interpreter's entry, 0 from a compiled call.
   GRJIT_VReg zero;                ///< 0, typed as a reference: what a dead operand slot reads as.
   GRJIT_VReg flags;               ///< The frame's flags word (the activation's depth), a plain word.
@@ -133,7 +147,20 @@ typedef struct Ctx {
   uint32_t * local_fn;            ///< The same for this function's locals.
   uint8_t * call_sites;           ///< One bit per index where a compiled call is emitted.
   bool calls_on;
+
+  // The kinds (raw floats). `lk` and `sk` are the kind of each local and each
+  // operand position at the point being walked or emitted; `kind_at` is the
+  // merged state at a jump target.
+  uint8_t lk[GLTANG_JIT_MAX_SLOTS];
+  uint8_t sk[GLTANG_JIT_MAX_SLOTS];
+  bool ever_local[GLTANG_JIT_MAX_SLOTS];      ///< The local is raw somewhere in the code that is compiled.
+  bool ever_stack[GLTANG_JIT_MAX_SLOTS];
+  uint8_t ** kind_at;             ///< For a jump target: the kinds of the locals, then of the operand positions below its depth.
+  bool raw_off;                   ///< Every raw source is an exit (a merge disagreed on a kind).
+  bool conflict;                  ///< The walk found a merge whose ways in disagree on a kind.
 } Ctx;
+
+enum { KIND_REF = 0, KIND_F64 = 1 };
 
 #define B(call) \
   do { \
@@ -158,6 +185,17 @@ static bool small_int_constant(const Ctx * c, uint32_t index, int64_t * out) {
     return false;
   }
   *out = k->integer;
+  return true;
+}
+
+/** A float constant: the interpreter's double, as the 64 bits it has (never through arithmetic). */
+static bool float_constant(const Ctx * c, uint32_t index, int64_t * bits) {
+  if (index >= c->program->constant_count || c->program->constants[index].kind != GLTANG_CONST_FLOAT) {
+    return false;
+  }
+  uint64_t u;
+  memcpy(&u, &c->program->constants[index].number, sizeof(u));
+  *bits = (int64_t)u;
   return true;
 }
 
@@ -201,10 +239,120 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_FUNC:
       return a < c->program->function_count;
     case GLTANG_OP_CONST:
-      return small_int_constant(c, a, &unused);
+      return small_int_constant(c, a, &unused) || (!c->raw_off && float_constant(c, a, &unused));
     default:
       return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Kinds
+// ---------------------------------------------------------------------------
+
+static void set_stack_kind(Ctx * c, uint32_t position, uint8_t kind) {
+  c->sk[position] = kind;
+  if (kind == KIND_F64) {
+    c->ever_stack[position] = true;
+  }
+}
+
+static void set_local_kind(Ctx * c, uint32_t local, uint8_t kind) {
+  c->lk[local] = kind;
+  if (kind == KIND_F64) {
+    c->ever_local[local] = true;
+  }
+}
+
+/**
+ * Whether the instruction at depth `d` reads an operand that is raw. A carrier
+ * (`LOAD_LOCAL`, `STORE_LOCAL`, `DUP`, `POP`) does not read it, it moves it; every
+ * other instruction that does is an unconditional exit with the operand in its frame
+ * state, and the interpreter re-executes it.
+ */
+static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
+  switch (op) {
+    case GLTANG_OP_NEG:
+    case GLTANG_OP_NOT:
+    case GLTANG_OP_JMP_FALSE:
+    case GLTANG_OP_JMP_TRUE:
+    case GLTANG_OP_AND:
+    case GLTANG_OP_OR:
+    case GLTANG_OP_RET:
+    case GLTANG_OP_ATTR:
+      return d >= 1 && c->sk[d - 1] == KIND_F64;
+    case GLTANG_OP_ADD:
+    case GLTANG_OP_SUB:
+    case GLTANG_OP_MUL:
+    case GLTANG_OP_LT:
+    case GLTANG_OP_LE:
+    case GLTANG_OP_GT:
+    case GLTANG_OP_GE:
+    case GLTANG_OP_EQ:
+    case GLTANG_OP_NE:
+      return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
+    case GLTANG_OP_CALL:
+      for (int32_t p = d - 1 - (int32_t)a; p >= 0 && p < d; ++p) {
+        if (c->sk[p] == KIND_F64) {
+          return true;
+        }
+      }
+      return false;
+    default:
+      return false;
+  }
+}
+
+/** The effect on the kinds of an instruction that flows on (an exit changes nothing, since nothing follows it). */
+static void apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
+  int64_t unused;
+  switch (op) {
+    case GLTANG_OP_DUP:
+      set_stack_kind(c, (uint32_t)d, c->sk[d - 1]);
+      break;
+    case GLTANG_OP_NULL:
+    case GLTANG_OP_TRUE:
+    case GLTANG_OP_FALSE:
+    case GLTANG_OP_FUNC:
+    case GLTANG_OP_LOAD_GLOBAL:
+    case GLTANG_OP_USE:
+      set_stack_kind(c, (uint32_t)d, KIND_REF);
+      break;
+    case GLTANG_OP_CONST:
+      set_stack_kind(c, (uint32_t)d, !c->raw_off && float_constant(c, a, &unused) ? KIND_F64 : KIND_REF);
+      break;
+    case GLTANG_OP_LOAD_LOCAL:
+      set_stack_kind(c, (uint32_t)d, c->lk[a]);
+      break;
+    case GLTANG_OP_STORE_LOCAL:
+      set_local_kind(c, a, c->sk[d - 1]);
+      break;
+    case GLTANG_OP_NEG:
+    case GLTANG_OP_NOT:
+    case GLTANG_OP_ATTR:
+      set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
+      break;
+    case GLTANG_OP_ADD:
+    case GLTANG_OP_SUB:
+    case GLTANG_OP_MUL:
+    case GLTANG_OP_LT:
+    case GLTANG_OP_LE:
+    case GLTANG_OP_GT:
+    case GLTANG_OP_GE:
+    case GLTANG_OP_EQ:
+    case GLTANG_OP_NE:
+      set_stack_kind(c, (uint32_t)d - 2u, KIND_REF);
+      break;
+    case GLTANG_OP_CALL:
+      set_stack_kind(c, (uint32_t)d - 1u - a, KIND_REF);
+      break;
+    default:
+      break;
+  }
+}
+
+static void kinds_all_ref(Ctx * c) {
+  memset(c->lk, KIND_REF, sizeof(c->lk));
+  memset(c->sk, KIND_REF, sizeof(c->sk));
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +602,16 @@ static bool reach(Ctx * c, uint32_t target, int32_t d, const uint32_t * cur, siz
       memcpy(mine, cur, (size_t)d * sizeof(uint32_t));
     }
     c->prod_at[target] = mine;
+    uint8_t * kinds = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(c->exec), (size_t)c->lc + (size_t)c->ms + 1u);
+    if (!kinds) {
+      c->oom = true;
+      return false;
+    }
+    memcpy(kinds, c->lk, c->lc);
+    if (d > 0) {
+      memcpy(kinds + c->lc, c->sk, (size_t)d);
+    }
+    c->kind_at[target] = kinds;
     c->depth[target] = d;
     c->queued[target] = true;
     c->work[(*wn)++] = target;
@@ -461,6 +619,12 @@ static bool reach(Ctx * c, uint32_t target, int32_t d, const uint32_t * cur, siz
   }
   if (c->depth[target] != d) {
     return false;
+  }
+  // The kinds must agree: a slot raw on one way in and a reference on another has
+  // no register to name. That is not merged, it is a conflict, and the function is
+  // then compiled with no raw source at all (see analyse).
+  if (memcmp(c->kind_at[target], c->lk, c->lc) != 0 || (d > 0 && memcmp(c->kind_at[target] + c->lc, c->sk, (size_t)d) != 0)) {
+    c->conflict = true;
   }
   bool changed = false;
   uint32_t * mine = c->prod_at[target];
@@ -481,6 +645,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
   const uint32_t * code = c->fn->code;
   size_t wn = 0;
   c->leader[1] = true;
+  kinds_all_ref(c);  // a parameter is a reference and every other local starts as the zero value
   if (!reach(c, 1, 0, c->cur, &wn)) {
     return c->oom ? GLTANG_ERR_OOM : GLTANG_ERR_INTERNAL;
   }
@@ -490,6 +655,10 @@ static GLTANG_Result analyse_once(Ctx * c) {
     if (c->depth[i] > 0) {
       memcpy(c->cur, c->prod_at[i], (size_t)c->depth[i] * sizeof(uint32_t));
     }
+    memcpy(c->lk, c->kind_at[i], c->lc);
+    if (c->depth[i] > 0) {
+      memcpy(c->sk, c->kind_at[i] + c->lc, (size_t)c->depth[i]);
+    }
     for (;;) {
       GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(code[i]);
       uint32_t a = GLTANG_INSTRUCTION_A(code[i]);
@@ -498,6 +667,9 @@ static GLTANG_Result analyse_once(Ctx * c) {
       bool falls = true;
       bool branch = false;       // a conditional or unconditional jump to `a`
       int32_t branch_depth = d;
+      if (reads_raw(c, op, a, d)) {
+        break;                   // an unconditional exit with the raw operand in its frame state: nothing flows from it
+      }
       if (op == GLTANG_OP_CALL) {
         if (d < 0 || (int64_t)a + 1 > d) { return GLTANG_ERR_INTERNAL; }
         int32_t k = c->force_exit[i] ? -1 : resolve_callee(c, c->cur[d - 1 - (int32_t)a], a);
@@ -622,6 +794,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
       if (after > (int32_t)c->ms) {
         return GLTANG_ERR_INTERNAL;
       }
+      apply_kinds(c, op, a, d);
       if (branch) {
         if (a >= c->fn->code_count) { return GLTANG_ERR_INTERNAL; }
         c->leader[a] = true;
@@ -656,6 +829,10 @@ static void free_prod(Ctx * c) {
     for (size_t i = 0; i < c->fn->code_count; ++i) {
       gcu_allocator_free(GLTANG_JIT_ALLOCATOR(c->exec), c->prod_at[i]);
       c->prod_at[i] = NULL;
+      if (c->kind_at) {
+        gcu_allocator_free(GLTANG_JIT_ALLOCATOR(c->exec), c->kind_at[i]);
+        c->kind_at[i] = NULL;
+      }
     }
   }
 }
@@ -668,6 +845,9 @@ static void free_prod(Ctx * c) {
  */
 static GLTANG_Result analyse(Ctx * c) {
   for (;;) {
+    c->conflict = false;
+    memset(c->ever_local, 0, sizeof(c->ever_local));
+    memset(c->ever_stack, 0, sizeof(c->ever_stack));
     for (size_t i = 0; i < c->fn->code_count; ++i) {
       c->depth[i] = -1;
       c->leader[i] = false;
@@ -685,6 +865,13 @@ static GLTANG_Result analyse(Ctx * c) {
       return r;
     }
     bool again = false;
+    if (c->conflict) {
+      // The blunt rule: every raw source of the function becomes an exit and the
+      // analysis is repeated. With no raw source the kinds cannot disagree, so this
+      // happens at most once; the function is then compiled as it was before.
+      c->raw_off = true;
+      continue;
+    }
     for (size_t i = 0; i < c->fn->code_count; ++i) {
       if (!c->flowed[i]) {
         continue;
@@ -716,7 +903,10 @@ static GRCORE_PollIdentity identity_at(const Ctx * c, uint32_t index) {
  * the flags a register. A local is its register. An operand-stack position below
  * the depth is its register and above it is the zero register, which reads as the
  * zero value slot of the interpreter's frame (a `DEAD` location reads as a raw
- * zero, which is not what the frame holds).
+ * zero, which is not what the frame holds). A slot that is raw at this point (its
+ * kind in `lk` and `sk`) names its `F64` register, and the other is not named, so
+ * not live, so not in a stack map: the backend records a raw location of
+ * representation `F64`, which a rebuild boxes.
  */
 static void fill_state(Ctx * c, GRJIT_FrameSlot * s, uint32_t pc, uint32_t depth) {
   s[GLTANG_F_FUNCTION] = grjit_frame_slot_constant((int64_t)c->fword);
@@ -724,10 +914,10 @@ static void fill_state(Ctx * c, GRJIT_FrameSlot * s, uint32_t pc, uint32_t depth
   s[GLTANG_F_SP] = grjit_frame_slot_constant((int64_t)(H + c->lc + depth));
   s[GLTANG_F_FLAGS] = grjit_frame_slot_vreg(c->flags);
   for (uint32_t k = 0; k < c->lc; ++k) {
-    s[H + k] = grjit_frame_slot_vreg(c->local[k]);
+    s[H + k] = grjit_frame_slot_vreg(c->lk[k] == KIND_F64 ? c->local_f[k] : c->local[k]);
   }
   for (uint32_t j = 0; j < c->ms; ++j) {
-    s[H + c->lc + j] = grjit_frame_slot_vreg(j < depth ? c->stack[j] : c->zero);
+    s[H + c->lc + j] = grjit_frame_slot_vreg(j >= depth ? c->zero : c->sk[j] == KIND_F64 ? c->stack_f[j] : c->stack[j]);
   }
 }
 
@@ -936,6 +1126,7 @@ static void emit_native_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, const 
 
 /** `USE k`: the interpreter's resolve, called from compiled code; the value is the operand slot `d`. */
 static void emit_use(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  set_stack_kind(c, d, KIND_REF);  // the value lands in position d, whatever was left there
   GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->program->constants[a].block)};
   emit_native(c, i, d, GLTANG_JIT_NATIVE_USE, args, 1, c->stack[d], d + 1u);
 }
@@ -946,7 +1137,26 @@ static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_ATTR, args, 2, c->stack[d - 1u], d);
 }
 
+static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
+
+/**
+ * One instruction. The kinds at its start are in `lk` and `sk` (loaded from the
+ * merged state at a jump target, carried by this function from the instruction
+ * before it otherwise); the frame states it builds describe them, and the effect of
+ * the instruction on them is applied after.
+ */
 static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
+  if (c->kind_at[i]) {
+    memcpy(c->lk, c->kind_at[i], c->lc);
+    if (d > 0) {
+      memcpy(c->sk, c->kind_at[i] + c->lc, d);
+    }
+  }
+  emit_op_kinds(c, i, d);
+  apply_kinds(c, GLTANG_INSTRUCTION_OP(c->fn->code[i]), GLTANG_INSTRUCTION_A(c->fn->code[i]), (int32_t)d);
+}
+
+static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
   const uint32_t word = c->fn->code[i];
   const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(word);
   const uint32_t a = GLTANG_INSTRUCTION_A(word);
@@ -955,6 +1165,10 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
   GRJIT_VReg * t = c->tmp;
   int64_t k = 0;
 
+  if (reads_raw(c, op, a, (int32_t)d)) {
+    emit_exit(c, i, d);  // the raw operand is in the frame state; the interpreter re-executes the instruction
+    return;
+  }
   if (op == GLTANG_OP_CALL) {
     if (c->call_k[i] >= 0) {
       emit_call(c, i, d, a, (uint32_t)c->call_k[i]);
@@ -1010,7 +1224,12 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
       add_fuel(c, cost);
       break;
     case GLTANG_OP_DUP:
-      B(grjit_builder_move(c->b, T[d], V(T[d - 1u])));
+      if (c->sk[d - 1u] == KIND_F64) {
+        B(grjit_builder_move(c->b, c->stack_f[d], V(c->stack_f[d - 1u])));
+      }
+      else {
+        B(grjit_builder_move(c->b, T[d], V(T[d - 1u])));
+      }
       add_fuel(c, cost);
       break;
     case GLTANG_OP_NULL:
@@ -1026,8 +1245,14 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
       add_fuel(c, cost);
       break;
     case GLTANG_OP_CONST:
-      (void)small_int_constant(c, a, &k);
-      B(grjit_builder_const(c->b, T[d], (int64_t)gltang_v_from_small_int(k)));
+      if (!c->raw_off && float_constant(c, a, &k)) {
+        // The interpreter's double, bit for bit, as the register's immediate.
+        B(grjit_builder_const(c->b, c->stack_f[d], k));
+      }
+      else {
+        (void)small_int_constant(c, a, &k);
+        B(grjit_builder_const(c->b, T[d], (int64_t)gltang_v_from_small_int(k)));
+      }
       add_fuel(c, cost);
       break;
     case GLTANG_OP_FUNC:
@@ -1035,11 +1260,21 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
       add_fuel(c, cost);
       break;
     case GLTANG_OP_LOAD_LOCAL:
-      B(grjit_builder_move(c->b, T[d], V(c->local[a])));
+      if (c->lk[a] == KIND_F64) {
+        B(grjit_builder_move(c->b, c->stack_f[d], V(c->local_f[a])));
+      }
+      else {
+        B(grjit_builder_move(c->b, T[d], V(c->local[a])));
+      }
       add_fuel(c, cost);
       break;
     case GLTANG_OP_STORE_LOCAL:
-      B(grjit_builder_move(c->b, c->local[a], V(T[d - 1u])));
+      if (c->sk[d - 1u] == KIND_F64) {
+        B(grjit_builder_move(c->b, c->local_f[a], V(c->stack_f[d - 1u])));
+      }
+      else {
+        B(grjit_builder_move(c->b, c->local[a], V(T[d - 1u])));
+      }
       add_fuel(c, cost);
       break;
     case GLTANG_OP_USE:
@@ -1174,15 +1409,41 @@ static void release_code(void * payload) {
 }
 
 /**
- * Lang-tang's frames hold plain words and values: no derived pointer and no
- * converting representation, which is why the reservation each compiled call
- * extends is always zero. A site that says otherwise is a defect of this compiler.
+ * Lang-tang's frames hold plain words, values and raw floats: no derived pointer,
+ * and the only converting location is a raw `F64` (a double the engine boxes when
+ * the frame is rebuilt), on a raw slot, never in a stack map. A site that says
+ * otherwise is a defect of this compiler. The most converting locations at any one
+ * site is what a frame of this function adds to the reservation.
  */
-static bool metadata_is_plain(const GRJIT_Code * code) {
+static bool metadata_is_plain(const GRJIT_Code * code, uint32_t * max_converting) {
   const GRCORE_CodeMeta * meta = grjit_code_meta(code);
+  *max_converting = 0;
   for (size_t s = 0; s < meta->site_count; ++s) {
-    if (meta->sites[s].derived_count != 0 || grcore_deopt_converting_count(&meta->sites[s]) != 0) {
+    const GRCORE_CodeSite * site = &meta->sites[s];
+    if (site->derived_count != 0) {
       return false;
+    }
+    for (size_t l = 0; l < site->live_count; ++l) {
+      if (site->live[l].representation != GRCORE_REPR_BITS) {
+        return false;
+      }
+    }
+    size_t converting = 0;
+    for (size_t l = 0; l < site->frame_state_count; ++l) {
+      const GRCORE_CodeLocation * loc = &site->frame_state[l];
+      if (loc->representation == GRCORE_REPR_BITS) {
+        continue;
+      }
+      if (loc->representation != GRCORE_REPR_F64 || loc->slot_kind != GRCORE_SLOT_RAW) {
+        return false;
+      }
+      ++converting;
+    }
+    if (converting != grcore_deopt_converting_count(site)) {
+      return false;
+    }
+    if (converting > *max_converting) {
+      *max_converting = (uint32_t)converting;
     }
   }
   return true;
@@ -1239,6 +1500,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->block = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(GRJIT_BlockId));
   c->work = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(uint32_t) + sizeof(uint32_t));
   c->prod_at = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t *));
+  c->kind_at = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t *));
   c->cur = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (size_t)c->ms + 2u, sizeof(uint32_t));
   c->call_k = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(int32_t));
   c->call_entry = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint64_t));
@@ -1254,7 +1516,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->declined = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
   c->local_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
-  if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at
+  if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at || !c->kind_at
       || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !c->call_member
       || !c->attr_src || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
     goto done;
@@ -1291,6 +1553,13 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   scan_uses(c);
   result = analyse(c);
   if (result != GLTANG_OK) {
+    goto done;
+  }
+  if (c->raw_off && !inline_op(c, GLTANG_INSTRUCTION_OP(fn->code[1]), GLTANG_INSTRUCTION_A(fn->code[1]))) {
+    // A merge disagreed on a kind, so a float constant is an exit again, and the
+    // function begins with one: it leaves compiled code at once, as before.
+    *out = NULL;
+    result = GLTANG_OK;
     goto done;
   }
   for (size_t i = 0; i < n; ++i) {
@@ -1338,6 +1607,18 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   for (uint32_t j = 0; j < c->ms; ++j) {
     B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->stack[j]));
   }
+  // The raw register beside each slot that is ever raw; a frame state names it
+  // where the slot's kind is `F64`, and the `REF` one where it is not.
+  for (uint32_t k = 0; k < c->lc; ++k) {
+    if (c->ever_local[k]) {
+      B(grjit_builder_vreg(c->b, GRJIT_TYPE_F64, &c->local_f[k]));
+    }
+  }
+  for (uint32_t j = 0; j < c->ms; ++j) {
+    if (c->ever_stack[j]) {
+      B(grjit_builder_vreg(c->b, GRJIT_TYPE_F64, &c->stack_f[j]));
+    }
+  }
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->zero));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_I64, &c->flags));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->ep));
@@ -1360,6 +1641,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     }
   }
   set_block(c, prologue);
+  kinds_all_ref(c);
   B(grjit_builder_const(c->b, c->zero, 0));
   for (uint32_t k = c->params; k < c->lc; ++k) {
     B(grjit_builder_const(c->b, c->local[k], 0));
@@ -1416,7 +1698,8 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
       goto done;
     }
   }
-  if (!metadata_is_plain(code)) {
+  uint32_t max_converting = 0;
+  if (!metadata_is_plain(code, &max_converting)) {
     result = GLTANG_ERR_INTERNAL;
     goto done;
   }
@@ -1433,6 +1716,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   payload->code_count = fn->code_count;
   payload->call_sites = call_sites;
   payload->native_sites = native_sites;
+  payload->max_converting = max_converting;
   {
     GRCORE_Code * handle = NULL;
     if (grcore_code_create(GLTANG_JIT_ALLOCATOR(exec), payload, release_code, &handle) != GRCORE_OK) {
@@ -1466,6 +1750,7 @@ done:
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_use);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->local_use);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->prod_at);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->kind_at);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->cur);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_k);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_entry);

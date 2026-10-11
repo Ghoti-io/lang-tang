@@ -130,7 +130,8 @@ Observed observe(const Case & c, const RunConfig & rc, const std::function<void(
   context.add_native_library();
   observer::Observer obs;
   obs.trace.limit = std::min(c.limit, cap);
-  obs.float_bits = &gltang_vm_test_float_bits;  // floats are compared by their bits as well as their text
+  obs.float_bits = &gltang_vm_test_float_bits;
+  obs.float_text = &gltang_vm_test_float_text;  // floats are compared by their bits as well as their text
   EXPECT_EQ(obs.attach(context.context), GRCORE_OK);
   if (extra) {
     extra(context.context);
@@ -448,6 +449,73 @@ print(r); print(" "); print(s); print(" "); print(a == b); print(" "); print(c);
   return cases;
 }
 
+/// Floats carried raw in compiled code (spec-runtime-float story 6, AD-27): a float
+/// constant is held as a raw double in a local or an operand slot, and the
+/// frames of the two tiers must agree at every poll, floats by their bits, whether
+/// the compiled frame has been rebuilt (a pause, an exit) or still holds the double
+/// raw (the observer reads a raw slot as the value it stands for, without boxing it).
+/// The programs keep floats live across loops, calls, chains and operand slots, and
+/// end in every kind of consumer, each of which is an exit.
+std::vector<Case> float_carry_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, uint64_t step) {
+    Case c;
+    c.name = "float carry/" + name;
+    c.source = source;
+    c.step = step;
+    c.limit = 600;
+    cases.push_back(c);
+  };
+  add("a float live across a loop", R"TANG(function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }
+print(f(40)); print(f(0)); print(f(7));
+)TANG", 13);
+  add("a float live across a call", R"TANG(function leaf(a) { y = 0.25; return a + 1; }
+function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } print(x); return s; }
+print(mid(12)); print(mid(3));
+)TANG", 11);
+  add("a chain of three with a guard that fails at the bottom", R"TANG(M = 576460752303423487;
+function bottom(n, m) { y = 2.5; i = 0; while (i < n) { i = i + 1; } z = m + 1; return i; }
+function middle(n, m) { w = 0.75; r = bottom(n, m); k = 0; while (k < 2) { k = k + 1; } return r; }
+function top(n, m) { x = 1.5; r = middle(n, m); print(x); return r; }
+print(top(4, 1)); print(top(4, M)); print(top(2, 1));
+)TANG", 17);
+  add("a float in an operand slot while the callee polls", R"TANG(function h(n) { i = 0; while (i < n) { i = i + 1; } return i; }
+function g(n) { r = 1.5 + h(n); return r; }
+function q(n) { v = 0.5; t = 2.25 + h(n) + v; return t; }
+print(g(9)); print(q(6)); print(g(0));
+)TANG", 7);
+  add("a float copied through locals and duplicates", R"TANG(function f(n) { a = b = c = 0.1; d = a; e = 0.0; i = 0; while (i < n) { i = i + 1; e = d; } print(a); print(b); print(c); print(d); print(e); return i; }
+print(f(20)); print(f(0));
+)TANG", 9);
+  add("merges of equal kinds stay raw and merges of unequal kinds do not", R"TANG(function agree(c, n) { x = 2.5; if (c) { i = 1; } else { i = 2; } j = 0; while (j < n) { j = j + 1; } print(x); return i + j; }
+function inloop(n) { i = 0; while (i < n) { x = 1.5; i = i + 1; } print(x); return i; }
+function arms(c, n) { if (c) { x = 1.5; } else { x = 2; } j = 0; while (j < n) { j = j + 1; } print(x); return j; }
+function before(n) { acc = 0.0; i = 0; while (i < n) { acc = 1.5; i = i + 1; } print(acc); return i; }
+print(agree(true, 5)); print(agree(false, 3)); print(inloop(4)); print(inloop(0)); print(arms(true, 5)); print(arms(false, 3)); print(before(6)); print(before(0));
+)TANG", 19);
+  add("sixteen floats live at once", R"TANG(function f(n) { a0 = 0.5; a1 = 1.5; a2 = 2.5; a3 = 3.5; a4 = 4.5; a5 = 5.5; a6 = 6.5; a7 = 7.5; a8 = 8.5; a9 = 9.5; a10 = 10.5; a11 = 11.5; a12 = 12.5; a13 = 13.5; a14 = 14.5; a15 = 15.5;
+  i = 0; while (i < n) { i = i + 1; } print(a0); print(a7); print(a15); return i; }
+print(f(25)); print(f(2));
+)TANG", 11);
+  add("a float and every consumer of it", R"TANG(g = 0;
+function h(a, b) { return a; }
+function plus(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } y = x + 1; print(y); return i; }
+function minus(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } y = -x; print(y); return i; }
+function less(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } y = x < 2; print(y); return i; }
+function truthy(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } if (x) { i = i + 1; } print(i); return i; }
+function both(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } y = x && 1; print(y); return i; }
+function store(n) { global g; x = 1.5; i = 0; while (i < n) { i = i + 1; } g = x; print(g); return i; }
+function call_arg(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } y = h(x, 2); print(y); return i; }
+function ret(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } return x; }
+function negzero(n) { x = 0.0; i = 0; while (i < n) { i = i + 1; } y = -x; print(y == x); return i; }
+print(plus(5)); print(minus(5)); print(less(5)); print(truthy(5)); print(both(5)); print(store(5)); print(call_arg(5)); print(ret(5)); print(negzero(5));
+)TANG", 23);
+  add("floats inside a loop that calls a native and a library member", R"TANG(function run(n) { use inc; x = 1.5; s = 0; i = 0; while (i < n) { s = inc(s); i = i + 1; } print(x); return s; }
+print(run(15)); print(run(3));
+)TANG", 9);
+  return cases;
+}
+
 std::vector<Case> all_cases() {
   std::vector<Case> cases = corpus_cases("script", tt::Mode::Script, 40);
   for (Case & c : generated_cases(6)) {
@@ -463,6 +531,9 @@ std::vector<Case> all_cases() {
     cases.push_back(std::move(c));
   }
   for (Case & c : native_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : float_carry_cases()) {
     cases.push_back(std::move(c));
   }
   for (Case & c : float_cases()) {
@@ -899,12 +970,17 @@ TEST(Observer, TheFloatProgramsShowEveryKindOfFloatInTheTracesAsBits) {
 
 #ifdef GLTANG_WITH_JIT
 TEST(Observer, TheFloatProgramsGiveTheSameFramesBitForBitInTheInterpreterAndWithTheJit) {
-  // Floats still exit to the interpreter (spec-runtime-float, stories 6 and 7
-  // compile them), so today this is the interpreter against the interpreter that
-  // compiled everything else; the day a float is compiled it is the instrument.
+  // A float constant is carried raw in compiled code (story 6; the arithmetic is
+  // story 7), so this is the instrument: the compiled frame holds a raw double at
+  // some polls, the observer reads it without converting it, and its bits are the
+  // interpreter's. The float-carry programs are in it too.
   GLTANG_REQUIRE_JIT_BACKEND();
-  uint64_t entries = 0, floats = 0;
-  for (const Case & c : float_cases()) {
+  uint64_t entries = 0, floats = 0, raw_slots = 0, boxed = 0;
+  std::vector<Case> cases = float_cases();
+  for (Case & c : float_carry_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (const Case & c : cases) {
     Observed plain = observe(c, kPlain);
     Observed jit = observe(c, kJit);
     EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
@@ -915,9 +991,21 @@ TEST(Observer, TheFloatProgramsGiveTheSameFramesBitForBitInTheInterpreterAndWith
     EXPECT_TRUE(same(c, lines, kLinesPlain.label, lines_jit, kLinesJit.label));
     entries += jit.jit.entries + lines_jit.jit.entries;
     floats += survey(jit.trace).floats;
+    boxed += jit.jit.values_boxed;
+    for (const Observed * run : {&jit, &lines_jit}) {
+      for (const auto & poll : run->trace.polls) {
+        for (const auto & f : poll.frames) {
+          for (const auto & s : f.slots) {
+            raw_slots += s.was_raw;
+          }
+        }
+      }
+    }
   }
   EXPECT_GT(entries, 20u) << "compiled code ran: the comparison is not vacuous";
   EXPECT_GT(floats, 100u);
+  EXPECT_GT(raw_slots, 60u) << "polls inside compiled code saw floats held raw, and read them without converting them";
+  EXPECT_GT(boxed, 20u) << "and the rebuilds that followed boxed them";
 }
 #endif
 

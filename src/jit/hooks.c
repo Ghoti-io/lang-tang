@@ -36,7 +36,9 @@
  *
  * Every hook is handed the context, and finds the execution from it. None of
  * them calls the interpreter. Only `push` can collect (the frame push is a GC
- * point); `pop` and `compile` do not, and `deopt` allocates nothing.
+ * point, and so is the top-up of the float-box pool that comes before it); `pop`
+ * and `compile` do not, and `deopt` allocates nothing: the only boxing there is
+ * is the rebuild's, from boxes made ahead of time (AD-27).
  */
 
 #include <ghoti.io/lang-tang/macros.h>
@@ -80,16 +82,27 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
     return refuse_push(jit);
   }
   // The interpreter's order: the guest-depth test first, then the extension of
-  // the reservation (by zero: lang-tang has no converting location), then the
-  // push. The push is the frame-push GC point. It does not fire the memory
-  // budget's CALL_REFUSED poll: the interpreter makes the call after the exit
-  // and fires it once.
+  // the reservation by the callee's most raw floats at one site (zero for a
+  // function that holds none, which costs nothing) with the top-up of the pool
+  // behind it, then the push. A refusal of the extension is a refused push: the
+  // call site exits and the interpreter makes the call. The top-up allocates, so
+  // it is before the arguments are read (a collection updates them in place); the
+  // push is the frame-push GC point. Neither fires the memory budget's
+  // CALL_REFUSED poll: the interpreter makes the call after the exit and fires it
+  // once.
   if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+    return refuse_push(jit);
+  }
+  const GLTANG_JitFn * callee_fn = gltang_jit_find_fn(exec, jit, callee, false);
+  const GLTANG_JitCode * callee_code = callee_fn && callee_fn->code ? grcore_code_payload(callee_fn->code) : NULL;
+  const size_t extension = callee_code ? callee_code->max_converting : 0;
+  if (!gltang_jit_extend(exec, extension, jit->chain + 1u)) {
     return refuse_push(jit);
   }
   GRCORE_Stack * stack = grcore_context_stack(context);
   GRCORE_FrameRef frame;
   if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+    gltang_jit_retract_level(exec, jit->chain + 1u);
     return refuse_push(jit);
   }
   // The frame push is a GC point (AD-28), and the heap's torture mode owns only
@@ -133,8 +146,12 @@ static void hook_pop(void * context) {
     return;
   }
   (void)grcore_stack_pop(grcore_context_stack(context));
-  if (exec->jit && exec->jit->chain) {
-    --exec->jit->chain;
+  if (exec->jit) {
+    // The callee's extension, if it made one: the innermost, at this depth.
+    gltang_jit_retract_level(exec, exec->jit->chain);
+    if (exec->jit->chain) {
+      --exec->jit->chain;
+    }
   }
 }
 
@@ -294,8 +311,10 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
     jit->exit_counted = counts;
     jit->exit_valid = true;
   }
-  // The compiled calls are gone, so are their extensions of the reservation (none
-  // here: a call extends it by zero).
+  // The compiled calls are gone, so are their extensions of the reservation. The
+  // entry's own stays until the entry gives it back; the rebuild above needed all
+  // of them, so none was retracted before it.
+  gltang_jit_retract_to(exec, jit->ext_floor);
   return rc;
 }
 

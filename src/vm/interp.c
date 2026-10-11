@@ -963,5 +963,12 @@ GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {
     }
     exec->activations_reserved = true;
   }
-  return gltang_vm_run(exec, context);
+  GRCORE_Step step = gltang_vm_run(exec, context);
+#ifdef GLTANG_WITH_JIT
+  // Control goes back to the host (a pause, the end, an unwind): no compiled code is
+  // open, so the float boxes made ahead for it are let go, and nothing a host can
+  // see (a snapshot's root slots above all) depends on them.
+  gltang_jit_release_pool(exec);
+#endif
+  return step;
 }

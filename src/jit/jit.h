@@ -103,4 +103,33 @@ void gltang_jit_return_depth(GLTANG_Execution * exec, size_t lent);
 /** @brief The run has unwound: clears a pending tier-up request. */
 void gltang_jit_unwound(GLTANG_Execution * exec);
 
+/**
+ * @brief Drops the pool of float boxes: control is going back to the host, so no
+ *   compiled code is open and nothing needs them. They become garbage.
+ */
+void gltang_jit_release_pool(GLTANG_Execution * exec);
+
+/**
+ * @brief Reports the pool of float boxes as precise roots (the execution's root
+ *   source calls it), so a collector, GC torture and relocation see and update
+ *   them.
+ */
+void gltang_jit_enumerate_roots(GLTANG_Execution * exec, const GRCORE_RootVisitor * visitor);
+
+/**
+ * @brief The engine descriptor's `convert` (AD-27): takes a float box from the
+ *   pool, stores the double whose bits are `raw` in it and writes it to
+ *   `*out_root`. Cannot fail, allocate, collect or poll. For a representation
+ *   other than ::GRCORE_REPR_F64 (never emitted) it writes null and counts an
+ *   internal error.
+ */
+void gltang_jit_convert(GRCORE_Context * context, GRCORE_Representation representation, uint64_t raw, uint64_t * out_root);
+
+/**
+ * @brief The engine descriptor's `reverse`, and its type test: true, with the
+ *   double's bits, for exactly a float; false for every other value, and for a
+ *   representation other than ::GRCORE_REPR_F64. Pure.
+ */
+bool gltang_jit_reverse(GRCORE_Context * context, GRCORE_Representation representation, uint64_t value, uint64_t * out_raw);
+
 #endif /* GHOTI_IO_GLTANG_JIT_JIT_H */

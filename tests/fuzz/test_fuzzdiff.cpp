@@ -346,6 +346,51 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsWithFloatsComparedByBits) {
       programs, agreed, floats, nans);
 }
 
+TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatCarryFloatsRawAcrossLoopsAndCallsComparedByBits) {
+  // Interpreter against every function compiled at its first poll, on programs built
+  // to hold float constants in locals and operand slots across polls and calls and to
+  // consume them in every way (spec-runtime-float story 6). The generated programs
+  // are not run against ctang: the question is the tiers.
+  GLTANG_REQUIRE_JIT_BACKEND();
+  size_t agreed = 0, programs = 0, floats = 0, nans = 0, raw_seen = 0, shown = 0;
+  uint64_t entries = 0, boxed = 0, compiled_calls = 0;
+  for (uint64_t seed = 1; seed <= 150; ++seed) {
+    Tiers t;
+    t.seed = seed;
+    t.mode = gen::Mode::Script;
+    t.source = gen::generate_carry(seed).source;
+    t.plain = oracle::lang_tang_run_traced(t.source, true, 0, &t.plain_trace, kTierPolls, nullptr, kTierSampleEvery, kTierSamples);
+    t.jit = oracle::lang_tang_run_traced(t.source, true, 1, &t.jit_trace, kTierPolls, &compiled_calls, kTierSampleEvery, kTierSamples, &t.jit_stats);
+    ++programs;
+    entries += t.jit_stats.entries;
+    boxed += t.jit_stats.values_boxed;
+    std::string why = tiers_difference(t);
+    if (why.empty()) {
+      ++agreed;
+    }
+    else if (shown++ < 5) {
+      ADD_FAILURE() << why;
+    }
+    for (const auto & p : t.jit_trace.polls) {
+      for (const auto & f : p.frames) {
+        for (const auto & s : f.slots) {
+          floats += s.is_float;
+          raw_seen += s.was_raw;
+          nans += s.is_float && observer::detail::is_nan_bits(s.float_bits);
+        }
+      }
+    }
+  }
+  EXPECT_EQ(agreed, programs);
+  EXPECT_GT(entries, 300u) << "compiled code ran: the comparison is not vacuous";
+  EXPECT_GT(boxed, 300u) << "and rebuilt frames that held floats raw";
+  EXPECT_GT(floats, 1000u);
+  EXPECT_GT(raw_seen, 100u) << "polls inside compiled code saw floats held raw and read them without converting them";
+  std::printf("  fuzz-diff carried floats: %zu programs (seeds 1 to 150), interpreter against threshold 1, %zu agree; %zu float slots compared by bits, %zu read raw, %llu boxed by rebuilds\n",
+      programs, agreed, floats, raw_seen, static_cast<unsigned long long>(boxed));
+  (void)nans;
+}
+
 TEST(FuzzDiff, TheGeneratorMakesEveryKindOfFloat) {
   // Over a few hundred programs: the sources name NaN, infinities, negative zero,
   // subnormals and the extremes, and some program prints a NaN.

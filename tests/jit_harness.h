@@ -39,6 +39,7 @@
 extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execution, bool enabled);
 extern "C" int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after);
 extern "C" int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting);
+extern "C" int gltang_vm_jit_test_converting(GLTANG_Execution * execution, uint64_t * f64, uint64_t * other, uint64_t * max_site, uint64_t * max_recorded);
 extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
 
 namespace jt {
@@ -147,6 +148,9 @@ struct Outcome {
   uint64_t retired_peak = 0;             ///< The most references the context's retired-code list held at once.
   uint64_t registered = 0;               ///< Compiled ranges registered at the end of the run.
   uint64_t natives_called = 0;           ///< Natives entered through the shared wrapper, from either tier.
+  uint64_t heap_allocations = 0;         ///< Objects the heap ever allocated, at the end of the run.
+  uint64_t heap_collections = 0;         ///< Collections the heap ever ran, at the end of the run.
+  uint64_t heap_invalid_pointers = 0;    ///< Precise root slots that named no object (a raw word the collector read as a value).
   std::string key() const {
     std::string s = raw + "|" + rendered + "|" + result + "|" + errors + "|" + std::to_string(ran) + "|" + std::to_string(finished) + "|fuel " + std::to_string(fuel);
     for (const auto & p : pauses) {
@@ -250,6 +254,14 @@ inline Outcome run(const Scenario & sc, long threshold) {
   out.retired_peak = grcore_code_retired_peak(context.context);
   out.registered = grcore_code_registered_count(context.context);
   out.natives_called = gltang_vm_test_natives_called(context.execution);
+  {
+    GRHEAP_Stats heap_stats;
+    if (grheap_stats(context.heap, &heap_stats) == GRHEAP_OK) {
+      out.heap_allocations = heap_stats.allocations;
+      out.heap_collections = heap_stats.collections;
+      out.heap_invalid_pointers = heap_stats.invalid_pointers;
+    }
+  }
   return out;
 }
 

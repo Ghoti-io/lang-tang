@@ -324,6 +324,15 @@ typedef struct GLTANG_JitStats {
   uint64_t native_enters_refused; ///< Calls of a library native from compiled code whose activation record the native-depth or memory budget refused (the call's value is the error; the interpreter's call is refused the same).
   uint64_t native_sites_unsupported; ///< Library call and member load sites left as exits because natives cannot be called from compiled code here (a backend that refuses them, or no table).
   uint64_t depth_handback_failures; ///< Native-depth units a native call lent back from the open compiled-code records that the budget then refused to take again. Zero in any correct run.
+  // Floats carried raw (spec-runtime-float story 6, AD-27). Compiled code holds a
+  // float constant as a raw double and boxes it only when a frame is rebuilt, from
+  // boxes made ahead of time.
+  uint64_t values_boxed;        ///< Raw floats converted into a float box by a rebuild: one per live raw value at each rebuild, never more.
+  uint64_t box_pool_made;       ///< Float boxes made ahead of time for the pool (heap allocations, charged to the guest's memory budget).
+  uint64_t reservation_refusals; ///< Entries and compiled calls refused because the reservation could not be extended (the interpreter runs the function, or makes the call).
+  uint64_t box_pool_refusals;   ///< The same because the pool could not be topped up (the memory budget or the system refused the boxes).
+  uint64_t conversion_errors;   ///< Conversions asked of a representation the engine does not convert, or with an empty pool. Zero in any correct run.
+  uint64_t reservation_peak;    ///< The most cells the reservation has held at once.
 } GLTANG_JitStats;
 
 /**

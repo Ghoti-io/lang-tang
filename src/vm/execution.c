@@ -220,6 +220,27 @@ static size_t descriptor_inspect(const GRCORE_Context * context, GRCORE_SlotKind
   return sink.needed;
 }
 
+/*
+ * For the tests only: the text of a float given as its bits, as the inspector
+ * renders a boxed one. A throwaway object on the C stack stands for the box: the
+ * renderer only reads it. Declared in vm/test_hooks.h.
+ */
+size_t gltang_vm_test_float_text(const GRCORE_Context * context, uint64_t bits, char * buffer, size_t size) {
+  GLTANG_Execution * exec = execution_of(context);
+  _Alignas(16) GLTANG_FloatObject stand_in = {GLTANG_OBJ_FLOAT, 0, 0.0};
+  memcpy(&stand_in.value, &bits, sizeof(bits));
+  if (!exec || exec->destroyed) {
+    return 0;
+  }
+  GLTANG_Sink sink;
+  gltang_sink_init_buffer(&sink, buffer, size);
+  sink.exec = exec;
+  sink.limit = 1024;
+  bool too_deep = false;
+  (void)gltang_vm_render(&sink, gltang_value_of(&stand_in), GLTANG_RENDER_ELEMENT, GLTANG_MAX_VALUE_DEPTH - 3, &too_deep);
+  return sink.needed;
+}
+
 static GLTANG_Execution * frame_execution(const GRCORE_AbstractFrame * frame) {
   GLTANG_Execution * exec = execution_of(frame->context);
   return exec && !exec->destroyed ? exec : NULL;
@@ -294,11 +315,16 @@ static GRCORE_Result descriptor_variable(const GRCORE_AbstractFrame * frame, siz
         continue;
       }
       if (seen++ == index) {
+        // A local of a compiled frame that is a raw double is reported as raw bits and
+        // never as a value (read as one it is a wild pointer): the abstract frame
+        // says what the word is, and a pause rebuilds before a debugger reads values.
         uint64_t value;
-        if (grcore_frame_slot(frame, GLTANG_FRAME_HEADER + i, NULL, &value) != GRCORE_OK) {
+        GRCORE_SlotKind kind;
+        GRCORE_Representation representation;
+        if (grcore_frame_slot_tagged(frame, GLTANG_FRAME_HEADER + i, &kind, &value, &representation) != GRCORE_OK) {
           return GRCORE_ERR_INVALID;
         }
-        *out = (GRCORE_Variable){f->local_names[i], GRCORE_SLOT_VALUE, value};
+        *out = (GRCORE_Variable){f->local_names[i], representation != GRCORE_REPR_BITS ? GRCORE_SLOT_RAW : GRCORE_SLOT_VALUE, value};
         return GRCORE_OK;
       }
     }
@@ -337,6 +363,18 @@ static void descriptor_unwind(GRCORE_Context * context, const GRCORE_AbstractFra
   }
 }
 
+// The conversions of AD-27: a raw double in compiled code is boxed when a frame is
+// rebuilt, and a boxed one is accepted back only if it is exactly a float. Only the
+// JIT has a raw value, so only its builds supply them (and an interpreter-only
+// build binds nothing that converts).
+#ifdef GLTANG_WITH_JIT
+#define DESCRIPTOR_CONVERT gltang_jit_convert
+#define DESCRIPTOR_REVERSE gltang_jit_reverse
+#else
+#define DESCRIPTOR_CONVERT NULL
+#define DESCRIPTOR_REVERSE NULL
+#endif
+
 const GRCORE_EngineDescriptor gltang_engine_descriptor = GRCORE_ENGINE_DESCRIPTOR_INIT(
   .name = "lang-tang",
   .slot_kind = descriptor_slot_kind,
@@ -346,6 +384,8 @@ const GRCORE_EngineDescriptor gltang_engine_descriptor = GRCORE_ENGINE_DESCRIPTO
   .decoder = {UINT64_MAX, 0, 0},
   .roots = NULL,
   .unwind = descriptor_unwind,
+  .convert = DESCRIPTOR_CONVERT,
+  .reverse = DESCRIPTOR_REVERSE,
 );
 
 // ---------------------------------------------------------------------------
@@ -364,6 +404,10 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
   for (size_t i = 0; i < exec->temp_count; ++i) {
     visitor->slot(visitor->user, &exec->temps[i]);
   }
+#ifdef GLTANG_WITH_JIT
+  // The float boxes made ahead of time for the rebuild's conversions.
+  gltang_jit_enumerate_roots(exec, visitor);
+#endif
   // Every running program: its result, and (for a template call) its own
   // variables. The main program's variables are in `roots`.
   for (GLTANG_Activation * a = exec->act; a; a = a->parent) {

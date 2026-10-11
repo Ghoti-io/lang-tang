@@ -33,8 +33,10 @@
 #include <ghoti.io/lang-tang/macros.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/library.h>
+#include <ghoti.io/runtime-core/a/deopt.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -56,6 +58,27 @@ uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
  * every NaN as nan, so the frame differential reads a float slot through this.
  */
 bool gltang_vm_test_float_bits(uint64_t value, uint64_t * bits);
+
+/**
+ * The text the engine's inspector gives a float whose 64 bits are `bits`, as
+ * `snprintf` returns it (the length the full text needs). A compiled frame holds
+ * a float raw until it is rebuilt, and the frame differential must read it as the
+ * value it stands for without boxing it (that would change what it observes), so it
+ * renders the bits through this. `context` must belong to a live execution.
+ */
+size_t gltang_vm_test_float_text(const GRCORE_Context * context, uint64_t bits, char * buffer, size_t size);
+
+/** Refuses the Nth nonzero extension of the reservation, or the pool's top-up after it (0: never). */
+void gltang_vm_set_float_test_switches_unchecked(GLTANG_Execution * execution, uint64_t fail_extend_at, uint64_t fail_pool_at);
+
+/** The pool's boxes, the reservation's capacity and the extensions open now. Returns 1 if there is a JIT. */
+int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint64_t * capacity, uint64_t * extensions);
+
+/** The reservation the JIT extends, the engine's id, and a way to extend (level 0) and give back everything. */
+GRCORE_DeoptReservation * gltang_vm_jit_test_reservation(GLTANG_Execution * execution);
+GRCORE_EngineId gltang_vm_test_engine_id(const GLTANG_Execution * execution);
+bool gltang_vm_jit_test_extend(GLTANG_Execution * execution, size_t cells);
+void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution);
 
 /** Adds the test native of the given kind (see testnatives.c) to a library. */
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);

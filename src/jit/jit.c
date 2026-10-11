@@ -125,9 +125,10 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
   }
   GRCORE_Result r = grcore_context_request_kind(context, &tierup_key, &jit->kind);
   if (r == GRCORE_OK) {
-    // Made once, empty: each compiled call extends it by its callee's converting
-    // locations, which lang-tang's code does not have (every frame state holds
-    // plain words and values), so the extension is always zero.
+    // Made once, empty: each entry into compiled code and each compiled call
+    // extends it by the callee's `max_converting` (the raw floats a frame of it can
+    // hold at once, AD-27), and the pool of float boxes behind it is kept at least
+    // that large. A function that holds no raw float extends it by zero.
     r = grcore_deopt_reserve(context, 0, &jit->reservation);
   }
   if (r == GRCORE_OK) {
@@ -194,8 +195,12 @@ void gltang_jit_release(GLTANG_Execution * exec) {
     }
     gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), fns);
   }
+  // The pool's boxes are heap objects and go with the heap; the array that names
+  // them goes now, with the reservation, before the execution's state does.
   (void)grcore_deopt_release(exec->context, jit->reservation);
   jit->reservation = NULL;
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->pool);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->ext);
   grjit_native_table_free(jit->natives);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->programs);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit->queue);
@@ -417,10 +422,21 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
     return GLTANG_JIT_NOT_ENTERED;
   }
   GRCORE_Stack * stack = grcore_context_stack(context);
+  // The reservation and the pool (AD-27): this entry extends them by the
+  // function's most raw floats at one site, here, where a refusal can still be
+  // answered: the interpreter runs the function this time. A function with no raw
+  // float extends by zero and costs nothing. Topping up allocates, so it is before
+  // the arguments are read from the guest frame (a collection updates them there).
+  const size_t ext_base = jit->ext_count;
+  const size_t ext_outer_floor = jit->ext_floor;
+  if (!gltang_jit_extend(exec, ((const GLTANG_JitCode *)grcore_code_payload(f->code))->max_converting, 0)) {
+    return GLTANG_JIT_NOT_ENTERED;
+  }
   // The native-depth budget (AD-21): a refusal means "not this time", and the
   // interpreter runs the function. Nothing else about the budget is touched.
   GRCORE_ActivationRef record;
   if (grcore_activation_enter(stack, GRCORE_ACTIVATION_JIT, exec->engine, false, NULL, &record) != GRCORE_OK) {
+    gltang_jit_retract_to(exec, ext_base);
     return GLTANG_JIT_NOT_ENTERED;
   }
   ++jit->records_open;
@@ -448,7 +464,11 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   jit->chain = 0;
   jit->exit_valid = false;
   jit->refusal = GLTANG_REFUSAL_NONE;
+  jit->ext_floor = jit->ext_count;  // this run's calls extend above its entry's own
   uint32_t exit = grjit_code_call(jc->code, context, args, out);
+  // Every exit gives back everything the run opened, the entry's own included.
+  gltang_jit_retract_to(exec, ext_base);
+  jit->ext_floor = ext_outer_floor;
   jit->chain = outer_chain;
   --jit->records_open;
   // Left before the interpreter acts on the exit, with the rebuilt guest frames
@@ -561,6 +581,58 @@ void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool 
 }
 
 /*
+ * For the tests only: refuses the Nth nonzero extension of the reservation (an
+ * entry or a compiled call whose callee holds raw floats), or the top-up of the
+ * pool after the Nth (the memory budget's refusal, made deterministic). 0 for
+ * never. Not declared in any header but test_hooks.h.
+ */
+void gltang_vm_set_float_test_switches_unchecked(GLTANG_Execution * execution, uint64_t fail_extend_at, uint64_t fail_pool_at) {
+  if (execution && execution->jit) {
+    execution->jit->test_fail_extend_at = fail_extend_at;
+    execution->jit->test_fail_pool_at = fail_pool_at;
+    execution->jit->test_extends = 0;
+  }
+}
+
+/*
+ * For the tests only: the reservation the entries and compiled calls extend, its
+ * capacity, the boxes the pool holds and the extensions open now. Returns 1 if the
+ * execution has a JIT. Declared in vm/test_hooks.h.
+ */
+int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint64_t * capacity, uint64_t * extensions) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  *pool = *capacity = *extensions = 0;
+  if (!jit) {
+    return 0;
+  }
+  *pool = jit->pool_count;
+  *capacity = grcore_deopt_reservation_capacity(jit->reservation);
+  *extensions = jit->ext_count;
+  return 1;
+}
+
+/* For the tests only: the reservation itself, for a hand-made site's rebuild. Declared in vm/test_hooks.h. */
+GRCORE_DeoptReservation * gltang_vm_jit_test_reservation(GLTANG_Execution * execution) {
+  return execution && execution->jit ? execution->jit->reservation : NULL;
+}
+
+/* For the tests only: the engine's id, for the core's deopt functions. Declared in vm/test_hooks.h. */
+GRCORE_EngineId gltang_vm_test_engine_id(const GLTANG_Execution * execution) {
+  return execution->engine;
+}
+
+/* For the tests only: extends the reservation as an entry does (level 0) and gives it all back. Declared in vm/test_hooks.h. */
+bool gltang_vm_jit_test_extend(GLTANG_Execution * execution, size_t cells) {
+  return execution && execution->jit && gltang_jit_extend(execution, cells, 0);
+}
+
+void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution) {
+  if (execution && execution->jit) {
+    gltang_jit_retract_to(execution, 0);
+  }
+}
+
+/*
  * For the tests only: offers the compiled code of one function of the main
  * program to the entry slot of another, with the token and the parameter count
  * `mode` picks, and says whether the install was refused and what the slot held
@@ -594,9 +666,10 @@ int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t cod
 
 /*
  * For the tests only: the sites, the derived pointers and the converting
- * locations of every compiled function's metadata, which lang-tang's frames
- * must not have (a frame holds plain words and values, so the reservation each
- * call extends is always zero). Returns 1 if anything is compiled.
+ * locations of every compiled function's metadata. A frame holds plain words,
+ * values and raw floats, so there is no derived pointer, and a converting location
+ * is a raw double (see gltang_vm_jit_test_converting). Returns 1 if anything is
+ * compiled.
  */
 int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting);
 int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting) {
@@ -615,6 +688,54 @@ int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, 
         ++*sites;
         *derived += meta->sites[s].derived_count;
         *converting += grcore_deopt_converting_count(&meta->sites[s]);
+      }
+    }
+  }
+  return any;
+}
+
+/*
+ * For the tests only: the converting locations of every compiled function's
+ * metadata, split into the ones that are a raw `F64` on a raw slot (the only kind
+ * lang-tang emits) and any other, with the most at any one site and the largest
+ * `max_converting` the payloads record (the two must agree). Returns 1 if anything
+ * is compiled. Declared in vm/test_hooks.h.
+ */
+int gltang_vm_jit_test_converting(GLTANG_Execution * execution, uint64_t * f64, uint64_t * other, uint64_t * max_site, uint64_t * max_recorded);
+int gltang_vm_jit_test_converting(GLTANG_Execution * execution, uint64_t * f64, uint64_t * other, uint64_t * max_site, uint64_t * max_recorded) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  int any = 0;
+  *f64 = *other = *max_site = *max_recorded = 0;
+  for (size_t p = 0; jit && p < jit->program_capacity; ++p) {
+    for (uint32_t f = 0; jit->programs[p].fns && f < jit->programs[p].count; ++f) {
+      GLTANG_JitFn * fn = &jit->programs[p].fns[f];
+      if (!fn->code) {
+        continue;
+      }
+      const GLTANG_JitCode * jc = grcore_code_payload(fn->code);
+      const GRCORE_CodeMeta * meta = grjit_code_meta(jc->code);
+      any = 1;
+      if (jc->max_converting > *max_recorded) {
+        *max_recorded = jc->max_converting;
+      }
+      for (size_t s = 0; s < meta->site_count; ++s) {
+        uint64_t here = 0;
+        for (size_t l = 0; l < meta->sites[s].frame_state_count; ++l) {
+          const GRCORE_CodeLocation * loc = &meta->sites[s].frame_state[l];
+          if (loc->representation == GRCORE_REPR_BITS) {
+            continue;
+          }
+          ++here;
+          if (loc->representation == GRCORE_REPR_F64 && loc->slot_kind == GRCORE_SLOT_RAW) {
+            ++*f64;
+          }
+          else {
+            ++*other;
+          }
+        }
+        if (here > *max_site) {
+          *max_site = here;
+        }
       }
     }
   }

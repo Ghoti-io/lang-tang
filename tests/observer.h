@@ -58,11 +58,22 @@ namespace observer {
 /// in, the double's 64 bits out; false if the value is not a float.
 typedef bool (*FloatBits)(uint64_t value, uint64_t * bits);
 
+/// An engine's renderer of a float it holds raw: the 64 bits in, the text its
+/// inspector gives the same float boxed out (as `snprintf` does). A compiled frame
+/// can hold a float as a raw double (AD-27) until it is rebuilt; the observer does
+/// not convert it (that would box it, and change what it observes) but records it
+/// as the value it stands for: kind VALUE, this text, and the bits. An engine that
+/// supplies this reports a raw double as a RAW variable, which the interpreter's
+/// frame never has, so the observer reads a RAW variable as one too. Without it a
+/// raw slot is recorded as it is (kind RAW), which differs from the boxed one.
+typedef size_t (*FloatText)(const GRCORE_Context * context, uint64_t bits, char * buffer, size_t size);
+
 struct SlotRecord {
   GRCORE_SlotKind kind = GRCORE_SLOT_RAW;
   std::string text;
   bool is_float = false;   ///< The value is a float and `float_bits` holds its bits (only with a FloatBits reader).
   uint64_t float_bits = 0;
+  bool was_raw = false;    ///< The frame held it as a raw double (read without converting); never compared, only counted by a test that wants to know it was seen.
 };
 
 struct VariableRecord {
@@ -71,6 +82,7 @@ struct VariableRecord {
   std::string text;
   bool is_float = false;
   uint64_t float_bits = 0;
+  bool was_raw = false;
 };
 
 struct ScopeRecord {
@@ -149,11 +161,23 @@ inline std::string variable_text(const GRCORE_Context * context, const GRCORE_Ab
   return big;
 }
 
+inline std::string raw_float_text(const GRCORE_Context * context, FloatText float_text, uint64_t bits) {
+  char small[256];
+  size_t length = float_text(context, bits, small, sizeof(small));
+  if (length < sizeof(small)) {
+    return std::string(small, length);
+  }
+  std::string big(length + 1, '\0');
+  size_t again = float_text(context, bits, big.data(), big.size());
+  big.resize(again < big.size() ? again : big.size() - 1);
+  return big;
+}
+
 }  // namespace detail
 
 /// Reads the whole stack through the frame walk. Valid where the walk is: at a
 /// poll, in a handler, or while a run is paused and the caller holds it.
-inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * out, FloatBits float_bits = nullptr) {
+inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * out, FloatBits float_bits = nullptr, FloatText float_text = nullptr) {
   GRCORE_FrameWalk walk;
   if (grcore_frame_walk_begin(context, &walk) != GRCORE_OK) {
     return false;
@@ -171,8 +195,17 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
     for (size_t i = 0; i < frame.slot_count; ++i) {
       SlotRecord slot;
       uint64_t value = 0;
-      if (grcore_frame_slot(&frame, i, &slot.kind, &value) != GRCORE_OK) {
+      GRCORE_Representation representation = GRCORE_REPR_BITS;
+      if (grcore_frame_slot_tagged(&frame, i, &slot.kind, &value, &representation) != GRCORE_OK) {
         slot.text = "<unreadable>";
+      }
+      else if (representation == GRCORE_REPR_F64 && float_text) {
+        // A raw double: the value it stands for, read without converting anything.
+        slot.kind = GRCORE_SLOT_VALUE;
+        slot.text = detail::raw_float_text(context, float_text, value);
+        slot.is_float = true;
+        slot.float_bits = value;
+        slot.was_raw = true;
       }
       else {
         slot.text = detail::slot_text(frame, i);
@@ -199,9 +232,18 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
         VariableRecord var;
         var.name = variable.name ? variable.name : "";
         var.kind = variable.kind;
-        var.text = detail::variable_text(context, frame, variable);
-        if (float_bits && variable.kind == GRCORE_SLOT_VALUE) {
-          var.is_float = float_bits(variable.value, &var.float_bits);
+        if (float_text && variable.kind == GRCORE_SLOT_RAW) {
+          var.kind = GRCORE_SLOT_VALUE;
+          var.text = detail::raw_float_text(context, float_text, variable.value);
+          var.is_float = true;
+          var.float_bits = variable.value;
+          var.was_raw = true;
+        }
+        else {
+          var.text = detail::variable_text(context, frame, variable);
+          if (float_bits && variable.kind == GRCORE_SLOT_VALUE) {
+            var.is_float = float_bits(variable.value, &var.float_bits);
+          }
         }
         scope.variables.push_back(var);
       }
@@ -218,6 +260,8 @@ class Observer {
   Trace trace;
   /// Set before `attach`: records the bits of every float (see the file comment).
   FloatBits float_bits = nullptr;
+  /// Set with `float_bits` by an engine whose compiled frames hold floats raw.
+  FloatText float_text = nullptr;
 
   Observer() = default;
   Observer(const Observer &) = delete;
@@ -259,7 +303,7 @@ class Observer {
     }
     PollRecord poll;
     poll.verdict = grcore_pollcall_verdict(call);
-    poll.captured = capture(context, &poll.frames, self->float_bits);
+    poll.captured = capture(context, &poll.frames, self->float_bits, self->float_text);
     self->trace.polls.push_back(std::move(poll));
   }
 

@@ -968,6 +968,126 @@ class CallBuilder {
   }
 };
 
+/// Programs that carry floats (spec-runtime-float story 6): functions that assign a
+/// float constant to locals before a loop, copy it through other locals and
+/// duplicates, leave it live over polls and over calls of earlier functions, and
+/// end in a consumer (`print`, a global store, a comparison, arithmetic, a call
+/// argument, a return), now and then a float assigned inside an `if` or a loop (a
+/// merge of unequal kinds, which compiles with no raw slot). The tier comparison
+/// reads their frames by bits. Used only against the JIT, never against ctang: the
+/// aim is the interpreter against compiled code holding floats raw.
+class CarryBuilder {
+ public:
+  explicit CarryBuilder(uint64_t seed) : e_(seed) {}
+
+  std::string build() {
+    line("gs = 0;");
+    line("gt = 0.0;");
+    int functions = 3 + (int)below(5);
+    for (int i = 0; i < functions; ++i) {
+      function(i);
+    }
+    line("acc = 0;");
+    for (int i = 0; i < functions; ++i) {
+      std::string call = "c" + std::to_string(i) + "(" + std::to_string(below(9)) + ", " + std::to_string(below(9)) + ")";
+      if (chance(50)) {
+        line("for (k" + std::to_string(i) + " = 0; k" + std::to_string(i) + " < " + std::to_string(2 + below(6)) + "; k" + std::to_string(i) + " += 1) { print(" + call + "); print(\",\"); }");
+      }
+      else {
+        line("print(" + call + "); print(\",\");");
+      }
+    }
+    line("print(gs); print(gt);");
+    line("acc;");
+    return out_;
+  }
+
+ private:
+  std::mt19937_64 e_;
+  std::string out_;
+  int functions_ = 0;
+
+  uint64_t below(uint64_t n) { return e_() % n; }
+  bool chance(unsigned percent) { return below(100) < percent; }
+  void line(const std::string & s) { out_ += s + "\n"; }
+
+  /// A float literal. Scientific notation is not Tang syntax, so the extremes are spelled
+  /// out: 1e308 is a one and three hundred and eight zeros, the subnormal 1e-320 a point,
+  /// three hundred and nineteen zeros and a one.
+  std::string literal() {
+    static const char * const f[] = {"0.5", "1.5", "2.25", "0.1", "0.0", "3.0", "123456789.125", "100000000000000000000.0", "0.00000000000000000001",
+        "9007199254740993.0", "0.30000000000000004", "100.0"};
+    switch (below(16)) {
+      case 12: return "1" + std::string(308, '0') + ".0";
+      case 13: return "0." + std::string(319, '0') + "1";
+      case 14: return "0." + std::string(307, '0') + "22250738585072014";
+      default: return f[below(sizeof f / sizeof f[0])];
+    }
+  }
+  std::string local(int count) { return "q" + std::to_string(below(count)); }
+
+  void function(int index) {
+    std::string name = "c" + std::to_string(index);
+    line("function " + name + "(p0, p1) {");
+    int floats = 1 + (int)below(5);
+    line("  global gs; global gt;");
+    // The conflict shapes first: a float assigned only on some paths.
+    bool conflict = chance(25);
+    if (conflict) {
+      line("  if (p0 > 4) { q0 = " + literal() + "; } else { q0 = " + std::to_string(below(9)) + "; }");
+    }
+    for (int i = conflict ? 1 : 0; i < floats; ++i) {
+      std::string v = "q" + std::to_string(i);
+      switch (below(4)) {
+        case 0: line("  " + v + " = " + literal() + ";"); break;
+        case 1: line("  " + v + " = " + (i > 0 ? local(i) : literal()) + ";"); break;                       // a copy
+        case 2: line("  " + v + " = w" + std::to_string(i) + " = " + literal() + ";"); break;               // a chain (a duplicate)
+        default: line("  " + v + " = " + literal() + "; " + "w" + std::to_string(i) + " = " + v + ";"); break;
+      }
+    }
+    line("  acc = p0;");
+    int loops = (int)below(3);
+    for (int l = 0; l < loops; ++l) {
+      std::string j = "j" + std::to_string(l);
+      line("  for (" + j + " = 0; " + j + " < " + std::to_string(2 + below(12)) + "; " + j + " += 1) {");
+      line("    acc = (acc + " + j + " * 3) % 1000;");
+      if (functions_ > 0 && chance(60)) {
+        line("    acc = (acc + c" + std::to_string(below(functions_)) + "(" + j + ", acc % 7)) % 1000;");
+      }
+      if (chance(25)) {
+        line("    " + local(floats) + " = " + literal() + ";");  // reassigned in the loop: a kind that may or may not agree
+      }
+      line("  }");
+    }
+    if (functions_ > 0 && chance(50)) {
+      line("  acc = (acc + c" + std::to_string(below(functions_)) + "(p1, p0)) % 1000;");
+    }
+    // Consumers: each reads a raw float and is an exit.
+    int consumers = (int)below(3);
+    for (int c = 0; c < consumers; ++c) {
+      std::string v = local(floats);
+      switch (below(8)) {
+        case 0: line("  print(" + v + "); print(\";\");"); break;
+        case 1: line("  gt = " + v + ";"); break;
+        case 2: line("  if (" + v + " == " + literal() + ") { acc = acc + 1; }"); break;
+        case 3: line("  print(" + v + " + " + literal() + "); print(\";\");"); break;
+        case 4: line("  gs = (gs + p0) % 1000; print(-" + v + "); print(\";\");"); break;
+        case 5: line("  print(" + v + " < " + local(floats) + "); print(\";\");"); break;
+        case 6: line("  if (" + v + ") { acc = acc + 2; }"); break;
+        default: line("  print(" + local(floats) + " as string); print(\";\");"); break;
+      }
+    }
+    if (chance(15)) {
+      line("  return " + local(floats) + ";");
+    }
+    else {
+      line("  return (acc + p1) % 1000;");
+    }
+    line("}");
+    ++functions_;
+  }
+};
+
 }  // namespace detail
 
 /// A call-graph program for `seed` (a script): calls between functions of up to
@@ -978,6 +1098,16 @@ inline Program generate_calls(uint64_t seed, bool natives = false) {
   p.seed = seed;
   p.mode = Mode::Script;
   p.source = detail::CallBuilder(seed, natives).build();
+  return p;
+}
+
+/// A program for `seed` that carries floats in locals and operand slots across loops
+/// and calls and consumes them in every way (a script).
+inline Program generate_carry(uint64_t seed) {
+  Program p;
+  p.seed = seed;
+  p.mode = Mode::Script;
+  p.source = detail::CarryBuilder(seed).build();
   return p;
 }
 

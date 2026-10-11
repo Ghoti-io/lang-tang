@@ -206,6 +206,7 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
   obs.trace.sample_every = sample_every;
   obs.trace.sample_cap = sample_cap;
   obs.float_bits = &gltang_vm_test_float_bits;
+  obs.float_text = &gltang_vm_test_float_text;
   if (obs.attach(context.context) != GRCORE_OK) {
     throw std::runtime_error("the frame observer could not be attached");
   }
