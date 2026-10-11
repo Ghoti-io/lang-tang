@@ -185,7 +185,8 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
 /// by observer::first_divergence, floats by bits and any two NaNs equal. The same fuel,
 /// libraries and verdict rules as lang_tang_run.
 inline Verdict lang_tang_run_traced(const std::string & source, bool script, long jit_threshold, observer::Trace * trace, size_t limit,
-    uint64_t * compiled_calls = nullptr, size_t sample_every = 0, size_t sample_cap = 0, GLTANG_JitStats * jit_stats = nullptr, int torture = -1, int verify = -1) {
+    uint64_t * compiled_calls = nullptr, size_t sample_every = 0, size_t sample_cap = 0, GLTANG_JitStats * jit_stats = nullptr, int torture = -1, int verify = -1,
+    std::string * errors = nullptr) {
   tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
   if (compiled.result == GLTANG_ERR_FORMAT) {
     return Verdict::reject();
@@ -203,6 +204,13 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
     throw std::runtime_error("lang-tang could not make a context");
   }
   context.attach();
+  if (errors) {
+    // Every error is entered when it is created, so that the list says what each tier made, not
+    // only the errors a program swallowed.
+    if (gltang_execution_set_log_all_errors(context.execution, true) != GLTANG_OK) {
+      throw std::runtime_error("lang-tang would not log every error");
+    }
+  }
   observer::Observer obs;
   obs.trace.limit = limit;
   obs.trace.sample_every = sample_every;
@@ -221,6 +229,14 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
     *jit_stats = context.jit_stats();
   }
   *trace = std::move(obs.trace);
+  if (errors) {
+    // The error list, in order, as the JIT harness reads it: the tiers must agree on it.
+    errors->clear();
+    for (size_t i = 0; i < context.error_count(); ++i) {
+      auto e = context.error(i);
+      *errors += e.template_name() + ":" + std::to_string(e.e.line) + "[" + e.chain_text() + "]" + std::to_string((int)e.e.how) + ":" + e.message() + ";";
+    }
+  }
   if (r == GRCORE_ERR_LIMIT || (r == GRCORE_OK && context.outcome == GRCORE_OUTCOME_PAUSED)) {
     return Verdict::paused();
   }

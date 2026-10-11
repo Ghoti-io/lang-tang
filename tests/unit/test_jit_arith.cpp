@@ -484,6 +484,23 @@ TEST(JitArith, ACastToIntTruncatesTowardZeroAndACastToFloatKeepsTheBits) {
   EXPECT_EQ(jit.stats.deopts, kMain);
 }
 
+TEST(JitArith, UnaryMinusOfARawFloatFlipsTheSignBitAloneSoNegativeZeroAndNaNAreRight) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // -0.0 for 0.0 (text "-0."), 0. for -0.0, a NaN stays a NaN, and an integer's minus is the integer path.
+  Scenario sc = scenario(std::string(kPrelude) +
+      "function f(a) { x = a as float; y = -x; z = -y; w = -a; print(y); print(\" \"); print(z); print(\" \"); print(y == x); return 0; }\n"
+      "function g(a) { x = a as float; y = -x; if (y != y) { return 1; } if (y > 0.0) { return 2; } if (y < 0.0) { return 3; } return 4; }\n"
+      "f(0.0); print(\" | \"); f(nz); print(\" | \"); f(2.5); print(\" | \"); f(nan); print(\" | \"); f(-7);\n"
+      "print(g(0.0)); print(g(nz)); print(g(nan)); print(g(pinf)); print(g(-3)); print(g(4));\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_NE(jit.raw.find("-0. 0. true"), std::string::npos) << "-(0.0) is negative zero: " << jit.raw;
+  EXPECT_NE(jit.raw.find("0. -0. true"), std::string::npos) << "-(-0.0) is positive zero: " << jit.raw;
+  EXPECT_NE(jit.raw.find("nan"), std::string::npos) << jit.raw;
+  EXPECT_NE(jit.stats.entries, 0u);
+}
+
 // ---------------------------------------------------------------------------
 // Consumers of a computed float
 // ---------------------------------------------------------------------------

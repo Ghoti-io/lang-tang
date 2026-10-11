@@ -1088,6 +1088,231 @@ class CarryBuilder {
   }
 };
 
+/// Programs that compute with floats and divide (spec-runtime-float story 7): functions that
+/// make float locals from literals and casts, compute with `+ - * /`, unary minus, the six
+/// comparisons and `as int` / `as float` over floats, integers and the special floats, in loops and
+/// `if`s, with divisors and moduli the program steers to zero, -1, the small-integer bounds, NaN,
+/// infinity and negative zero, and parameters that are floats, integers, strings and null. The
+/// results are consumed by `print`, `return`, a comparison and a branch. Every error case of the
+/// matrix is reachable: a float or mixed or integer division by zero, a modulo by zero, `%` on a
+/// float, `INT_MIN / -1`, `as int` of NaN, infinity and 2^59 and beyond, a non-number operand.
+/// Used only against the JIT, never against ctang: the aim is the interpreter against compiled
+/// code, floats compared by bits. A function exits at most a few times in the driver, so most
+/// of its calls run compiled.
+class ArithBuilder {
+ public:
+  explicit ArithBuilder(uint64_t seed) : e_(seed) {}
+
+  std::string build() {
+    line("big = \"1.7976931348623157e308\" as float; pinf = big * 10.0; ninf = 0.0 - pinf; nan = pinf - pinf; nz = -0.0;");
+    line("tiny = \"5e-324\" as float; small = \"2.2250738585072014e-308\" as float; smax = 576460752303423487; smin = (0 - 576460752303423487) - 1;");
+    line("gs = 0; gt = 0.0;");
+    int functions = 3 + (int)below(5);
+    for (int i = 0; i < functions; ++i) {
+      function(i);
+    }
+    // The arguments: floats, integers (both bounds), the specials, a string, null, a boolean.
+    line("sp = [0.0, nz, 1.5, -2.5, pinf, ninf, nan, tiny, big, 3, -3, 7, 0, 1, -1, 2, smax, smin, 9007199254740993, small, \"s\", null, true];");
+    line("acc = 0;");
+    for (int i = 0; i < functions; ++i) {
+      std::string n = std::to_string(i);
+      line("for (a" + n + " = 0; a" + n + " < " + std::to_string(3 + below(5)) + "; a" + n + " += 1) { print(c" + n + "(sp[" + pick_index() + "], sp[" + pick_index() + "])); print(\",\"); }");
+    }
+    line("print(gs); print(gt);");
+    line("acc;");
+    return out_;
+  }
+
+ private:
+  std::mt19937_64 e_;
+  std::string out_;
+  int functions_ = 0;
+
+  uint64_t below(uint64_t n) { return e_() % n; }
+  bool chance(unsigned percent) { return below(100) < percent; }
+  void line(const std::string & s) { out_ += s + "\n"; }
+  std::string pick_index() { return std::to_string(below(23)); }
+  template <size_t N>
+  const char * pick(const char * const (&items)[N]) { return items[below(N)]; }
+
+  std::string literal() {
+    static const char * const f[] = {"0.5", "1.5", "2.25", "0.1", "0.0", "3.0", "-1.5", "123456789.125", "9007199254740993.0", "0.30000000000000004", "100.0", "576460752303423424.0"};
+    return f[below(sizeof f / sizeof f[0])];
+  }
+  std::string integer() {
+    static const char * const f[] = {"0", "1", "-1", "2", "-2", "3", "7", "-7", "10", "smax", "smin", "1000", "5"};
+    return f[below(sizeof f / sizeof f[0])];
+  }
+  std::string special() {
+    static const char * const f[] = {"pinf", "ninf", "nan", "nz", "tiny", "big", "small"};
+    return f[below(sizeof f / sizeof f[0])];
+  }
+  /// A float operand: a local, a literal, a special, an integer (mixed), a parameter, or the loop counter.
+  std::string operand(int fl, int in) {
+    switch (below(10)) {
+      case 0: case 1: case 2: case 3: return "x" + std::to_string(below(fl));
+      case 4: return literal();
+      case 5: return special();
+      case 6: return "i" + std::to_string(below(in));
+      case 7: return integer();
+      case 8: return below(2) ? "p0" : "p1";
+      default: return "j";
+    }
+  }
+  /// A divisor, steered to zero some of the time, to NaN and infinity, to -1 and to a bound.
+  std::string divisor(int fl, int in) {
+    switch (below(12)) {
+      case 0: return "0.0";
+      case 1: return "nz";
+      case 2: return "(x" + std::to_string(below(fl)) + " - x" + std::to_string(below(fl)) + ")";
+      case 3: return "0";
+      case 4: return "nan";
+      case 5: return "pinf";
+      case 6: return "-1";
+      case 7: return "(j - j)";
+      case 8: return literal();
+      case 9: return "j";
+      default: return operand(fl, in);
+    }
+  }
+  std::string idivisor(int in) {
+    switch (below(9)) {
+      case 0: return "0";
+      case 1: return "-1";
+      case 2: return "(j - j)";
+      case 3: return "smin";
+      case 4: return "smax";
+      case 5: return "j";
+      case 6: return "2";
+      case 7: return "i" + std::to_string(below(in));
+      default: return "3";
+    }
+  }
+  std::string compare_op() {
+    static const char * const o[] = {"<", "<=", ">", ">=", "==", "!="};
+    return o[below(6)];
+  }
+  std::string float_op() {
+    static const char * const o[] = {"+", "-", "*", "/"};
+    return o[below(4)];
+  }
+
+  void statement(int fl, int in, const std::string & indent) {
+    std::string a = "x" + std::to_string(below(fl));
+    std::string i = "i" + std::to_string(below(in));
+    switch (below(16)) {
+      case 0: case 1: case 2: {
+        std::string op = float_op();
+        std::string right = op == "/" ? divisor(fl, in) : operand(fl, in);
+        line(indent + a + " = " + operand(fl, in) + " " + op + " " + right + ";");
+        break;
+      }
+      case 3:
+        line(indent + a + " = -" + operand(fl, in) + ";");
+        break;
+      case 4:
+        line(indent + "if (" + operand(fl, in) + " " + compare_op() + " " + operand(fl, in) + ") { " + a + " = " + a + " + 1.5; } else { " + a + " = " + a + " * 0.5; }");
+        break;
+      case 5:
+        line(indent + i + " = " + integer() + " / " + idivisor(in) + ";");
+        break;
+      case 6:
+        // Mostly integers; a float operand now and then, which the interpreter refuses.
+        line(indent + i + " = " + (chance(20) ? operand(fl, in) : integer()) + " % " + idivisor(in) + ";");
+        break;
+      case 7:
+        // Casts to int: any float local, a special, and values beyond the range of either size.
+        switch (below(5)) {
+          case 0: line(indent + i + " = " + a + " as int;"); break;
+          case 1: line(indent + i + " = " + special() + " as int;"); break;
+          case 2: line(indent + i + " = (" + a + " * 1000000000000000000.0) as int;"); break;
+          case 3: line(indent + i + " = (" + a + " * big) as int;"); break;
+          default: line(indent + i + " = (" + a + " - 0.5) as int;"); break;
+        }
+        break;
+      case 8:
+        line(indent + a + " = " + i + " as float;");
+        break;
+      case 9:
+        line(indent + a + " = " + operand(fl, in) + " as float;");
+        break;
+      case 10:
+        line(indent + "acc = (acc + (" + a + " " + compare_op() + " " + operand(fl, in) + ")) % 1000;");
+        break;
+      case 11:
+        line(indent + i + " = " + i + " + " + integer() + " * " + integer() + ";");
+        break;
+      case 12:
+        line(indent + i + " = " + i + " % " + idivisor(in) + ";");
+        break;
+      case 13:
+        line(indent + a + " = " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + ";");
+        break;
+      case 14:
+        line(indent + "print(" + a + " " + compare_op() + " " + operand(fl, in) + "); print(\"c\");");
+        break;
+      default:
+        line(indent + "if (" + a + " " + compare_op() + " " + operand(fl, in) + ") { acc = acc + 1; }");
+        break;
+    }
+  }
+
+  void function(int index) {
+    std::string name = "c" + std::to_string(index);
+    line("function " + name + "(p0, p1) {");
+    line("  global big; global pinf; global ninf; global nan; global nz; global tiny; global small; global smax; global smin; global gs; global gt;");
+    int fl = 2 + (int)below(4);
+    int in = 1 + (int)below(3);
+    // The raw sources: a literal, a cast of a parameter, a cast of an integer, a special.
+    for (int k = 0; k < fl; ++k) {
+      std::string v = "  x" + std::to_string(k) + " = ";
+      switch (below(5)) {
+        case 0: line(v + literal() + ";"); break;
+        case 1: line(v + "p0 as float;"); break;
+        case 2: line(v + "p1 as float;"); break;
+        case 3: line(v + integer() + " as float;"); break;
+        default: line(v + literal() + " + " + literal() + ";"); break;
+      }
+    }
+    for (int k = 0; k < in; ++k) {
+      line("  i" + std::to_string(k) + " = " + integer() + ";");
+    }
+    line("  acc = 0; j = 0;");
+    int body = 1 + (int)below(3);
+    for (int s = 0; s < body; ++s) {
+      statement(fl, in, "  ");
+    }
+    int loops = 1 + (int)below(2);
+    for (int l = 0; l < loops; ++l) {
+      line("  for (j = 0; j < " + std::to_string(2 + below(6)) + "; j += 1) {");
+      int count = 2 + (int)below(5);
+      for (int s = 0; s < count; ++s) {
+        statement(fl, in, "    ");
+      }
+      line("  }");
+    }
+    // Consumers: a print, a global store, a branch, and what the function returns.
+    int consumers = (int)below(3);
+    for (int c = 0; c < consumers; ++c) {
+      std::string v = "x" + std::to_string(below(fl));
+      switch (below(5)) {
+        case 0: line("  print(" + v + "); print(\";\");"); break;
+        case 1: line("  gt = " + v + ";"); break;
+        case 2: line("  if (" + v + " " + compare_op() + " " + operand(fl, in) + ") { acc = acc + 3; }"); break;
+        case 3: line("  print(i" + std::to_string(below(in)) + "); print(\";\");"); break;
+        default: line("  gs = (gs + 1) % 1000;"); break;
+      }
+    }
+    switch (below(4)) {
+      case 0: line("  return x" + std::to_string(below(fl)) + ";"); break;
+      case 1: line("  return i" + std::to_string(below(in)) + ";"); break;
+      default: line("  return acc;"); break;
+    }
+    line("}");
+    ++functions_;
+  }
+};
+
 }  // namespace detail
 
 /// A call-graph program for `seed` (a script): calls between functions of up to
@@ -1108,6 +1333,15 @@ inline Program generate_carry(uint64_t seed) {
   p.seed = seed;
   p.mode = Mode::Script;
   p.source = detail::CarryBuilder(seed).build();
+  return p;
+}
+
+/// A program for `seed` that computes with floats and divides (a script).
+inline Program generate_arith(uint64_t seed) {
+  Program p;
+  p.seed = seed;
+  p.mode = Mode::Script;
+  p.source = detail::ArithBuilder(seed).build();
   return p;
 }
 

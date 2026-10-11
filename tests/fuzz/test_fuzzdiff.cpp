@@ -43,6 +43,7 @@
 #include "oracle/run_lang_tang.h"
 #include "fuzz/gen.h"
 
+#include <map>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -424,6 +425,113 @@ TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatCarryFloatsRawAcrossLoopsAndCall
   }
   std::printf("  fuzz-diff carried floats: %zu programs (seeds 1 to 150) and %zu again under torture and verify, interpreter against threshold 1, %zu and %zu agree; %zu float slots compared by bits, %zu read raw, %llu boxed by rebuilds\n",
       programs, torture_programs, agreed, torture_agreed, floats, raw_seen, static_cast<unsigned long long>(boxed));
+}
+
+TEST(FuzzDiff, TiersAgreeOnGeneratedProgramsThatComputeWithFloatsAndDivideComparedByBits) {
+  // Interpreter against every function compiled at its first poll, on programs built to compute with
+  // raw floats and to divide (spec-runtime-float story 7): arithmetic, negation, comparisons and casts
+  // over floats, integers and the special floats, in loops and branches, with divisors steered to every
+  // error case, parameters that are floats, integers, strings and null, results consumed by print,
+  // return, a comparison and a branch. Not run against ctang. Seeds 1 to 150 run plain, and 1 to 40
+  // run again with the heap's torture and verify on in both tiers. The error lists are compared too.
+  GLTANG_REQUIRE_JIT_BACKEND();
+  size_t agreed = 0, programs = 0, floats = 0, raw_seen = 0, shown = 0, torture_agreed = 0, torture_programs = 0, with_errors = 0, nans = 0;
+  uint64_t entries = 0, boxed = 0, compiled_calls = 0;
+  std::map<std::string, size_t> error_kinds;
+  // The shapes the generator must have made at least once, by the text that shows each.
+  const std::pair<const char *, const char *> shapes[] = {
+      {"a float made by a cast of a parameter", " = p0 as float;"},
+      {"a float made by a cast of an integer", " as float;"},
+      {"a float literal sum", " = 0.5 + "},
+      {"a float divided by a steered zero", " / (x"},
+      {"a float divided by a literal zero", " / 0.0;"},
+      {"a division by negative zero", " / nz;"},
+      {"a division by a counter minus itself", " / (j - j);"},
+      {"an integer division", "i0 = "},
+      {"an integer division by a bound", " / smin;"},
+      {"an integer modulo", " % "},
+      {"a modulo of a float", "%"},
+      {"a negation", " = -"},
+      {"a comparison in a branch", "if (x"},
+      {"a comparison summed", "acc = (acc + ("},
+      {"a cast to int", " as int;"},
+      {"a printed comparison", "print(x"},
+      {"a returned float", "  return x"},
+      {"a global store of a float", "  gt = x"},
+      {"a mixed integer and float operation", " = i"},
+      {"a chain of two operations", " = x"},
+  };
+  size_t seen_shape[sizeof shapes / sizeof shapes[0]] = {};
+  for (uint64_t seed = 1; seed <= 150; ++seed) {
+    for (int torture = 0; torture < 2; ++torture) {
+      if (torture && seed > 40) {
+        break;
+      }
+      Tiers t;
+      t.seed = seed;
+      t.mode = gen::Mode::Script;
+      t.source = gen::generate_arith(seed).source;
+      if (!torture) {
+        for (size_t k = 0; k < sizeof shapes / sizeof shapes[0]; ++k) {
+          seen_shape[k] += t.source.find(shapes[k].second) != std::string::npos;
+        }
+      }
+      std::string plain_errors, jit_errors;
+      t.plain = oracle::lang_tang_run_traced(t.source, true, 0, &t.plain_trace, kTierPolls, nullptr, kTierSampleEvery, kTierSamples, nullptr, torture, torture, &plain_errors);
+      t.jit = oracle::lang_tang_run_traced(t.source, true, 1, &t.jit_trace, kTierPolls, &compiled_calls, kTierSampleEvery, kTierSamples, &t.jit_stats, torture, torture, &jit_errors);
+      std::string why = tiers_difference(t);
+      if (why.empty() && plain_errors != jit_errors) {
+        why = "TIER DIVERGENCE at seed " + std::to_string(seed) + ": error lists differ\n  interpreter: " + plain_errors + "\n  compiled:    " + jit_errors + "\n" + t.source;
+      }
+      if (torture) {
+        ++torture_programs;
+        torture_agreed += why.empty();
+      }
+      else {
+        ++programs;
+        entries += t.jit_stats.entries;
+        boxed += t.jit_stats.values_boxed;
+        agreed += why.empty();
+        with_errors += !plain_errors.empty();
+        for (const char * kind : {"ivide by zero", "odulo by zero", "Not supported", "NOT A NUMBER", "TOO LARGE", "TOO SMALL"}) {
+          error_kinds[kind] += plain_errors.find(kind) != std::string::npos;
+        }
+        for (const auto & p : t.jit_trace.polls) {
+          for (const auto & f : p.frames) {
+            for (const auto & s : f.slots) {
+              floats += s.is_float;
+              raw_seen += s.was_raw;
+              nans += s.is_float && observer::detail::is_nan_bits(s.float_bits);
+            }
+          }
+        }
+      }
+      if (!why.empty() && shown++ < 5) {
+        ADD_FAILURE() << (torture ? "under torture and verify: " : "") << why;
+      }
+    }
+  }
+  EXPECT_EQ(agreed, programs);
+  EXPECT_EQ(torture_agreed, torture_programs);
+  EXPECT_EQ(torture_programs, 40u);
+  EXPECT_GT(entries, 300u) << "compiled code ran: the comparison is not vacuous";
+  EXPECT_GT(boxed, 100u) << "and rebuilt frames that held floats raw";
+  EXPECT_GT(floats, 1000u);
+  EXPECT_GT(nans, 20u) << "NaNs are in the traces";
+  EXPECT_GT(raw_seen, 100u) << "polls inside compiled code saw floats held raw and read them without converting them";
+  EXPECT_GT(with_errors, 50u) << "the error shapes made the interpreter report errors";
+  for (const auto & kind : error_kinds) {
+    EXPECT_GT(kind.second, 0u) << "no generated program made the error \"" << kind.first << "\"";
+  }
+  for (size_t k = 0; k < sizeof shapes / sizeof shapes[0]; ++k) {
+    EXPECT_GT(seen_shape[k], 0u) << "the generator made no program with " << shapes[k].first << ": a change to it has emptied this test of that shape";
+  }
+  std::printf("  fuzz-diff arithmetic: %zu programs (seeds 1 to 150) and %zu again under torture and verify, %zu and %zu agree; %zu programs with errors; %zu float slots compared by bits, %zu read raw, %llu boxed by rebuilds",
+      programs, torture_programs, agreed, torture_agreed, with_errors, floats, raw_seen, static_cast<unsigned long long>(boxed));
+  for (const auto & kind : error_kinds) {
+    std::printf("; \"%s\" in %zu", kind.first.c_str(), kind.second);
+  }
+  std::printf("\n");
 }
 
 TEST(FuzzDiff, TheGeneratorMakesEveryKindOfFloat) {
