@@ -268,10 +268,13 @@ TEST(JitCalls, ACalleeOperandTwoPathsProduceDifferentlyIsNeverACompiledCallSite)
   };
   for (const auto & shape : shapes) {
     const std::string callee = shape.second;
+    // `drive` must itself leave compiled code before it calls `t`, as it did when `%` was an exit;
+    // `%` and `/` are compiled now (story 7), so the alternating flag is read from an array literal,
+    // which is an exit, and `drive` still reaches `t` from the interpreter.
     auto program = [&](const std::string & call) {
       return "function f(x) { return x + 1; }\nfunction g(x) { return x + 2; }\n"
              "function t(c, x) { return " + call + "; }\n"
-             "function drive(n) { s = 0; for (i = 0; i < n; i += 1) { s = s + t(i % 2 == 0, i); } return s; }\n"
+             "function drive(n) { s = 0; for (i = 0; i < n; i += 1) { s = s + t([true, false][i - (i / 2) * 2], i); } return s; }\n"
              "print(drive(30));\n";
     };
     // The control: one named callee, a compiled call site.

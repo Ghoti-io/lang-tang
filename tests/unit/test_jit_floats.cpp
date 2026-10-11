@@ -191,7 +191,7 @@ TEST(JitFloats, ACompiledLoopThatCarriesAFloatAllocatesNothingPerIterationAndBox
   EXPECT_GE(jit_long.stats.entries, 1u);
   EXPECT_EQ(jit_long.stats.slow_polls, 0u) << "nothing was pending: every poll was the fast path";
   EXPECT_EQ(jit_long.heap_allocations, jit_short.heap_allocations) << "the allocation count has slope zero in the loop length";
-  EXPECT_EQ(plain_long.heap_allocations, plain_short.heap_allocations) << "and so does the interpreter's, on this loop (story 7 re-runs it on arithmetic)";
+  EXPECT_EQ(plain_long.heap_allocations, plain_short.heap_allocations) << "and so does the interpreter's, on this loop (test_jit_arith.cpp re-runs it on arithmetic)";
   // The one exit, at `print`, boxed what was live: the local and the operand, once each.
   EXPECT_EQ(jit_short.stats.values_boxed, 2u);
   EXPECT_EQ(jit_long.stats.values_boxed, 2u) << "the same however long the loop ran";
@@ -475,11 +475,13 @@ TEST(JitFloats, EveryInstructionThatReadsARawOperandIsAnExitWithTheOperandInTheF
   GLTANG_REQUIRE_JIT_BACKEND();
   const char * consumers[] = {
       "print(x);",
-      "y = x + 1; print(y);",
-      "y = 1 + x; print(y);",
-      "y = -x; print(y);",
-      "y = x < 2; print(y);",
-      "y = x == 1.5; print(y);",
+      // x + 1, 1 + x, -x, x < 2 and x == 1.5 were consumers here until story 7 compiled them: they are in
+      // test_jit_arith.cpp now. What stays an exit is what is not an operation: % (a float is "not
+      // supported"), the casts to string and to bool, truthiness.
+      "y = x % 2; print(y);",
+      "y = 2 % x; print(y);",
+      "y = x as string; print(y);",
+      "y = x as bool; print(y);",
       "if (x) { i = i + 1; } print(i);",
       "y = !x; print(y);",
       "y = x && 1; print(y);",
@@ -1267,18 +1269,24 @@ TEST(JitFloats, AFailedRebuildLeavesNoRawWordInAGuestFrameWhereACollectionCanRea
 TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The instructions that read no stack operand, or only move one (reads_raw says no),
-  // and those that flow on with a known effect on the kinds (apply_kinds says yes).
-  const std::set<unsigned> moves = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
-      GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP};
+  // and those that flow on with a known effect on the kinds (apply_kinds says yes). Story 7 adds the
+  // operations that compute with a raw operand: they are not exits either (reads_raw says no), and
+  // they have a known effect on the kinds (a float result stays raw). `%` and a cast to bool (the hook
+  // asks with cast type 2) are exits with a raw operand, which is what the policy shows for them.
+  const std::set<unsigned> go_on_with_a_raw_operand = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
+      GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
+      GLTANG_OP_NEG, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE,
+      GLTANG_OP_EQ, GLTANG_OP_NE};
   const std::set<unsigned> flows = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
       GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
-      GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT,
-      GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE, GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET};
+      GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_MOD, GLTANG_OP_LT,
+      GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CAST, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE,
+      GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET};
   for (unsigned op = 0; op < static_cast<unsigned>(GLTANG_OP_COUNT); ++op) {
     unsigned policy = gltang_vm_jit_test_opcode_policy(op);
     const bool reads = (policy & 1u) != 0;
     const bool known = (policy & 2u) != 0;
-    EXPECT_EQ(reads, moves.count(op) == 0) << "opcode " << op << ": with every operand raw, only a mover may go on without an exit";
+    EXPECT_EQ(reads, go_on_with_a_raw_operand.count(op) == 0) << "opcode " << op << ": with every operand raw, only a mover or an operation that computes with one may go on without an exit";
     EXPECT_EQ(known, flows.count(op) != 0) << "opcode " << op << ": a stack effect on the kinds is known for exactly the instructions that flow on";
   }
 }

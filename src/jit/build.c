@@ -30,8 +30,9 @@
  * made the function's entry poll itself, and 0 from a compiled call, whose callee
  * makes its own; the prologue branches on it, so one body serves both.
  *
- * What it inlines is the cheap and the exact: small-integer arithmetic and
- * comparisons, booleans, locals and globals, function values, jumps, `POLL`,
+ * What it inlines is the cheap and the exact: small-integer arithmetic (`/` and `%`
+ * too) and comparisons, float arithmetic and comparisons and the casts to int and to
+ * float (below), booleans, locals and globals, function values, jumps, `POLL`,
  * `LINE`, `RET`, `CALL` of a function the declaration scan can name, and the
  * library: the load of a `use`d path or a library's `.name` and the `CALL` of a
  * library native (a host function), each a call to the engine's own operation
@@ -52,14 +53,31 @@
  * A float constant is held raw. Each local and each operand position has a kind at
  * every point of the code, `REF` (a value word, as above) or `F64` (a raw double),
  * and a slot that is ever raw has a second, `F64` register beside its `REF` one;
- * a frame state names exactly one of the two. The only source of a raw double is a
- * float `CONST` (its bits, as the interpreter's constant has them); `LOAD_LOCAL`,
- * `STORE_LOCAL`, `DUP`, `POP` and the jumps carry a kind unchanged, and every other
- * instruction that reads a raw operand is an unconditional exit with the operand in
+ * a frame state names exactly one of the two. The sources of a raw double are a
+ * float `CONST` (its bits, as the interpreter's constant has them), a `CAST` to float
+ * and an arithmetic result with a raw operand; `LOAD_LOCAL`, `STORE_LOCAL`, `DUP`,
+ * `POP` and the jumps carry a kind unchanged. An instruction that reads a raw operand
+ * and is not one of the operations below is an unconditional exit with the operand in
  * its frame state, so compiled code never boxes: a rebuild does, once, from boxes
  * made ahead of time (AD-27, boxes.c). Where the ways into a jump target disagree on
  * a slot's kind, every raw source of the function becomes an exit and the analysis is
  * run again, so the function is then compiled as it was before floats were carried.
+ *
+ * Float operations (story 7): `+ - * /`, unary minus and the six comparisons compute
+ * with doubles when an operand is statically raw (the static kinds decide what is a
+ * float; the run-time type only decides whether a guard holds, so two `REF` operands
+ * stay the small-integer instruction and exit on a float). The other operand is read as
+ * a double by `unbox` (a small integer is converted with `(double)`, a float object is
+ * read after a pointer test and a `kind` test, anything else is a guard exit), once per
+ * use and never kept. A float result is a raw double; a comparison is a boolean word; an
+ * integer result is a small-integer word. Every case the interpreter turns into an error
+ * or a heap allocation (a zero divisor, `%` on a float, a NaN or out-of-range float to
+ * int, a result outside the small-integer range, a boxed integer, a non-number) is a guard
+ * that exits before the operation's effect, and every guard of an operation comes before
+ * the result is written to its slot register, so a frame state still names the operands as
+ * the interpreter's frame holds them. Division and truncation are written with the guards
+ * runtime-jit's verifier requires, in the shapes it recognizes (`guard_nonzero`, the
+ * minimum-over-minus-one pair, `trunc_small`).
  *
  * Fuel is the same on every tier: every executed bytecode costs
  * `gltang_opcode_cost_table[op]`. Compiled code adds it directly to the
@@ -115,6 +133,8 @@ typedef struct Ctx {
   GRJIT_VReg act;                 ///< The execution's activation, for the prologue.
   GRJIT_VReg gp;                  ///< The globals array, for a global load.
   GRJIT_VReg tmp[TMP_COUNT];
+  GRJIT_VReg tmp_f[2];            ///< The `F64` temporaries of a float operation: an unboxed operand lives in one, for that operation only.
+  bool need_tmp_f;                ///< The function has a float operation or a cast to int, so declares them.
   GRJIT_FrameSlot state[GLTANG_JIT_MAX_SLOTS];
   GRJIT_FrameSlot state2[GLTANG_JIT_MAX_SLOTS];
   uint64_t pending_cost;          ///< Fuel of the operations emitted since the last add to memory.
@@ -219,6 +239,8 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
+    case GLTANG_OP_DIV:
+    case GLTANG_OP_MOD:
     case GLTANG_OP_LT:
     case GLTANG_OP_LE:
     case GLTANG_OP_GT:
@@ -232,6 +254,9 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_OR:
     case GLTANG_OP_RET:
       return true;
+    case GLTANG_OP_CAST:
+      // To int and to float; a cast to float makes a raw double, which is a raw source.
+      return a == GLTANG_CAST_TYPE_INTEGER || (a == GLTANG_CAST_TYPE_FLOAT && !c->raw_off);
     case GLTANG_OP_USE:
       return c->natives_on && use_load_ok(c, a);
     case GLTANG_OP_LOAD_GLOBAL:
@@ -271,7 +296,6 @@ static void set_local_kind(Ctx * c, uint32_t local, uint8_t kind) {
  */
 static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
   switch (op) {
-    case GLTANG_OP_NEG:
     case GLTANG_OP_NOT:
     case GLTANG_OP_JMP_FALSE:
     case GLTANG_OP_JMP_TRUE:
@@ -280,16 +304,25 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_RET:
     case GLTANG_OP_ATTR:
       return d >= 1 && c->sk[d - 1] == KIND_F64;
+    // `%` is integers only: with a raw operand the interpreter reports "not supported".
+    case GLTANG_OP_MOD:
+      return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
+    // A cast to int or to float reads a raw operand; any other cast (to bool, to string) is an exit.
+    case GLTANG_OP_CAST:
+      return d >= 1 && c->sk[d - 1] == KIND_F64 && a != GLTANG_CAST_TYPE_INTEGER && a != GLTANG_CAST_TYPE_FLOAT;
+    // These read a raw operand and compute with it (float arithmetic, a comparison, a negation).
+    case GLTANG_OP_NEG:
     case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
+    case GLTANG_OP_DIV:
     case GLTANG_OP_LT:
     case GLTANG_OP_LE:
     case GLTANG_OP_GT:
     case GLTANG_OP_GE:
     case GLTANG_OP_EQ:
     case GLTANG_OP_NE:
-      return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
+      return false;
     case GLTANG_OP_CALL:
       for (int32_t p = d - 1 - (int32_t)a; p >= 0 && p < d; ++p) {
         if (c->sk[p] == KIND_F64) {
@@ -350,14 +383,32 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_STORE_LOCAL:
       set_local_kind(c, a, c->sk[d - 1]);
       break;
-    case GLTANG_OP_NEG:
     case GLTANG_OP_NOT:
     case GLTANG_OP_ATTR:
       set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
       break;
+    case GLTANG_OP_NEG:
+      set_stack_kind(c, (uint32_t)d - 1u, c->sk[d - 1] == KIND_F64 ? KIND_F64 : KIND_REF);
+      break;
+    case GLTANG_OP_CAST:
+      if (a == GLTANG_CAST_TYPE_FLOAT) {
+        set_stack_kind(c, (uint32_t)d - 1u, KIND_F64);
+      }
+      else if (a == GLTANG_CAST_TYPE_INTEGER) {
+        set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
+      }
+      else {
+        return false;  // to bool and to string are exits: nothing flows on
+      }
+      break;
     case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
+    case GLTANG_OP_DIV:
+      // A float result stays raw: either operand being raw makes the operation a float one.
+      set_stack_kind(c, (uint32_t)d - 2u, c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64 ? KIND_F64 : KIND_REF);
+      break;
+    case GLTANG_OP_MOD:
     case GLTANG_OP_LT:
     case GLTANG_OP_LE:
     case GLTANG_OP_GT:
@@ -787,12 +838,15 @@ static GLTANG_Result analyse_once(Ctx * c) {
           break;
         case GLTANG_OP_NEG:
         case GLTANG_OP_NOT:
+        case GLTANG_OP_CAST:
           if (d < 1) { return GLTANG_ERR_INTERNAL; }
           c->cur[d - 1] = i;
           break;
         case GLTANG_OP_ADD:
         case GLTANG_OP_SUB:
         case GLTANG_OP_MUL:
+        case GLTANG_OP_DIV:
+        case GLTANG_OP_MOD:
         case GLTANG_OP_LT:
         case GLTANG_OP_LE:
         case GLTANG_OP_GT:
@@ -1062,6 +1116,91 @@ static void branch_to(Ctx * c, GRJIT_BlockId id) {
   flush_cost(c);
   B(grjit_builder_br(c->b, id));
   c->open = false;
+}
+
+/** A double as an `F64` immediate operand (its bit pattern). */
+static GRJIT_Operand FI(double d) {
+  uint64_t u;
+  memcpy(&u, &d, sizeof(u));
+  return grjit_operand_f64_imm(u);
+}
+
+/**
+ * The float object a value word names, read as a double into `dst`, in the current
+ * block: the word must be a non-null pointer (tag 0) to an object whose kind is
+ * `GLTANG_OBJ_FLOAT`, each a guard that exits with the frame as it is (nothing has
+ * been written), and only then is the object read. The load of `kind` is reached only
+ * after the pointer test. No GC point lies between the test and the load.
+ */
+static void unbox_float_object(Ctx * c, uint32_t i, uint32_t d, uint32_t pos, GRJIT_VReg dst) {
+  GRJIT_VReg * t = c->tmp;
+  bitcast(c, t[TMP_A], c->stack[pos]);
+  tag_is(c, t[TMP_C], t[TMP_A], 0);
+  cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_A]), I(0));
+  bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  guard(c, V(t[TMP_C]), i, d);
+  B(grjit_builder_load(c->b, t[TMP_X], c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, kind), 32, false));
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_FLOAT));
+  guard(c, V(t[TMP_C]), i, d);
+  B(grjit_builder_load(c->b, dst, c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, value), 64, false));
+}
+
+/**
+ * The operand at stack position `pos` (a `REF`) read as a double into `dst` (an `F64`
+ * temporary): a small integer is converted (`SAR 4`, then `CONVERT_S`, which is
+ * `(double)n`), a float object is read, and anything else (null, a boolean, a string,
+ * a boxed integer, a container, an error) is a guard exit before anything is written.
+ * A read, once per use: nothing is cached, stored back or named in a frame state.
+ */
+static void unbox(Ctx * c, uint32_t i, uint32_t d, uint32_t pos, GRJIT_VReg dst) {
+  GRJIT_VReg * t = c->tmp;
+  GRJIT_BlockId small, other, join;
+  new_block(c, &small);
+  new_block(c, &other);
+  new_block(c, &join);
+  bitcast(c, t[TMP_A], c->stack[pos]);
+  tag_is(c, t[TMP_C], t[TMP_A], GLTANG_TAG_INTEGER);
+  flush_cost(c);  // before the branch, so that neither arm holds a charge the other does not
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), small, other));
+  c->open = false;
+  set_block(c, small);
+  bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+  B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_S, dst, V(t[TMP_X])));
+  branch_to(c, join);
+  set_block(c, other);
+  unbox_float_object(c, i, d, pos, dst);
+  branch_to(c, join);
+  set_block(c, join);
+}
+
+/** The double of an operand: a raw one is its register, a `REF` one is unboxed into `scratch`. */
+static GRJIT_VReg float_operand(Ctx * c, uint32_t i, uint32_t d, uint32_t pos, GRJIT_VReg scratch) {
+  if (c->sk[pos] == KIND_F64) {
+    return c->stack_f[pos];
+  }
+  unbox(c, i, d, pos, scratch);
+  return scratch;
+}
+
+/**
+ * `r = (int64)f`, for a double inside the small-integer range: the exact bounds `f >= -2^59`
+ * and `f < 2^59` as guards (a NaN fails both ordered comparisons), then `TRUNC_S`, all in
+ * one block as the verifier requires. The guards come first: a double outside them is the
+ * interpreter's boxed integer or its error.
+ */
+static void trunc_small(Ctx * c, uint32_t i, uint32_t d, GRJIT_VReg f, GRJIT_VReg r) {
+  GRJIT_VReg * t = c->tmp;
+  cmp(c, GRJIT_CMP_GE, t[TMP_C], V(f), FI(-0x1p59));
+  guard(c, V(t[TMP_C]), i, d);
+  cmp(c, GRJIT_CMP_LT, t[TMP_C], V(f), FI(0x1p59));
+  guard(c, V(t[TMP_C]), i, d);
+  B(grjit_builder_unary(c->b, GRJIT_OP_TRUNC_S, r, V(f)));
+}
+
+/** Guards that the divisor `y` (an untagged integer temporary) is not zero. */
+static void guard_nonzero(Ctx * c, GRJIT_VReg y, uint32_t index, uint32_t depth) {
+  cmp(c, GRJIT_CMP_NE, c->tmp[TMP_C], V(y), I(0));
+  guard(c, V(c->tmp[TMP_C]), index, depth);
 }
 
 /** An unconditional deoptimization exit at `index`: the interpreter runs it. */
@@ -1343,6 +1482,12 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
 
     case GLTANG_OP_NEG:
+      if (c->sk[d - 1u] == KIND_F64) {
+        // The sign bit alone: -0.0 for 0.0, a NaN keeps its payload.
+        B(grjit_builder_unary(c->b, GRJIT_OP_FNEG, c->stack_f[d - 1u], V(c->stack_f[d - 1u])));
+        add_fuel(c, cost);
+        break;
+      }
       bitcast(c, t[TMP_A], T[d - 1u]);
       tag_is(c, t[TMP_C], t[TMP_A], GLTANG_TAG_INTEGER);
       guard(c, V(t[TMP_C]), i, d);
@@ -1365,6 +1510,44 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
 
     case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
+    case GLTANG_OP_MUL:
+    case GLTANG_OP_DIV:
+      if (c->sk[d - 2u] == KIND_F64 || c->sk[d - 1u] == KIND_F64) {
+        // A float operation: both operands become doubles (an integer by `(double)`, in the
+        // order they stand), every guard runs, and only then is the result written to its slot.
+        GRJIT_VReg fa = float_operand(c, i, d, d - 2u, c->tmp_f[0]);
+        GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+        if (op == GLTANG_OP_DIV) {
+          // The interpreter's error before it divides: either zero, but not a NaN (`NE` is true for one).
+          cmp(c, GRJIT_CMP_NE, t[TMP_C], V(fb), FI(0.0));
+          guard(c, V(t[TMP_C]), i, d);
+        }
+        GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;
+        B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
+        add_fuel(c, cost);
+        break;
+      }
+      if (op == GLTANG_OP_MUL) {
+        goto integer_mul;
+      }
+      if (op == GLTANG_OP_DIV) {
+        guard_two_ints(c, i, d);
+        bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+        bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
+        guard_nonzero(c, t[TMP_Y], i, d);
+        // The verifier's second guard: the dividend is not the minimum or the divisor is not -1.
+        // It cannot fire for small integers (INT64_MIN is not one), and the quotient's range
+        // guard below is what catches SMALL_MIN / -1.
+        cmp(c, GRJIT_CMP_NE, t[TMP_C], V(t[TMP_X]), I(INT64_MIN));
+        cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_Y]), I(-1));
+        bin(c, GRJIT_OP_OR, t[TMP_U], V(t[TMP_C]), V(t[TMP_D]));
+        guard(c, V(t[TMP_U]), i, d);
+        bin(c, GRJIT_OP_DIV_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+        guard_in_range(c, t[TMP_R], i, d);
+        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+        add_fuel(c, cost);
+        break;
+      }
       guard_two_ints(c, i, d);
       bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
       bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
@@ -1374,7 +1557,7 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       add_fuel(c, cost);
       break;
 
-    case GLTANG_OP_MUL:
+    integer_mul:
       guard_two_ints(c, i, d);
       bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
       bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
@@ -1397,17 +1580,73 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
     case GLTANG_OP_GE:
     case GLTANG_OP_EQ:
     case GLTANG_OP_NE: {
-      guard_two_ints(c, i, d);
-      // A tagged integer is `n << 4 | 1`, which keeps the order and the
-      // equality of n, so the words compare as the integers do.
       GRJIT_Cmp cond = op == GLTANG_OP_LT ? GRJIT_CMP_LT : op == GLTANG_OP_LE ? GRJIT_CMP_LE
         : op == GLTANG_OP_GT ? GRJIT_CMP_GT : op == GLTANG_OP_GE ? GRJIT_CMP_GE
         : op == GLTANG_OP_EQ ? GRJIT_CMP_EQ : GRJIT_CMP_NE;
+      if (c->sk[d - 2u] == KIND_F64 || c->sk[d - 1u] == KIND_F64) {
+        // Doubles, both converted: ordered, so a NaN on either side is false for all but `!=`.
+        GRJIT_VReg fa = float_operand(c, i, d, d - 2u, c->tmp_f[0]);
+        GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+        cmp(c, cond, t[TMP_R], V(fa), V(fb));
+        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_BOOL);
+        add_fuel(c, cost);
+        break;
+      }
+      guard_two_ints(c, i, d);
+      // A tagged integer is `n << 4 | 1`, which keeps the order and the
+      // equality of n, so the words compare as the integers do.
       cmp(c, cond, t[TMP_R], V(t[TMP_A]), V(t[TMP_B]));
       box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_BOOL);
       add_fuel(c, cost);
       break;
     }
+
+    case GLTANG_OP_MOD:
+      // Integers only (a raw operand was an exit before this): the zero guard, then the
+      // remainder, which has the dividend's sign and cannot leave the small-integer range.
+      guard_two_ints(c, i, d);
+      bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+      bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
+      guard_nonzero(c, t[TMP_Y], i, d);
+      bin(c, GRJIT_OP_REM_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+      box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+      add_fuel(c, cost);
+      break;
+
+    case GLTANG_OP_CAST:
+      if (a == GLTANG_CAST_TYPE_FLOAT) {
+        if (c->sk[d - 1u] != KIND_F64) {
+          // A small integer is converted and a float object read; the result is the raw double.
+          unbox(c, i, d, d - 1u, c->stack_f[d - 1u]);
+        }
+        add_fuel(c, cost);
+        break;
+      }
+      if (c->sk[d - 1u] == KIND_F64) {
+        trunc_small(c, i, d, c->stack_f[d - 1u], t[TMP_R]);
+        box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
+        add_fuel(c, cost);
+        break;
+      }
+      else {
+        // A small integer is itself; a float object is truncated (inside the range) and tagged.
+        GRJIT_BlockId whole, other;
+        new_block(c, &whole);
+        new_block(c, &other);
+        bitcast(c, t[TMP_A], T[d - 1u]);
+        tag_is(c, t[TMP_C], t[TMP_A], GLTANG_TAG_INTEGER);
+        flush_cost(c);
+        B(grjit_builder_br_if(c->b, V(t[TMP_C]), whole, other));
+        c->open = false;
+        set_block(c, other);
+        unbox_float_object(c, i, d, d - 1u, c->tmp_f[0]);
+        trunc_small(c, i, d, c->tmp_f[0], t[TMP_R]);
+        box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
+        branch_to(c, whole);
+        set_block(c, whole);
+        add_fuel(c, cost);
+      }
+      break;
 
     case GLTANG_OP_JMP:
       add_fuel(c, cost);
@@ -1616,6 +1855,14 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     result = GLTANG_OK;
     goto done;
   }
+  // The F64 temporaries are declared only where the function has a float operation (a slot that is
+  // ever raw) or a cast to int of a value word; any other function is emitted as it was.
+  for (uint32_t k = 0; k < GLTANG_JIT_MAX_SLOTS && !c->need_tmp_f; ++k) {
+    c->need_tmp_f = c->ever_local[k] || c->ever_stack[k];
+  }
+  for (size_t i = 0; i < n && !c->need_tmp_f; ++i) {
+    c->need_tmp_f = c->depth[i] >= 0 && GLTANG_INSTRUCTION_OP(fn->code[i]) == GLTANG_OP_CAST && GLTANG_INSTRUCTION_A(fn->code[i]) == GLTANG_CAST_TYPE_INTEGER;
+  }
   for (size_t i = 0; i < n; ++i) {
     if (c->depth[i] >= 0 && c->declined[i]) {
       ++exec->jit_stats.native_sites_unsupported;
@@ -1671,6 +1918,11 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   for (uint32_t j = 0; j < c->ms; ++j) {
     if (c->ever_stack[j]) {
       B(grjit_builder_vreg(c->b, GRJIT_TYPE_F64, &c->stack_f[j]));
+    }
+  }
+  if (c->need_tmp_f) {
+    for (int j = 0; j < 2; ++j) {
+      B(grjit_builder_vreg(c->b, GRJIT_TYPE_F64, &c->tmp_f[j]));
     }
   }
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->zero));

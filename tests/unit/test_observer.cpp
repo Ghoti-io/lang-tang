@@ -449,6 +449,142 @@ print(r); print(" "); print(s); print(" "); print(a == b); print(" "); print(c);
   return cases;
 }
 
+/// Float and division arithmetic compiled (spec-runtime-float story 7, CAP-5): `+ - * /`,
+/// unary minus, the six comparisons and `as int` / `as float` over raw doubles, over a small
+/// integer or a float read from a value word, and over mixes of them; integer `/` and `%`.
+/// Each table call is a function that computes with raw operands and polls with them live,
+/// so the frame differential reads the compiled frame's raw doubles at that poll, bit for bit
+/// (any two NaNs equal), against the interpreter's. A function that deoptimizes eight times is
+/// let go, so the error cases are many small functions, each exiting only a few times.
+std::vector<Case> float_arith_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, uint64_t step, size_t limit = 3000) {
+    Case c;
+    c.name = "float arith/" + name;
+    c.source = source;
+    c.step = step;
+    c.limit = limit;
+    cases.push_back(c);
+  };
+  const std::string prelude =
+      "big = \"1.7976931348623157e308\" as float; pinf = big * 10.0; ninf = 0.0 - pinf; nan = pinf - pinf; nz = -0.0;\n"
+      "tiny = \"5e-324\" as float; small = \"2.2250738585072014e-308\" as float; smax = 576460752303423487; smin = (0 - 576460752303423487) - 1;\n";
+  // Every special value, floats and integers (the integers include both bounds of the small range
+  // and 2^53 + 1, which a double cannot hold).
+  const std::string values = "[0.0, nz, 1.5, -2.5, pinf, ninf, nan, tiny, big, 3, 9007199254740993, smin]";
+  const std::string nonzero = "[1.5, -2.5, pinf, ninf, nan, tiny, big, 3, 9007199254740993, smin]";
+  auto drive = [&](const std::string & fn, const std::string & as, const std::string & bs, int a_count, int b_count) {
+    return "avals = " + as + "; bvals = " + bs + "; k = 0; while (k < " + std::to_string(a_count) + ") { m = 0; while (m < " + std::to_string(b_count) + ") { " + fn +
+        "(avals[k], bvals[m]); m += 1; } k += 1; }\n";
+  };
+  for (const char * op : {"+", "-", "*"}) {
+    std::string o = op;
+    std::string fn = "function opf(a, b) { x = a as float; y = b as float; r = x " + o + " y; s = x " + o + " b; t = a " + o + " y; u = x " + o + " 1.5; v = 0.5 " + o +
+        " y; w = x " + o + " 3; z = 3 " + o + " y; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+    add(std::string("the table of ") + op, prelude + fn + drive("opf", values, values, 12, 12) + "print(\"done\");\n", 211, 4000);
+  }
+  {
+    std::string fn = "function opf(a, b) { x = a as float; y = b as float; r = x / y; s = x / b; t = a / y; u = x / 1.5; v = 0.5 / y; w = x / 3; z = 3 / y; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+    add("the table of /", prelude + fn + drive("opf", values, nonzero, 12, 10) + "print(\"done\");\n", 211, 4000);
+  }
+  for (const char * op : {"<", "<=", ">", ">=", "==", "!="}) {
+    std::string o = op;
+    std::string fn = "function opf(a, b) { x = a as float; y = b as float; r = x " + o + " y; s = x " + o + " b; t = a " + o + " y; u = x " + o + " 1.5; v = 1.5 " + o +
+        " y; w = x " + o + " 3; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+    add(std::string("the table of ") + op, prelude + fn + drive("opf", values, values, 12, 12) + "print(\"done\");\n", 197, 4000);
+  }
+  add("unary minus", prelude +
+      "function ng(a) { x = a as float; y = -x; z = -y; w = -a; i = 0; while (i < 1) { i = i + 1; } return 0; }\n"
+      "vals = " + values + "; k = 0; while (k < 12) { ng(vals[k]); k += 1; }\n", 31, 1000);
+  {
+    // Integer / and %: truncating quotient, the remainder with the dividend's sign, % -1 is 0, both bounds.
+    std::string ints = "[0, 1, -1, 7, -7, 2, -2, smax, smin, 5]";
+    std::string nzint = "[1, -1, 7, -7, 2, -2, smax, smin, 5]";
+    std::string fn = "function iop(a, b) { q = a / b; r = a % b; s = a * b; t = a + b; u = a - b; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+    // smin / -1 is 2^59, outside the small-integer range: the one pair that exits (and the interpreter makes the boxed integer).
+    add("integer division and modulo", prelude + fn + drive("iop", ints, nzint, 10, 9) + "print(\"done\");\n", 173, 3000);
+  }
+  {
+    // The error cases: a zero divisor in every form, each function exits only a couple of times.
+    std::string src = prelude;
+    const char * zero_forms[] = {
+        "x = a as float; z = x / 0.0;", "x = a as float; z = x / nz;", "x = a as float; z = x / 0;", "x = a as float; y = 0.0; z = x / y;",
+        "x = a as float; z = 0.0 / 0.0;", "x = a as float; z = a / 0.0;", "x = a as float; z = 7 / (x - x);", "z = a / 0;", "z = a % 0;", "z = 0 / 0;",
+        "x = a as float; z = x % 2;", "x = a as float; z = 2 % x;", "x = a as float; z = x % x;", "z = a % 0.0;",
+    };
+    int fi = 0;
+    for (const char * form : zero_forms) {
+      src += "function zf" + std::to_string(fi) + "(a) { " + form + " i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+      ++fi;
+    }
+    src += "k = 0; while (k < 3) {";
+    for (int j = 0; j < fi; ++j) {
+      src += " zf" + std::to_string(j) + "(k + 1.5); zf" + std::to_string(j) + "(k);";
+    }
+    src += " k += 1; }\nprint(\"done\");\n";
+    add("division and modulo by zero and % on a float", src, 41, 3000);
+  }
+  {
+    // Not zero: a NaN divisor, infinities.
+    add("division by NaN and infinity", prelude +
+        "function dn(x) { global pinf; global ninf; global nan; a = x as float; b = a / nan; c = pinf / pinf; d = 1.5 / pinf; e = a / ninf; f = nan / a; i = 0; while (i < 1) { i = i + 1; } return 0; }\n"
+        "function dm(x) { global nan; a = x as float; b = a / nan; i = 0; while (i < 1) { i = i + 1; } return 0; }\n"
+        "k = 0; while (k < 6) { dn(k); dn(k + 0.25); dm(k); k += 1; }\n", 29, 1000);
+  }
+  {
+    // Casts. One function per value, so that an out-of-range value, which exits at the cast, costs its function a couple of exits.
+    const char * casts[] = {"1.9", "-1.9", "-0.5", "0.0", "nz", "576460752303423424.0", "576460752303423488.0", "-576460752303423488.0",
+        "-576460752303423616.0", "(\"1e18\" as float)", "(\"1e19\" as float)", "pinf", "ninf", "nan", "9007199254740993", "smax", "smin", "5", "(smax + 1)", "\"5\"", "null", "true", "\"1.5\""};
+    std::string src = prelude;
+    int fi = 0;
+    for (size_t unused = 0; unused < sizeof(casts) / sizeof(casts[0]); ++unused) {
+      src += "function cf" + std::to_string(fi) + "(a) { x = a as float; y = x as float; z = x as int; w = a as int; u = y as int; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+      src += "function cg" + std::to_string(fi) + "(a) { z = a as int; w = a as float; v = z as float; i = 0; while (i < 1) { i = i + 1; } return 0; }\n";
+      ++fi;
+    }
+    src += "k = 0; while (k < 2) {";
+    fi = 0;
+    for (const char * v : casts) {
+      src += std::string(" cf") + std::to_string(fi) + "(" + v + "); cg" + std::to_string(fi) + "(" + v + ");";
+      ++fi;
+    }
+    src += " k += 1; }\nprint(\"done\");\n";
+    add("casts to int and to float", src, 37, 4000);
+  }
+  add("a float loop and the integer it converts", prelude +
+      "function f(n) { s = 0.0; i = 0; while (i < n) { s = s + i * 0.5; i = i + 1; } print(s); return i; }\n"
+      "function g(n) { s = n as float; p = 1.0; i = 0; while (i < n) { p = p * 1.5 - i / 4; s = s - p / 3; i = i + 1; } print(s > 0.0); print(p); return i; }\n"
+      "print(f(40)); print(f(0)); print(g(25)); print(g(3));\n", 23, 1200);
+  add("mixed integer and float, the operands in their order", prelude +
+      "function mix(a) { b = a * 1.5; c = 1.5 - a; d = a / 2.0; e = 7 / 2.0; f = 2.0 / a; g = a - 1.5; i = 0; while (i < 1) { i = i + 1; } print(b); print(c); print(d); print(e); print(f); print(g); return 0; }\n"
+      "mix(3); mix(-4); mix(9007199254740993); mix(smax); mix(smin); mix(2.5);\n", 19, 1200);
+  add("a function that gets a float, an integer, a string and null", prelude +
+      "function acc(x) { s = 0.0; i = 0; while (i < 3) { s = s + x; i = i + 1; } print(s); return i; }\n"
+      "function cmpf(x) { c = 1.5; r = c < x; s = x == c; t = x != c; print(r); print(s); print(t); return 0; }\n"
+      "acc(1.5); acc(2); acc(pinf); acc(nan); acc(\"ab\"); acc(null); acc(true); acc([1]); acc(9007199254740993); acc(acc);\n"
+      "cmpf(1.5); cmpf(2); cmpf(nan); cmpf(\"a\"); cmpf(null); cmpf(true); cmpf([2]);\n", 17, 3000);
+  add("errors in the middle of a chain", prelude +
+      "function chain(a, b) { x = 1.5; y = x * a + b * 2.0; z = y / (a - 3) - 1; print(z); return 0; }\n"
+      "chain(1, 2); chain(2, 2.5); chain(3, 1); chain(\"s\", 1); chain(4, null); chain(5, 0.5); chain(1.5, 2);\n", 13, 3000);
+  add("calls between compiled functions whose raw locals are live", prelude +
+      "function leaf(n) { t = 0.25; i = 0; while (i < n) { t = t * 1.5; i += 1; } return n; }\n"
+      "function mid(n) { u = 2.5; r = leaf(n); u = u + r; k = 0; while (k < 2) { k += 1; } v = u * 2.0; return k; }\n"
+      "function top(n) { w = 0.5; r = mid(n); q = w + r; j = 0; while (j < 2) { j += 1; } return j; }\n"
+      "print(top(3)); print(top(0)); print(top(6));\n", 11, 3000);
+  add("kinds that disagree at a merge", prelude +
+      "function m1(c) { x = 0; i = 0; while (i < 4) { x = x + 0.5; i += 1; } print(x); return c; }\n"
+      "function m2(c, a) { if (c) { x = a * 1.5; } else { x = a; } print(x); return 0; }\n"
+      "function m3(c, a) { x = 0.0; if (c) { x = x + a * 1.5; } y = x * 2.0; print(y); return 0; }\n"
+      "print(m1(1)); m2(true, 3); m2(false, 3); m3(true, 2); m3(false, 2);\n", 15, 1500);
+  add("top-level arithmetic in a loop", prelude +
+      "s = 0.0; p = 1; i = 0; while (i < 30) { s = s + i * 0.25 - p / 8.0; p = p * 2 % 1000; i += 1; }\n"
+      "print(s); print(p); print(s as int); print(-s); print(s < 0.0);\n", 29, 1500);
+  add("float division and casts under a tight fuel pause", prelude +
+      "function h(n) { a = n as float; s = 0.0; i = 0; while (i < n) { s = s + a / (i + 1.5); a = a - 1; i = i + 1; } print(s); print(s as int); return i; }\n"
+      "print(h(30)); print(h(1));\n", 5, 3000);
+  return cases;
+}
+
 /// Floats carried raw in compiled code (spec-runtime-float story 6, AD-27): a float
 /// constant is held as a raw double in a local or an operand slot, and the
 /// frames of the two tiers must agree at every poll, floats by their bits, whether
@@ -537,6 +673,9 @@ std::vector<Case> all_cases() {
     cases.push_back(std::move(c));
   }
   for (Case & c : float_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : float_arith_cases()) {
     cases.push_back(std::move(c));
   }
   return cases;
@@ -978,6 +1117,9 @@ TEST(Observer, TheFloatProgramsGiveTheSameFramesBitForBitInTheInterpreterAndWith
   uint64_t entries = 0, floats = 0, raw_slots = 0, boxed = 0;
   std::vector<Case> cases = float_cases();
   for (Case & c : float_carry_cases()) {
+    cases.push_back(std::move(c));
+  }
+  for (Case & c : float_arith_cases()) {
     cases.push_back(std::move(c));
   }
   for (const Case & c : cases) {
