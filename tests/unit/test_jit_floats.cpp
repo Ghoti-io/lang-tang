@@ -34,6 +34,7 @@
 #include "jit_harness.h"
 #include "observer.h"
 #include "test_helpers.h"
+#include <ghoti.io/lang-tang/bytecode.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -355,6 +356,49 @@ TEST(JitFloats, ARawValueInAnOperandSlotIsBoxedByTheRebuildToo) {
   EXPECT_EQ(float_bits_in_frames(*d.ctx), std::multiset<uint64_t>{bits_of(1.5)});
   EXPECT_TRUE(d.ctx->resume());
   EXPECT_EQ(d.ctx->raw(), "501.5");
+}
+
+TEST(JitFloats, ARawOperandSlotIsReportedAsRawBitsLikeARawLocalAndItsInspectTextIsTheBitsNotTheFloat) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Driver d(
+      "function h(n) { i = 0; while (i < n) { i = i + 1; } return i; }\n"
+      "function g(n) { r = 1.5 + h(n); return r; }\n"
+      "print(g(40));\n",
+      1, true);
+  ASSERT_TRUE(d.ok());
+  int found = 0, checks = 0;
+  d.script.on_poll = [&](Script &, GRCORE_Context * context, uint64_t n) {
+    if (n < 6 || n > 9) {
+      return;
+    }
+    GRCORE_FrameWalk walk;
+    ASSERT_EQ(grcore_frame_walk_begin(context, &walk), GRCORE_OK);
+    GRCORE_AbstractFrame frame;
+    while (grcore_frame_walk_next(&walk, &frame)) {
+      for (size_t i = 0; i < frame.slot_count; ++i) {
+        GRCORE_SlotKind kind;
+        uint64_t value;
+        GRCORE_Representation representation;
+        ASSERT_EQ(grcore_frame_slot_tagged(&frame, i, &kind, &value, &representation), GRCORE_OK);
+        if (representation != GRCORE_REPR_F64) {
+          continue;
+        }
+        ++found;
+        // g has two locals after the four header words, so a slot from index 6 is an operand slot.
+        EXPECT_GE(i, 6u) << "the raw 1.5 is in an operand slot";
+        EXPECT_EQ(kind, GRCORE_SLOT_RAW) << "never a value";
+        EXPECT_EQ(value, bits_of(1.5));
+        char text[64];
+        size_t length = 0;
+        ASSERT_EQ(grcore_frame_inspect(&frame, i, text, sizeof text, &length), GRCORE_OK);
+        EXPECT_EQ(std::string(text, length), std::to_string(bits_of(1.5))) << "inspect shows the bits of a raw slot, not the float (a gap in runtime-core, see design.md)";
+      }
+    }
+    ++checks;
+  };
+  ASSERT_TRUE(d.run());
+  EXPECT_GT(checks, 0);
+  EXPECT_EQ(found, checks) << "one raw operand slot at each of those polls";
 }
 
 TEST(JitFloats, SlowPollsThatContinueConvertNothingAndTheFramesAgreeWithTheInterpretersBitForBit) {
@@ -717,7 +761,7 @@ TEST(JitFloats, ARefusedExtensionOrTopUpAtAPushIsAnExitAtTheCallTheInterpreterMa
   }
 }
 
-TEST(JitFloats, AnAllocationThatFailsAnywhereInARunWithFloatsNeverBreaksAFrameOrTheOutput) {
+TEST(JitFloats, AnAllocationThatFailsAnywhereInARunWithFloatsNeverBreaksAFrameOrTheOutputAndLeavesTheReservationAtZero) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario plain_sc;
   plain_sc.source = kChain;
@@ -727,27 +771,67 @@ TEST(JitFloats, AnAllocationThatFailsAnywhereInARunWithFloatsNeverBreaksAFrameOr
   ASSERT_TRUE(clean.run());
   const long total = clean.ctx->tracker.calls;
   ASSERT_GT(total, 50);
-  long finished = 0, refused_runs = 0, unfinished = 0;
+  long finished = 0, entry_refused = 0, push_refused = 0, rebuilt_after_failure = 0;
   for (long n = 1; n <= total; n += (total > 400 ? total / 400 : 1)) {
     Driver d(kChain, 1, false, 0, 0, n);
     if (!d.ok()) {
       continue;  // the context could not even be made: nothing to run
     }
-    bool done = d.run();
+    const bool done = d.run();
     GLTANG_JitStats st = d.stats();
     EXPECT_EQ(st.conversion_errors, 0u) << "failing allocation " << n;
     EXPECT_EQ(st.hook_argument_errors, 0u) << "failing allocation " << n;
     EXPECT_EQ(st.rebuild_failures, 0u) << "failing allocation " << n << ": a refused extension is an exit, never a failed rebuild";
     EXPECT_EQ(d.heap().invalid_pointers, 0u) << "failing allocation " << n;
-    // An allocation the guest makes that fails is an error value (the output then
-    // differs from a run in which it did not), so the output is not compared here:
-    // what is asserted is that no failure broke a frame or a counter.
-    (done ? finished : unfinished) += 1;
-    refused_runs += (st.reservation_refusals + st.box_pool_refusals) > 0;
+    // Whatever failed, control is back with the host: nothing is extended and no box is held.
+    Driver::Boxes b = d.boxes();
+    EXPECT_EQ(b.capacity, 0u) << "failing allocation " << n;
+    EXPECT_EQ(b.extensions, 0u) << "failing allocation " << n;
+    EXPECT_EQ(b.pool, 0u) << "failing allocation " << n;
+    finished += done;
+    // An allocation the guest makes that fails is an error value (and not always one in
+    // the error list), so the output of this sweep is not compared: the sweep over the
+    // refusals alone, below, compares it.
+    (void)done;
+    const uint64_t refusals = st.reservation_refusals + st.box_pool_refusals;
+    push_refused += refusals > 0 && st.call_exits_push_refused > 0;
+    entry_refused += refusals > 0 && st.call_exits_push_refused == 0;
+    rebuilt_after_failure += d.ctx->tracker.fired && st.values_boxed > 0;
   }
   EXPECT_GT(finished, 0);
-  EXPECT_GT(refused_runs, 0) << "the sweep reached a refused extension or top-up";
-  (void)unfinished;
+  EXPECT_GT(entry_refused, 0) << "a failure was seen at an entry";
+  EXPECT_GT(push_refused, 0) << "a failure was seen at a push";
+  EXPECT_GT(rebuilt_after_failure, 0) << "a failure was seen in a run that went on to rebuild frames";
+}
+
+TEST(JitFloats, RefusingEveryExtensionAndEveryTopUpInTurnGivesTheInterpretersOutputEachTime) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario plain_sc;
+  plain_sc.source = kChain;
+  Outcome plain = run(plain_sc, 0);
+  Driver clean(kChain, 1, false);
+  ASSERT_TRUE(clean.ok());
+  ASSERT_TRUE(clean.run());
+  EXPECT_EQ(clean.ctx->raw(), plain.raw);
+  const uint64_t extensions = clean.stats().reservation_peak;  // at least the entries and pushes there were
+  ASSERT_GT(extensions, 0u);
+  long refused_entries = 0, refused_pushes = 0;
+  for (int pool = 0; pool < 2; ++pool) {
+    for (uint64_t nth = 1; nth <= 8; ++nth) {
+      Driver d(kChain, 1, false);
+      ASSERT_TRUE(d.ok());
+      gltang_vm_set_float_test_switches_unchecked(d.ctx->execution, pool ? 0 : nth, pool ? nth : 0);
+      ASSERT_TRUE(d.run()) << "refusing " << (pool ? "top-up " : "extension ") << nth;
+      EXPECT_EQ(d.ctx->raw(), plain.raw) << "refusing " << (pool ? "top-up " : "extension ") << nth;
+      GLTANG_JitStats st = d.stats();
+      EXPECT_EQ(st.rebuild_failures + st.conversion_errors + st.hook_argument_errors, 0u);
+      EXPECT_EQ(d.boxes().capacity + d.boxes().extensions + d.boxes().pool, 0u);
+      refused_entries += st.reservation_refusals + st.box_pool_refusals > 0 && st.call_exits_push_refused == 0;
+      refused_pushes += st.call_exits_push_refused > 0;
+    }
+  }
+  EXPECT_GT(refused_entries, 0);
+  EXPECT_GT(refused_pushes, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1163,135 @@ TEST(JitFloats, ARawLocalIsReportedAsRawBitsInTheAbstractFrameAndAsARawVariableN
   EXPECT_GT(checks, 0);
   EXPECT_TRUE(saw_slot);
   EXPECT_TRUE(saw_variable);
+}
+
+// ---------------------------------------------------------------------------
+// The pool lives as long as a run does
+// ---------------------------------------------------------------------------
+
+TEST(JitFloats, ThePoolIsLetGoWhenControlReturnsToTheHostSoAPausedRunSnapshotsAndRestores) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  const std::string source =
+      "function leaf(a) { y = 2.5; return a + 1; }\n"
+      "function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\n"
+      "print(mid(200)); print(mid(300));\n";
+  Scenario ref;
+  ref.source = source;
+  Outcome plain = run(ref, 0);
+  Driver d(source, 1, true);
+  ASSERT_TRUE(d.ok());
+  std::vector<Seen> seen;
+  d.script.on_poll = recorder(&d, &seen, [](Script & script, uint64_t n) {
+    if (n == 120) {
+      script.post(GRCORE_REQUEST_INTERRUPT);
+    }
+  });
+  EXPECT_FALSE(d.run());
+  ASSERT_TRUE(d.ctx->paused());
+  ASSERT_FALSE(seen.empty());
+  EXPECT_GT(seen.back().pool, 0u) << "at the pausing poll the pool held boxes, warm from the calls before it";
+  EXPECT_GT(d.stats().box_pool_made, 0u);
+  // With control at the host: nothing is extended and no box is held.
+  Driver::Boxes b = d.boxes();
+  EXPECT_EQ(b.pool, 0u);
+  EXPECT_EQ(b.capacity, 0u) << "a pause rebuilt every compiled frame and gave every extension back";
+  EXPECT_EQ(b.extensions, 0u);
+  // So the heap image has the root slots a fresh destination reports, and the restore succeeds.
+  GLTANG_Snapshot * snapshot = nullptr;
+  ASSERT_EQ(gltang_snapshot_take(d.ctx->execution, &snapshot), GLTANG_OK);
+  Config config;
+  config.jit_threshold = 1;
+  Context destination(d.page.program, config);
+  ASSERT_TRUE(destination.ok());
+  EXPECT_EQ(gltang_snapshot_restore(destination.execution, snapshot), GLTANG_OK) << "a pool still rooted would have put extra slots in the image";
+  gltang_snapshot_release(snapshot);
+  EXPECT_TRUE(destination.resume());
+  EXPECT_EQ(destination.raw(), plain.raw);
+  EXPECT_TRUE(d.ctx->resume());
+  EXPECT_EQ(d.ctx->raw(), plain.raw);
+}
+
+TEST(JitFloats, AFailedStackPushAfterASuccessfulExtensionGivesTheExtensionBack) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc;
+  sc.source = kRefusal;
+  Outcome plain = run(sc, 0);
+  Driver d(kRefusal, 1, false);
+  ASSERT_TRUE(d.ok());
+  gltang_vm_set_stack_push_failure_unchecked(d.ctx->execution, 1);
+  ASSERT_TRUE(d.run());
+  EXPECT_EQ(d.ctx->raw(), plain.raw) << "the call exited and the interpreter made it";
+  uint64_t capacity = 99, extensions = 99, count = 0;
+  gltang_vm_jit_test_failed_push(d.ctx->execution, &capacity, &extensions, &count);
+  EXPECT_EQ(count, 1u) << "the refusal happened";
+  EXPECT_EQ(capacity, 1u) << "right after it, the reservation held the caller's own extension and not the callee's";
+  EXPECT_EQ(extensions, 1u);
+  EXPECT_GE(d.stats().call_exits_push_refused, 1u);
+  EXPECT_EQ(d.boxes().capacity, 0u);
+  EXPECT_EQ(d.boxes().extensions, 0u);
+}
+
+TEST(JitFloats, AFailedRebuildLeavesNoRawWordInAGuestFrameWhereACollectionCanReadIt) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The injected failure of the deopt hook's rebuild, under torture and verify: the
+  // run ends unwound, and a collection that follows (torture makes one at the first
+  // allocation of the unwind) must find no raw double in a guest slot.
+  Driver d(kChain, 1, false, 1, 1);
+  ASSERT_TRUE(d.ok());
+  d.ctx->apply_jit_switches(false, true, true);
+  EXPECT_FALSE(d.run());
+  GLTANG_JitStats st = d.stats();
+  EXPECT_EQ(st.rebuild_failures, 1u);
+  EXPECT_EQ(st.values_boxed, 0u) << "nothing was converted";
+  EXPECT_EQ(d.heap().invalid_pointers, 0u) << "and no raw word was where the collector reads values";
+  EXPECT_EQ(d.boxes().capacity, 0u);
+  EXPECT_EQ(d.boxes().extensions, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// The compiler's tables
+// ---------------------------------------------------------------------------
+
+TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The instructions that read no stack operand, or only move one (reads_raw says no),
+  // and those that flow on with a known effect on the kinds (apply_kinds says yes).
+  const std::set<unsigned> moves = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
+      GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP};
+  const std::set<unsigned> flows = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
+      GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
+      GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT,
+      GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE, GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET};
+  for (unsigned op = 0; op < static_cast<unsigned>(GLTANG_OP_COUNT); ++op) {
+    unsigned policy = gltang_vm_jit_test_opcode_policy(op);
+    const bool reads = (policy & 1u) != 0;
+    const bool known = (policy & 2u) != 0;
+    EXPECT_EQ(reads, moves.count(op) == 0) << "opcode " << op << ": with every operand raw, only a mover may go on without an exit";
+    EXPECT_EQ(known, flows.count(op) != 0) << "opcode " << op << ": a stack effect on the kinds is known for exactly the instructions that flow on";
+  }
+}
+
+TEST(JitFloats, AFunctionWhoseBeginningIsAFloatAndWhoseMergeConflictsIsCompiledEnteredAndHasNoRawSlot) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Every statement begins with a LINE, so "the first operation leaves compiled code at
+  // once" (the decline) cannot be reached from source with a float constant: the function
+  // is compiled and entered whether or not its merge conflicts, and then holds no raw slot.
+  const char * source =
+      "function f(c, n) { x = 1.5; if (c) { y = 1.5; } else { y = 2; } print(y); return n; }\n"
+      "print(f(true, 1)); print(f(false, 2));\n";
+  Scenario sc;
+  sc.source = source;
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_GE(jit.stats.functions_compiled, 1u);
+  EXPECT_GE(jit.stats.entries, 1u) << "not declined";
+  Driver d(source, 1, false);
+  ASSERT_TRUE(d.ok());
+  ASSERT_TRUE(d.run());
+  uint64_t f64 = 1, other = 1, max_site = 1, recorded = 1;
+  ASSERT_EQ(gltang_vm_jit_test_converting(d.ctx->execution, &f64, &other, &max_site, &recorded), 1);
+  EXPECT_EQ(f64 + other + max_site + recorded, 0u) << "the conflict turned the float constants into exits";
+  EXPECT_EQ(d.stats().values_boxed, 0u) << "so nothing in compiled code held a float";
 }
 
 #else  // JIT=no

@@ -74,11 +74,18 @@ void gltang_vm_set_float_test_switches_unchecked(GLTANG_Execution * execution, u
 /** The pool's boxes, the reservation's capacity and the extensions open now. Returns 1 if there is a JIT. */
 int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint64_t * capacity, uint64_t * extensions);
 
+/** Refuses the stack push of the Nth push hook that extended the reservation, and what the reservation held after the refusal was undone. */
+void gltang_vm_set_stack_push_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at);
+void gltang_vm_jit_test_failed_push(GLTANG_Execution * execution, uint64_t * capacity, uint64_t * extensions, uint64_t * count);
+
 /** The reservation the JIT extends, the engine's id, and a way to extend (level 0) and give back everything. */
 GRCORE_DeoptReservation * gltang_vm_jit_test_reservation(GLTANG_Execution * execution);
 GRCORE_EngineId gltang_vm_test_engine_id(const GLTANG_Execution * execution);
 bool gltang_vm_jit_test_extend(GLTANG_Execution * execution, size_t cells);
 void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution);
+
+/** What the JIT compiler's kind tables say about an opcode (bit 0: reads a raw operand, bit 1: known effect on kinds). */
+unsigned gltang_vm_jit_test_opcode_policy(unsigned op);
 
 /** Adds the test native of the given kind (see testnatives.c) to a library. */
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);

@@ -429,7 +429,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   // the arguments are read from the guest frame (a collection updates them there).
   const size_t ext_base = jit->ext_count;
   const size_t ext_outer_floor = jit->ext_floor;
-  if (!gltang_jit_extend(exec, ((const GLTANG_JitCode *)grcore_code_payload(f->code))->max_converting, 0)) {
+  if (!gltang_jit_extend(exec, ((const GLTANG_JitCode *)grcore_code_payload(f->code))->max_converting, 0, fword)) {
     return GLTANG_JIT_NOT_ENTERED;
   }
   // The native-depth budget (AD-21): a refusal means "not this time", and the
@@ -611,6 +611,26 @@ int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint
   return 1;
 }
 
+/*
+ * For the tests only: refuses the stack push of the Nth push hook that has extended
+ * the reservation (0: never), and reports the reservation's capacity and the open
+ * extensions right after the refusal was undone, and how many were refused. Declared
+ * in vm/test_hooks.h.
+ */
+void gltang_vm_set_stack_push_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at) {
+  if (execution && execution->jit) {
+    execution->jit->test_fail_stack_push_at = fail_at;
+    execution->jit->test_stack_pushes = 0;
+  }
+}
+
+void gltang_vm_jit_test_failed_push(GLTANG_Execution * execution, uint64_t * capacity, uint64_t * extensions, uint64_t * count) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  *capacity = jit ? jit->test_failed_capacity : 0;
+  *extensions = jit ? jit->test_failed_extensions : 0;
+  *count = jit ? jit->test_failed_count : 0;
+}
+
 /* For the tests only: the reservation itself, for a hand-made site's rebuild. Declared in vm/test_hooks.h. */
 GRCORE_DeoptReservation * gltang_vm_jit_test_reservation(GLTANG_Execution * execution) {
   return execution && execution->jit ? execution->jit->reservation : NULL;
@@ -623,7 +643,7 @@ GRCORE_EngineId gltang_vm_test_engine_id(const GLTANG_Execution * execution) {
 
 /* For the tests only: extends the reservation as an entry does (level 0) and gives it all back. Declared in vm/test_hooks.h. */
 bool gltang_vm_jit_test_extend(GLTANG_Execution * execution, size_t cells) {
-  return execution && execution->jit && gltang_jit_extend(execution, cells, 0);
+  return execution && execution->jit && gltang_jit_extend(execution, cells, 0, 0);
 }
 
 void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution) {

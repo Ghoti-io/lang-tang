@@ -297,13 +297,37 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
         }
       }
       return false;
+    // The instructions that read no operand of the stack, or only move one: named, so
+    // that an opcode added later is not on this list by omission.
+    case GLTANG_OP_POLL:
+    case GLTANG_OP_LINE:
+    case GLTANG_OP_POP:
+    case GLTANG_OP_DUP:
+    case GLTANG_OP_NULL:
+    case GLTANG_OP_TRUE:
+    case GLTANG_OP_FALSE:
+    case GLTANG_OP_CONST:
+    case GLTANG_OP_LOAD_LOCAL:
+    case GLTANG_OP_STORE_LOCAL:
+    case GLTANG_OP_LOAD_GLOBAL:
+    case GLTANG_OP_FUNC:
+    case GLTANG_OP_USE:
+    case GLTANG_OP_JMP:
+      return false;
     default:
+      // Fail safe: any other opcode, which the compiler does not know the operands of,
+      // is taken to read every operand, so it is an exit if any is raw.
+      for (int32_t p = 0; p < d; ++p) {
+        if (c->sk[p] == KIND_F64) {
+          return true;
+        }
+      }
       return false;
   }
 }
 
 /** The effect on the kinds of an instruction that flows on (an exit changes nothing, since nothing follows it). */
-static void apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
+static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
   int64_t unused;
   switch (op) {
     case GLTANG_OP_DUP:
@@ -345,9 +369,23 @@ static void apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_CALL:
       set_stack_kind(c, (uint32_t)d - 1u - a, KIND_REF);
       break;
-    default:
+    // Instructions with no effect on a kind: they pop, jump or leave.
+    case GLTANG_OP_POLL:
+    case GLTANG_OP_LINE:
+    case GLTANG_OP_POP:
+    case GLTANG_OP_JMP:
+    case GLTANG_OP_JMP_FALSE:
+    case GLTANG_OP_JMP_TRUE:
+    case GLTANG_OP_AND:
+    case GLTANG_OP_OR:
+    case GLTANG_OP_RET:
       break;
+    default:
+      // An instruction that flows on with a stack effect this function does not know
+      // is a defect of the compiler, not a kind to guess.
+      return false;
   }
+  return true;
 }
 
 static void kinds_all_ref(Ctx * c) {
@@ -794,7 +832,9 @@ static GLTANG_Result analyse_once(Ctx * c) {
       if (after > (int32_t)c->ms) {
         return GLTANG_ERR_INTERNAL;
       }
-      apply_kinds(c, op, a, d);
+      if (!apply_kinds(c, op, a, d)) {
+        return GLTANG_ERR_INTERNAL;
+      }
       if (branch) {
         if (a >= c->fn->code_count) { return GLTANG_ERR_INTERNAL; }
         c->leader[a] = true;
@@ -866,6 +906,9 @@ static GLTANG_Result analyse(Ctx * c) {
     }
     bool again = false;
     if (c->conflict) {
+      if (c->raw_off) {
+        return GLTANG_ERR_INTERNAL;  // with no raw source the kinds cannot disagree: looping would never end
+      }
       // The blunt rule: every raw source of the function becomes an exit and the
       // analysis is repeated. With no raw source the kinds cannot disagree, so this
       // happens at most once; the function is then compiled as it was before.
@@ -1137,7 +1180,7 @@ static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_ATTR, args, 2, c->stack[d - 1u], d);
 }
 
-static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
+static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
 
 /**
  * One instruction. The kinds at its start are in `lk` and `sk` (loaded from the
@@ -1146,17 +1189,28 @@ static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
  * the instruction on them is applied after.
  */
 static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
-  if (c->kind_at[i]) {
+  // A jump target has the merged kinds the analysis recorded (`kind_at`, made by `reach`
+  // for exactly the reachable targets and kept until `free_prod` at the end of the
+  // build, which is after every emission); any other instruction carries on from the
+  // one before it in code order, which is the only way into it.
+  if (c->target[i]) {
+    if (!c->kind_at[i]) {
+      c->err = GRJIT_ERR_INTERNAL;  // a reachable target the analysis recorded nothing for
+      return;
+    }
     memcpy(c->lk, c->kind_at[i], c->lc);
     if (d > 0) {
       memcpy(c->sk, c->kind_at[i] + c->lc, d);
     }
   }
-  emit_op_kinds(c, i, d);
-  apply_kinds(c, GLTANG_INSTRUCTION_OP(c->fn->code[i]), GLTANG_INSTRUCTION_A(c->fn->code[i]), (int32_t)d);
+  // Only an instruction that flows on changes the kinds; an exit leaves nothing after it.
+  if (emit_op_kinds(c, i, d) && !apply_kinds(c, GLTANG_INSTRUCTION_OP(c->fn->code[i]), GLTANG_INSTRUCTION_A(c->fn->code[i]), (int32_t)d)) {
+    c->err = GRJIT_ERR_INTERNAL;
+  }
 }
 
-static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
+/** Emits one instruction; true if it flows on, false if it is an exit. */
+static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
   const uint32_t word = c->fn->code[i];
   const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(word);
   const uint32_t a = GLTANG_INSTRUCTION_A(word);
@@ -1167,33 +1221,32 @@ static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
 
   if (reads_raw(c, op, a, (int32_t)d)) {
     emit_exit(c, i, d);  // the raw operand is in the frame state; the interpreter re-executes the instruction
-    return;
+    return false;
   }
   if (op == GLTANG_OP_CALL) {
     if (c->call_k[i] >= 0) {
       emit_call(c, i, d, a, (uint32_t)c->call_k[i]);
       c->call_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+      return true;
     }
-    else if (c->call_member[i]) {
+    if (c->call_member[i]) {
       emit_native_call(c, i, d, a, c->call_member[i]);
+      return true;
     }
-    else {
-      emit_exit(c, i, d);
-    }
-    return;
+    emit_exit(c, i, d);
+    return false;
   }
   if (op == GLTANG_OP_ATTR) {
     if (c->load_ok[i]) {
       emit_attr(c, i, d, a);
+      return true;
     }
-    else {
-      emit_exit(c, i, d);
-    }
-    return;
+    emit_exit(c, i, d);
+    return false;
   }
   if (!inline_op(c, op, a)) {
     emit_exit(c, i, d);
-    return;
+    return false;
   }
   switch (op) {
     case GLTANG_OP_POLL:
@@ -1388,6 +1441,7 @@ static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       c->err = GRJIT_ERR_INTERNAL;
       break;
   }
+  return c->err == GRJIT_OK;
 }
 
 static GLTANG_Result map_result(GRJIT_Result r) {
@@ -1766,4 +1820,26 @@ done:
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->work);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c);
   return result;
+}
+
+/*
+ * For the tests only: what the compiler's two tables say about an opcode, in a state
+ * where every operand position is raw. Bit 0: an instruction at depth 3 (CALL with two
+ * arguments) that reads a raw operand is an exit. Bit 1: the instruction has a known
+ * effect on the kinds when it flows on. The test walks every opcode, so one added
+ * without an entry in either table is seen. Declared in vm/test_hooks.h.
+ */
+unsigned gltang_vm_jit_test_opcode_policy(unsigned op) {
+  if (op >= (unsigned)GLTANG_OP_COUNT) {
+    return 0;
+  }
+  Ctx c;
+  memset(&c, 0, sizeof(c));
+  memset(c.sk, KIND_F64, sizeof(c.sk));
+  unsigned bits = reads_raw(&c, (GLTANG_Opcode)op, 2, 3) ? 1u : 0u;
+  Ctx d;
+  memset(&d, 0, sizeof(d));
+  d.raw_off = true;  // so that CONST does not read a program this state does not have
+  bits |= apply_kinds(&d, (GLTANG_Opcode)op, 0, 3) ? 2u : 0u;
+  return bits;
 }

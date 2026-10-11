@@ -93,16 +93,31 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
   if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
     return refuse_push(jit);
   }
+  // The callee's most raw floats at one site, from the function's record. This is the
+  // code the call goes on to run: a compiled call reaches this hook through the
+  // callee's entry slot, whose code is installed together with the record's `code`
+  // (`gltang_jit_compile_function`: the install is refused for another function's
+  // code, and `discard` refuses the slot in the same step that clears `code`), and
+  // nothing changes either between the slot's check and this hook (one thread, no
+  // poll in between). A record that is not compiled, which only the test hook can
+  // call, extends by zero, and a rebuild that then needed more is refused up front by
+  // the core (and counted), never made short.
   const GLTANG_JitFn * callee_fn = gltang_jit_find_fn(exec, jit, callee, false);
-  const GLTANG_JitCode * callee_code = callee_fn && callee_fn->code ? grcore_code_payload(callee_fn->code) : NULL;
+  const GLTANG_JitCode * callee_code = callee_fn && callee_fn->state == GLTANG_JITFN_COMPILED && callee_fn->code ? grcore_code_payload(callee_fn->code) : NULL;
   const size_t extension = callee_code ? callee_code->max_converting : 0;
-  if (!gltang_jit_extend(exec, extension, jit->chain + 1u)) {
+  if (!gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
     return refuse_push(jit);
   }
   GRCORE_Stack * stack = grcore_context_stack(context);
   GRCORE_FrameRef frame;
-  if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
-    gltang_jit_retract_level(exec, jit->chain + 1u);
+  const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
+  if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+    gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+    if (injected) {
+      jit->test_failed_capacity = grcore_deopt_reservation_capacity(jit->reservation);
+      jit->test_failed_extensions = jit->ext_count;
+      ++jit->test_failed_count;
+    }
     return refuse_push(jit);
   }
   // The frame push is a GC point (AD-28), and the heap's torture mode owns only
@@ -145,10 +160,14 @@ static void hook_pop(void * context) {
   if (!exec) {
     return;
   }
-  (void)grcore_stack_pop(grcore_context_stack(context));
+  GRCORE_Stack * stack = grcore_context_stack(context);
+  // The function whose frame is coming off, read before it goes: the extension this
+  // pop gives back is the innermost one, made at this depth for this function, and no
+  // other (a push that extended by zero left none, so a pop of it gives back nothing).
+  const uint64_t callee = grcore_stack_frame_count(stack) ? grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION] : 0;
+  (void)grcore_stack_pop(stack);
   if (exec->jit) {
-    // The callee's extension, if it made one: the innermost, at this depth.
-    gltang_jit_retract_level(exec, exec->jit->chain);
+    gltang_jit_retract_level(exec, exec->jit->chain, callee);
     if (exec->jit->chain) {
       --exec->jit->chain;
     }
@@ -300,6 +319,11 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   uint32_t rc;
   if (jit->test_fail_rebuild) {
     rc = (uint32_t)GRCORE_ERR_INVALID;
+    if (jit->gc_at_push) {
+      // Under torture the unwind that follows collects at its first allocation, with the
+      // guest frames as the failed rebuild left them: they must hold no raw word.
+      (void)grheap_collect(exec->heap);
+    }
   }
   else {
     size_t rebuilt = 0;

@@ -97,7 +97,7 @@ static bool pool_top_up(GLTANG_Execution * exec, GLTANG_Jit * jit, size_t want) 
   return true;
 }
 
-bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level) {
+bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level, uint64_t fword) {
   if (cells == 0) {
     return true;
   }
@@ -128,6 +128,7 @@ bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level) {
     return false;
   }
   jit->ext[jit->ext_count].level = level;
+  jit->ext[jit->ext_count].fword = fword;
   jit->ext[jit->ext_count].cells = cells;
   ++jit->ext_count;
   if (capacity > exec->jit_stats.reservation_peak) {
@@ -143,9 +144,9 @@ void gltang_jit_retract_to(GLTANG_Execution * exec, size_t count) {
   }
 }
 
-void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level) {
+void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level, uint64_t fword) {
   GLTANG_Jit * jit = exec->jit;
-  if (jit->ext_count > jit->ext_floor && jit->ext[jit->ext_count - 1u].level == level) {
+  if (jit->ext_count > jit->ext_floor && jit->ext[jit->ext_count - 1u].level == level && jit->ext[jit->ext_count - 1u].fword == fword) {
     grcore_deopt_reservation_retract(jit->reservation, jit->ext[--jit->ext_count].cells);
   }
 }
@@ -155,6 +156,13 @@ void gltang_jit_release_pool(GLTANG_Execution * exec) {
   if (!jit) {
     return;
   }
+  // With control back at the host no compiled frame is open: a pause rebuilt every
+  // one of them, an unwind skipped them, and every exit from compiled code gave back
+  // the entry's extension and its calls' (`gltang_jit_enter`), so the reservation is
+  // at its base, which is zero for the outermost run. A pool dropped while a
+  // reservation was still extended would break the invariant that the pool is as large
+  // as the capacity.
+  assert(grcore_deopt_reservation_capacity(jit->reservation) == 0 && jit->ext_count == 0);
   for (size_t i = 0; i < jit->pool_count; ++i) {
     jit->pool[i] = 0;
   }

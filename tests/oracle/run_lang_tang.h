@@ -185,7 +185,7 @@ inline Verdict lang_tang_run(const std::string & source, bool script, uint64_t f
 /// by observer::first_divergence, floats by bits and any two NaNs equal. The same fuel,
 /// libraries and verdict rules as lang_tang_run.
 inline Verdict lang_tang_run_traced(const std::string & source, bool script, long jit_threshold, observer::Trace * trace, size_t limit,
-    uint64_t * compiled_calls = nullptr, size_t sample_every = 0, size_t sample_cap = 0, GLTANG_JitStats * jit_stats = nullptr) {
+    uint64_t * compiled_calls = nullptr, size_t sample_every = 0, size_t sample_cap = 0, GLTANG_JitStats * jit_stats = nullptr, int torture = -1, int verify = -1) {
   tt::Compiled compiled(source, script ? tt::Mode::Script : tt::Mode::Template, "program.tang");
   if (compiled.result == GLTANG_ERR_FORMAT) {
     return Verdict::reject();
@@ -196,6 +196,8 @@ inline Verdict lang_tang_run_traced(const std::string & source, bool script, lon
   tt::Config config;
   config.fuel = kDifferentialFuel;
   config.jit_threshold = jit_threshold;
+  config.torture = torture;
+  config.verify = verify;
   tt::Context context(compiled.program, config);
   if (!context.ok()) {
     throw std::runtime_error("lang-tang could not make a context");

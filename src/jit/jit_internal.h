@@ -149,6 +149,7 @@ enum {
 /** @brief One extension of the reservation, and the call that made it. */
 typedef struct GLTANG_JitExtension {
   uint64_t level;  ///< The compiled-call depth it belongs to: 0 for an entry, otherwise `chain` as the push left it.
+  uint64_t fword;  ///< The function whose frame it is for (the pop hook retracts only its own callee's).
   size_t cells;
 } GLTANG_JitExtension;
 
@@ -184,6 +185,11 @@ typedef struct GLTANG_Jit {
   bool test_fail_rebuild;        ///< Test seam: the deopt hook's rebuild fails.
   uint64_t test_fail_extend_at;  ///< Test seam: the Nth nonzero extension of the reservation is refused (0: never).
   uint64_t test_fail_pool_at;    ///< Test seam: the top-up of the pool after the Nth nonzero extension is refused (0: never).
+  uint64_t test_fail_stack_push_at; ///< Test seam: the Nth push hook that has extended the reservation finds its stack push refused (0: never).
+  uint64_t test_stack_pushes;
+  uint64_t test_failed_capacity; ///< The reservation's capacity and the extensions open right after that refusal was undone.
+  uint64_t test_failed_extensions;
+  uint64_t test_failed_count;
   uint64_t test_extends;         ///< The nonzero extensions asked for so far, for the two seams above.
   bool gc_at_push;               ///< Test seam, for GC torture: the push hook collects after the push, as the frame-push GC point of AD-28.
 } GLTANG_Jit;
@@ -229,11 +235,11 @@ GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uin
  * @return False, with nothing changed, if the reservation or the pool could not
  *   grow (counted in the statistics); the caller refuses the entry or the call.
  */
-bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level);
+bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level, uint64_t fword);
 /** @brief Gives back the extensions above `count`, innermost first. Never allocates. */
 void gltang_jit_retract_to(GLTANG_Execution * exec, size_t count);
-/** @brief Gives back the innermost extension if it is this run's and was made at `level`. */
-void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level);
+/** @brief Gives back the innermost extension if it is this run's and was made at `level` for `fword`. */
+void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level, uint64_t fword);
 
 // The hooks (hooks.c), one set for every build.
 extern const GRJIT_CallHooks gltang_jit_hooks;

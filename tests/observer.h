@@ -47,6 +47,7 @@
 
 #include <ghoti.io/runtime-core/runtime-core.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -64,7 +65,9 @@ typedef bool (*FloatBits)(uint64_t value, uint64_t * bits);
 /// not convert it (that would box it, and change what it observes) but records it
 /// as the value it stands for: kind VALUE, this text, and the bits. An engine that
 /// supplies this reports a raw double as a RAW variable, which the interpreter's
-/// frame never has, so the observer reads a RAW variable as one too. Without it a
+/// frame never has; a variable has no representation, so the observer reads a RAW
+/// variable as a raw double only when a slot of the same frame, whose representation
+/// the frame state records, holds exactly the same word. Without it a
 /// raw slot is recorded as it is (kind RAW), which differs from the boxed one.
 typedef size_t (*FloatText)(const GRCORE_Context * context, uint64_t bits, char * buffer, size_t size);
 
@@ -192,6 +195,7 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
     rec.file = frame.location.file ? frame.location.file : "";
     rec.line = frame.location.line;
     rec.slot_count = frame.slot_count;
+    std::vector<uint64_t> raw_doubles;  // the words of this frame's slots that the frame says are raw F64
     for (size_t i = 0; i < frame.slot_count; ++i) {
       SlotRecord slot;
       uint64_t value = 0;
@@ -206,6 +210,7 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
         slot.is_float = true;
         slot.float_bits = value;
         slot.was_raw = true;
+        raw_doubles.push_back(value);
       }
       else {
         slot.text = detail::slot_text(frame, i);
@@ -232,7 +237,11 @@ inline bool capture(const GRCORE_Context * context, std::vector<FrameRecord> * o
         VariableRecord var;
         var.name = variable.name ? variable.name : "";
         var.kind = variable.kind;
-        if (float_text && variable.kind == GRCORE_SLOT_RAW) {
+        // A variable carries no representation, so it is read as a raw double only if
+        // the same frame says that a slot holding exactly this word is one (the slot
+        // path above, from the representation the frame state records).
+        if (float_text && variable.kind == GRCORE_SLOT_RAW &&
+            std::find(raw_doubles.begin(), raw_doubles.end(), variable.value) != raw_doubles.end()) {
           var.kind = GRCORE_SLOT_VALUE;
           var.text = detail::raw_float_text(context, float_text, variable.value);
           var.is_float = true;
