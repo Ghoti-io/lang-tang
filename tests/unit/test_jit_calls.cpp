@@ -270,7 +270,9 @@ TEST(JitCalls, ACalleeOperandTwoPathsProduceDifferentlyIsNeverACompiledCallSite)
     const std::string callee = shape.second;
     // `drive` must itself leave compiled code before it calls `t`, as it did when `%` was an exit;
     // `%` and `/` are compiled now (story 7), so the alternating flag is read from an array literal,
-    // which is an exit, and `drive` still reaches `t` from the interpreter.
+    // which is an exit, and `drive` still reaches `t` from the interpreter. This is a workaround: the
+    // assertions below on `calls` and `deopts` say that the exit happens. When array literals (`ARRAY`,
+    // `INDEX`) are compiled, change the flag to another instruction that still exits, or these fail.
     auto program = [&](const std::string & call) {
       return "function f(x) { return x + 1; }\nfunction g(x) { return x + 2; }\n"
              "function t(c, x) { return " + call + "; }\n"
@@ -294,6 +296,8 @@ TEST(JitCalls, ACalleeOperandTwoPathsProduceDifferentlyIsNeverACompiledCallSite)
     EXPECT_EQ(exits(jit.stats), 0u) << shape.first << ": the site was never a call site, so no call exit of any class was made at it (a callee-value guard exit means the merge was lost)";
     EXPECT_EQ(jit.stats.compile_at_call, 0u) << shape.first << ": no callee was compiled for a call site, there is none";
     EXPECT_GE(jit.stats.deopts, 1u) << shape.first << ": the CALL is an unconditional exit";
+    EXPECT_EQ(jit.stats.calls, 0u) << shape.first << ": no call between compiled functions: `drive` left compiled code at its array literal, before its call of `t`, and `t`'s own call is an exit";
+    EXPECT_GE(jit.stats.deopts, 9u) << shape.first << ": `drive` exits once and `t` exits at its CALL on each call until it is discarded at the eighth";
     EXPECT_LT(jit.stats.calls, control_jit.stats.calls) << shape.first << ": fewer compiled calls than the control, which has a site per iteration";
     EXPECT_EQ(jit.stats.rebuild_failures, 0u) << shape.first;
     EXPECT_EQ(jit.stats.hook_argument_errors, 0u) << shape.first;
