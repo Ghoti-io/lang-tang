@@ -1,0 +1,18 @@
+# 40 an unwind converts the frames it pops
+# defect: the deopt hook does not skip the compiled frames of a run that is
+# unwinding (lang-tang opens no scope in compiled code, so none survives), so the
+# rebuild boxes every live raw value of frames that are about to be popped
+# caught by: the unwind with floats live, which requires no value to have been
+# converted (testJit_floats)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -247,7 +247,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
+           // An unwind pops frames without converting them: every compiled frame of
+           // this run is inside the scope that is unwinding (compiled code opens
+           // none), so the rebuild skips them all and only marks the record rebuilt.
+-          keep = fr.base_frames - 1u;
++          (void)fr.base_frames;  /* planted: keep stays SIZE_MAX, and everything is rebuilt */
+         }
+         if (cause == 0u) {
+           GLTANG_JitFn * jf = gltang_jit_find_fn(exec, jit, fr.identity.function, false);

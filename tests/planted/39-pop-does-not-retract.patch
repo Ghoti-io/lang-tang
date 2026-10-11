@@ -1,0 +1,17 @@
+# 39 the pop hook does not give back the callee's extension
+# defect: a returned compiled call leaves its extension of the reservation in
+# place, so the capacity grows with every call and never comes back until the
+# entry gives it all back at its exit
+# caught by: the capacity at the caller's polls, which is the caller's own
+# however many calls have returned (testJit_floats)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -148,7 +148,6 @@ static void hook_pop(void * context) {
+   (void)grcore_stack_pop(grcore_context_stack(context));
+   if (exec->jit) {
+     // The callee's extension, if it made one: the innermost, at this depth.
+-    gltang_jit_retract_level(exec, exec->jit->chain);
+     if (exec->jit->chain) {
+       --exec->jit->chain;
+     }

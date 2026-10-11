@@ -1,0 +1,18 @@
+# 42 a merge of unequal kinds is not noticed
+# defect: where two ways into a jump target disagree on a slot's kind the first
+# way's kind is kept, so the other way's register is named in the frame state and
+# the value it holds is read as the wrong kind
+# caught by: the merge programs, whose output and frames must be the
+# interpreter's (testJit_floats)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -624,7 +624,7 @@ static bool reach(Ctx * c, uint32_t target, int32_t d, const uint32_t * cur, siz
+   // no register to name. That is not merged, it is a conflict, and the function is
+   // then compiled with no raw source at all (see analyse).
+   if (memcmp(c->kind_at[target], c->lk, c->lc) != 0 || (d > 0 && memcmp(c->kind_at[target] + c->lc, c->sk, (size_t)d) != 0)) {
+-    c->conflict = true;
++    /* planted: a conflict is not recorded */
+   }
+   bool changed = false;
+   uint32_t * mine = c->prod_at[target];

@@ -1,0 +1,17 @@
+# 41 a float is boxed at every slow poll
+# defect: the poll helper allocates a float box on every slow path (what boxing the
+# live raw values at a poll that continues would cost), so a loop with a handler
+# pending allocates in proportion to its length
+# caught by: the allocation slope with a handler pending at every poll
+# (testJit_floats)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -67,6 +67,7 @@ uint32_t gltang_jit_poll(void * ctx, uint64_t fword, uint64_t index) {
+     return 2u;
+   }
+   ++exec->jit_stats.slow_polls;
++  (void)gltang_vm_make_float(exec, 0.0);  /* planted: a box at every slow poll */
+   // What the interpreter's SYNC() does: where the poll is, for locations and for
+   // errors made next.
+   exec->current_function = GLTANG_FN_INDEX(fword);

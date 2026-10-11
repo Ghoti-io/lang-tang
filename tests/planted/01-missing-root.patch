@@ -4,7 +4,7 @@
 #
 --- a/src/vm/execution.c
 +++ b/src/vm/execution.c
-@@ -327,9 +327,7 @@
+@@ -401,9 +401,7 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
    for (size_t i = 0; i < exec->root_count; ++i) {
      visitor->slot(visitor->user, &exec->roots[i]);
    }
@@ -12,6 +12,6 @@
 -    visitor->slot(visitor->user, &exec->temps[i]);
 -  }
 +  /* planted: the temporaries are no longer reported as roots */
-   // Every running program: its result, and (for a template call) its own
-   // variables. The main program's variables are in `roots`.
-   for (GLTANG_Activation * a = exec->act; a; a = a->parent) {
+ #ifdef GLTANG_WITH_JIT
+   // The float boxes made ahead of time for the rebuild's conversions.
+   gltang_jit_enumerate_roots(exec, visitor);

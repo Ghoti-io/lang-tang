@@ -1,0 +1,17 @@
+# 43 a float constant is emitted through 32 bits
+# defect: the immediate of a float CONST is truncated to its low 32 bits, so a
+# constant that is not exactly representable that way is another number
+# caught by: the pause with live raw values, which reads the floats back by their
+# bits (testJit_floats)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1247,7 +1247,7 @@ static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
+     case GLTANG_OP_CONST:
+       if (!c->raw_off && float_constant(c, a, &k)) {
+         // The interpreter's double, bit for bit, as the register's immediate.
+-        B(grjit_builder_const(c->b, c->stack_f[d], k));
++        B(grjit_builder_const(c->b, c->stack_f[d], (int64_t)(uint32_t)k));  /* planted: 32 bits */
+       }
+       else {
+         (void)small_int_constant(c, a, &k);

@@ -1,0 +1,17 @@
+# 36 the reservation is extended one cell short
+# defect: an entry or a compiled call extends the reservation by one less than
+# the callee's most raw floats, so the rebuild of a frame that holds that many is
+# refused up front and the run ends unwound
+# caught by: the pause with k live raw values, which requires the rebuild to
+# succeed and to box all k (testJit_floats)
+#
+--- a/src/jit/boxes.c
++++ b/src/jit/boxes.c
+@@ -101,6 +101,7 @@ bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level) {
+   if (cells == 0) {
+     return true;
+   }
++  cells -= 1u;  /* planted: one cell short */
+   GLTANG_Jit * jit = exec->jit;
+   const uint64_t nth = ++jit->test_extends;
+   if (jit->test_fail_extend_at != 0 && nth == jit->test_fail_extend_at) {

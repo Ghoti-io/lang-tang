@@ -36,6 +36,7 @@
 #include "test_helpers.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -196,6 +197,9 @@ TEST(JitFloats, ACompiledLoopThatCarriesAFloatAllocatesNothingPerIterationAndBox
   EXPECT_EQ(jit_long.stats.conversion_errors, 0u);
   EXPECT_EQ(jit_long.stats.compile_failures, 0u);
   EXPECT_EQ(jit_long.raw, "1.55000");
+  std::printf("  float carry slope: compiled allocations %llu at 200 iterations and %llu at 5000; interpreted %llu and %llu\n",
+      static_cast<unsigned long long>(jit_short.heap_allocations), static_cast<unsigned long long>(jit_long.heap_allocations),
+      static_cast<unsigned long long>(plain_short.heap_allocations), static_cast<unsigned long long>(plain_long.heap_allocations));
   EXPECT_EQ(plain_long.stats.values_boxed, 0u) << "the interpreter boxes nothing";
 }
 

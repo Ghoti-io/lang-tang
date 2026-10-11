@@ -45,10 +45,23 @@
 #   32 a float sum one ulp off with the JIT on   the frame differential's bits channel   (testObserver)
 #   33 a subnormal product or quotient flushed to zero with the JIT on   the frame differential's bits channel   (testObserver)
 #   34 a zero product that is a NaN with the JIT on   the frame differential's bits channel   (testObserver)
-#   (32 to 34 stand for the compiled float of spec-runtime-float stories 6 and 7, which does
+#   (32 to 34 stand for the compiled float arithmetic of spec-runtime-float story 7, which does
 #   not exist yet: each is a tier-dependent float result, which is what a compiled operation
 #   that is wrong would be. The text of a float is six decimals, so for 32 and 33 the text
 #   of every slot, the output and the result are unchanged and only the bits differ.)
+#   35 the pool of float boxes is not reported as roots   the rebuild under torture and verify   (testJit_floats)
+#   36 the reservation is extended one cell short   the pause with k live raw values   (testJit_floats)
+#   37 a raw word is in the conversion's root cell across a collection   the rebuild under torture and verify   (testJit_floats)
+#   38 reverse has no type test   the checked write-back over a hand-made F64 site   (testJit_floats)
+#   39 the pop hook does not give back the callee's extension   the capacity at the caller's polls   (testJit_floats)
+#   40 an unwind converts the frames it pops   the unwind with floats live   (testJit_floats)
+#   41 a float is boxed at every slow poll   the allocation slope with a handler pending   (testJit_floats)
+#   42 a merge of unequal kinds is not noticed   the merge programs against the interpreter   (testJit_floats)
+#   43 a float constant is emitted through 32 bits   the pause with live raw values, read back by their bits   (testJit_floats)
+#   (35 to 43 are the compiled float of spec-runtime-float story 6. The story's third defect,
+#   a raw slot written before its conversion finished, is 37 in the nearest form lang-tang's
+#   tree has: the deopt hook has no step between the core's read of a raw word and the core's
+#   conversion of it, so the raw word is put where a collector reads it inside `convert`.)
 #
 # Cases 13, 14, 15, 20 and 27 (`--relocate`) are caught only by runtime-heap's relocation
 # torture, which moves every unpinned object at every collection: a reference
@@ -66,7 +79,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 34; 10 is retired); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 43; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13, 14, 15, 20 and 27, against PLANTED_RELOC_PREFIX and
@@ -77,7 +90,7 @@
 #               it, and a patch that breaks nothing is reported as not caught
 # PLANTED_JIT is yes (the default) or no, the JIT= the library is built with. The
 # copy is built the same way, in its own tree (release-nojit for no). Cases 08, 09
-# and 15 to 34 plant a defect in the JIT, which a JIT=no build does not contain, so
+# and 15 to 43 plant a defect in the JIT, which a JIT=no build does not contain, so
 # with no they are SKIPPED, loudly, and counted as skipped and never as caught:
 # the summary line gives both numbers, and a run in which nothing was caught
 # fails (an all-skipped run proves nothing). With yes every case runs.
@@ -102,7 +115,7 @@ case "$JIT" in
   *) printf 'check-planted: PLANTED_JIT must be yes or no, not %s\n' "$JIT" >&2; exit 2 ;;
 esac
 # Cases whose defect is in code only a JIT=yes build contains.
-JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm"
+JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm 35-pool-boxes-not-reported-as-roots 36-reservation-short-by-one 37-raw-word-in-the-root-cell-across-a-collection 38-reverse-with-no-type-test 39-pop-does-not-retract 40-unwind-converts 41-box-at-every-slow-poll 42-merge-conflict-ignored 43-float-constant-through-32-bits"
 
 if [ -z "$LIBDIR" ]; then
   printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
@@ -133,7 +146,7 @@ RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15
 # What a relocation case runs under: relocation and torture together (a move at
 # every GC point). The "relocation is the instrument" check removes the first.
 RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm 35-pool-boxes-not-reported-as-roots 36-reservation-short-by-one 37-raw-word-in-the-root-cell-across-a-collection 38-reverse-with-no-type-test 39-pop-does-not-retract 40-unwind-converts 41-box-at-every-slow-poll 42-merge-conflict-ignored 43-float-constant-through-32-bits"
 SLOW="01-missing-root 02-missing-gc-store"
 
 if [ "$MODE" = relocate ]; then
@@ -166,6 +179,7 @@ target_of() {
     15-*|16-*|17-*|19-*|20-*|21-*|22-*|23-*|24-*|31-*) echo "build/linux/$TREE/apps/testJit_calls" ;;
     25-*|26-*|27-*|28-*|29-*|30-*) echo "build/linux/$TREE/apps/testNative_calls" ;;
     18-*) echo "build/linux/$TREE/apps/testObserver" ;;
+    35-*|36-*|37-*|38-*|39-*|40-*|41-*|42-*|43-*) echo "build/linux/$TREE/apps/testJit_floats" ;;
     11-*|12-*) echo "build/linux/$TREE/apps/testSnapshot" ;;
     04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
     06-*|07-*) echo "build/linux/$TREE/apps/oracle/oracle_ctang build/linux/$TREE/apps/testOracle" ;;
@@ -186,6 +200,20 @@ run_test() {
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit --gtest_brief=1 --gtest_filter='Jit.FuelIsTheSame*') ;;
     32-*|33-*|34-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1 --gtest_filter='Observer.TheFloatPrograms*') ;;
+    35-*|37-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.ARebuildUnderTorture*') ;;
+    36-*|43-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.APauseAtAPoll*') ;;
+    38-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.ReverseFits*') ;;
+    39-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.AGuardThatFails*:JitFloats.ManyCompiledCalls*:JitFloats.ANestedEntry*') ;;
+    40-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.AnUnwindWithFloatsLive*') ;;
+    41-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.TheSlopeIsStillZeroWithAHandler*') ;;
+    42-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_floats --gtest_brief=1 --gtest_filter='JitFloats.AMergeOfUnequalKinds*') ;;
     16-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testJit_calls --gtest_brief=1 --gtest_filter='JitCalls.AFuelBudget*:JitCalls.ADeclaredGlobalFunction*') ;;
     17-*)
@@ -238,6 +266,13 @@ name_of_test() {
     32-*|33-*|34-*) echo "testObserver (the float programs, compared by bits, interpreter against JIT)" ;;
     09-*) echo "testJit (the fuel-parity test)" ;;
     15-*|20-*) echo "testJit_calls under relocation torture" ;;
+    35-*|37-*) echo "testJit_floats (the rebuild under torture and verify)" ;;
+    36-*|43-*) echo "testJit_floats (the pause with live raw values, read back by their bits)" ;;
+    38-*) echo "testJit_floats (the checked write-back over a hand-made F64 site)" ;;
+    39-*) echo "testJit_floats (the reservation's capacity across returns, deopts and nested entries)" ;;
+    40-*) echo "testJit_floats (the unwind with floats live)" ;;
+    41-*) echo "testJit_floats (the allocation slope with a handler pending)" ;;
+    42-*) echo "testJit_floats (the merge programs, interpreter against JIT)" ;;
     16-*) echo "testJit_calls (the fuel-parity tests)" ;;
     17-*) echo "testJit_calls (the recursion-limit test)" ;;
     18-*) echo "testObserver (the frame differential, a caller's line after a chain is rebuilt)" ;;

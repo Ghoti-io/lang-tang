@@ -5,12 +5,12 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -460,7 +460,7 @@
-       break;
-     case GLTANG_OP_LOAD_LOCAL:
-       B(grjit_builder_move(c->b, T[d], V(c->local[a])));
+@@ -1266,7 +1266,7 @@ static void emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
+       else {
+         B(grjit_builder_move(c->b, T[d], V(c->local[a])));
+       }
 -      add_fuel(c, cost);
 +      /* planted: no add_fuel(c, cost) */
        break;
      case GLTANG_OP_STORE_LOCAL:
-       B(grjit_builder_move(c->b, c->local[a], V(T[d - 1u])));
+       if (c->sk[d - 1u] == KIND_F64) {

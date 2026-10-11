@@ -1,0 +1,20 @@
+# 38 reverse has no type test
+# defect: reverse accepts any value as a float and hands back its word, so a
+# write-back puts a small integer, a string or a pointer where a raw double
+# belongs instead of exiting at the site
+# caught by: the checked write-back over a hand-made site with an F64 location
+# (testJit_floats)
+#
+--- a/src/jit/boxes.c
++++ b/src/jit/boxes.c
+@@ -199,9 +199,6 @@ bool gltang_jit_reverse(GRCORE_Context * context, GRCORE_Representation represen
+     }
+     return false;
+   }
+-  if (!gltang_v_is_kind(value, GLTANG_OBJ_FLOAT)) {
+-    return false;
+-  }
+-  memcpy(out_raw, &((const GLTANG_FloatObject *)gltang_object(value))->value, sizeof(*out_raw));
++  *out_raw = value;  /* planted: no type test */
+   return true;
+ }

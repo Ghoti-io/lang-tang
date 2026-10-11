@@ -7,13 +7,13 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -87,6 +87,9 @@
+@@ -93,6 +93,9 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
    if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
      return refuse_push(jit);
    }
 +  if (jit->chain >= 8u) {
 +    return refuse_push(jit); /* planted: no such test */
 +  }
-   GRCORE_Stack * stack = grcore_context_stack(context);
-   GRCORE_FrameRef frame;
-   if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+   const GLTANG_JitFn * callee_fn = gltang_jit_find_fn(exec, jit, callee, false);
+   const GLTANG_JitCode * callee_code = callee_fn && callee_fn->code ? grcore_code_payload(callee_fn->code) : NULL;
+   const size_t extension = callee_code ? callee_code->max_converting : 0;

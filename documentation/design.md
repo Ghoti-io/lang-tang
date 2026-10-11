@@ -1303,13 +1303,24 @@ breaks nothing as not caught. Observed:
 | 32 float-add-one-ulp-off-in-the-jit-arm | with the JIT on, a finite float sum is the next double up. The text of a float is six decimals, so the output, the result and the inspected text of every slot are unchanged and only the slot's 64 bits differ | the float programs, compared by bits, interpreter against JIT (`testObserver`, `Observer.TheFloatPrograms*`) | `scope program variable r3 float bits: 0x... against 0x...` at the first poll that holds the sum |
 | 33 float-subnormal-flushed-in-the-jit-arm | with the JIT on, a subnormal product or quotient is zero of the same sign (both print `0.`) | the same | `variable sub float bits` |
 | 34 float-nan-where-a-number-belongs-in-the-jit-arm | with the JIT on, a zero product of finite operands is a NaN | the same | a float slot or variable that is a NaN where the interpreter holds a number |
+| 35 pool-boxes-not-reported-as-roots | the float boxes made ahead of time for the rebuild are not reported as roots, so the next collection frees them | the rebuild under torture and verify, which reads the frame's floats back by their bits (`testJit_floats`, `JitFloats.ARebuildUnderTorture*`) | the floats the frame holds differ from the constants |
+| 36 reservation-short-by-one | an entry or call extends the reservation one cell short, so a rebuild of a frame that holds that many raw floats is refused up front | the pause with k live raw values (`testJit_floats`, `JitFloats.APauseAtAPoll*`) | the context is not paused: the run ended unwound, `rebuild_failures` is 1 |
+| 37 raw-word-in-the-root-cell-across-a-collection | `convert` stores the double's bits in the cell the collector reads as a root, and a collection runs before the box replaces it | the same rebuild under torture and verify | `invalid_pointers` is not 0 |
+| 38 reverse-with-no-type-test | `reverse` accepts any value as a float | the checked write-back over a hand-made `F64` site (`JitFloats.ReverseFits*`) | a small integer is written where a raw double belongs |
+| 39 pop-does-not-retract | the pop hook leaves the callee's extension in place | the capacity at the caller's polls (`JitFloats.AGuardThatFails*`, `ManyCompiledCalls*`, `ANestedEntry*`) | the capacity grows with every returned call |
+| 40 unwind-converts | the deopt hook does not skip the compiled frames of an unwinding run | the unwind with floats live (`JitFloats.AnUnwindWithFloatsLive*`) | `values_boxed` is not 0 |
+| 41 box-at-every-slow-poll | the poll helper allocates a float box on every slow path | the allocation slope with a handler pending (`JitFloats.TheSlopeIsStillZeroWithAHandler*`) | the allocation count grows with the loop length |
+| 42 merge-conflict-ignored | a merge of unequal kinds is not noticed, so the first way's kind is kept | the merge programs against the interpreter (`JitFloats.AMergeOfUnequalKinds*`) | the output differs |
+| 43 float-constant-through-32-bits | the immediate of a float `CONST` is truncated to its low 32 bits | the pause with live raw values, read back by their bits | the floats the frame holds differ from the constants |
 
-32 to 34 stand for the compiled float of `spec-runtime-float` stories 6 and 7, which does not exist yet: each is a tier-dependent float result, which is what a wrong compiled operation would be. The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
+32 to 34 stand for the compiled float arithmetic of `spec-runtime-float` story 7, which does not exist yet: each is a tier-dependent float result, which is what a wrong compiled operation would be. The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 34 (`check-planted-quick`, about two minutes with the
+35 to 43 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the nearest form this tree has: the deopt hook has no step between the core's read of a raw word and the core's conversion of it (the core's own ordering is tested in runtime-core, `test_rebuild.cpp`), so the raw word is put where a collector reads it inside `convert`.
+
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 43 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all thirty-three but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
+runs all forty-two but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -1838,8 +1849,8 @@ small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
 the product cannot leave the range; the operand of `NOT`, the jumps, `AND` and `OR`
 must be a boolean. Everything else (`DIV`, `MOD`, casts, indexing, attributes,
 slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `PRINT*`, `ITER_*`,
-`DISCARD`, `SET_RESULT`, a `USE` or `ATTR` that is not a library load, `HALT` and any other constant)
-is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
+`DISCARD`, `SET_RESULT`, a `USE` or `ATTR` that is not a library load, `HALT` and any constant that is
+neither a small integer nor a float) is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
 (a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
 
 **Frame states are exactly the guest frame.** `frame_slots` slots in the guest
@@ -1901,10 +1912,79 @@ the interpreter's first run reserves the activation records' array, which enteri
 compiled code would otherwise allocate). A compile refused by memory, by a limit or by
 `protect` marks the function never-compile, is counted (`compile_failures`) and the
 run goes on in the interpreter. The execution's teardown clears every slot,
-unregisters every range and releases the reservation (the reservation each call
-extends by the callee's converting locations, which lang-tang's frames do not have:
-no derived pointer and no converting representation, which a test asserts of the
-emitted metadata) before its own state goes.
+unregisters every range and releases the reservation (the reservation each entry and
+each call extends by the callee's most raw floats at one site, below) before its own
+state goes. The emitted metadata has no derived pointer, and its only converting
+location is a raw `F64` on a raw slot, which a test asserts.
+
+**Floats carried raw (spec-runtime-float story 6, AD-27).** A float constant is held
+in compiled code as a raw double, in a local or an operand slot, and is boxed only
+when a frame is rebuilt. Outside compiled code a float is still a boxed
+`GLTANG_OBJ_FLOAT`; Tang's value representation did not change. What compiled code
+does is only the carrying (the arithmetic, the comparisons and the casts are story 7):
+
+- *Kinds.* Each local and each operand position has a kind at every point of the code,
+  `REF` (a value word) or `F64` (a raw double); a slot that is ever raw has a second,
+  `F64`, register beside its `REF` one, and a frame state names exactly one of the two,
+  so the other is not live and is not in a stack map. The only source of an `F64` is a
+  float `CONST`, emitted as the interpreter's double bit for bit (its 64 bits as the
+  register's immediate, never through `float` or arithmetic). `LOAD_LOCAL`,
+  `STORE_LOCAL`, `DUP`, `POP` and the jumps carry a kind. Every other instruction that
+  reads a raw operand (`ADD`, `NEG`, a comparison, `NOT`, `AND`, `OR`, a jump on it,
+  `RET`, `CALL` with a raw callee or argument, a library call or load) is an
+  unconditional exit at that instruction, with the operand in its frame state, and the
+  interpreter re-executes it; such an exit counts toward the discard limit as any
+  unconditional exit does (the limit is a short-run heuristic that must become a rate
+  before compiled code is shared between executions: `planning/template-architecture.md`).
+  Compiled code never boxes.
+- *Merges.* Where the ways into a jump target disagree on a slot's kind (a local first
+  assigned a float inside a loop, `if (c) { x = 1.5; } else { x = 2; }`) every raw source
+  of the function becomes an exit and the analysis is run again, so the function is then
+  compiled as it was before. The rule is blunt on purpose (finer demotion is an
+  optimisation; this one cannot produce a wrong frame state), and the common shape,
+  `acc = 0.0` before the loop, merges equal kinds and stays raw.
+- *The conversions.* The engine descriptor supplies `convert` (a raw double into a float
+  box taken from the pool, which cannot fail, allocate, collect or poll) and `reverse`
+  (the type test: true, with the bits, for exactly a float; false for an integer, even one
+  that happens to be integral, and for everything else). `slot_kind` and `variable` never
+  report a raw double as a value: a raw local is a `RAW` variable with its bits (the
+  abstract frame says its representation, `grcore_frame_slot_tagged`; `GRCORE_Variable`
+  and `inspect` carry none, so a debugger-grade rendering of a not-yet-rebuilt float needs a
+  change in runtime-core (a pause rebuilds before a debugger reads values, which is why none is
+  needed yet), and the frame differential reads representations itself, as the value the slot stands
+  for, without converting it).
+- *The reservation and the pool.* A reservation cell holds a word and a Tang float is a
+  heap object, so a conversion that cannot fail or collect needs the object to exist
+  already. The boxes are made ahead of time at the two points where an allocation can be
+  answered (entering compiled code from the interpreter, and the push hook, before it
+  pushes or reads its arguments), kept as precise roots of the execution (so a collector,
+  torture and relocation see and update them), and handed out by `convert`. The pool holds
+  at least as many boxes as the reservation's capacity whenever compiled code may run, and
+  the capacity is at least the sum, over the open compiled frames, of each frame's
+  `max_converting` (the most converting locations at any one of its sites, recorded in the
+  code's payload): the same worst case the core's rebuild checks up front. Entry extends
+  by the entry function's, the push hook by the callee's, the pop hook retracts the
+  callee's, the deopt hook retracts what its run's calls opened and the entry gives back
+  its own at every exit (a LIFO of the nonzero extensions, with a floor for a nested
+  entry). A function that holds no raw float extends by zero and allocates nothing. A
+  refusal (the memory budget, the system, the extension) is an exit at the call site (the
+  interpreter makes the call) or a function not entered this time; it never leaves a
+  frame half pushed. A retract keeps the boxes, so a warm loop of calls allocates nothing;
+  a box a rebuild consumed is replaced by the next top-up. The pool is let go when control
+  returns to the host, because the heap image of a snapshot requires the destination to
+  report as many precise root slots as the source did.
+- *What a rebuild does.* It is `grcore_compiled_rebuild`, from the deopt hook, and it is the
+  only boxing: each live raw value once, with no allocation and no collection across it.
+  An unwind converts no frame (lang-tang opens no scope in compiled code, so no compiled
+  frame survives an unwind, and the hook skips them all). A poll with nothing pending, and
+  a slow-path poll that continues, convert nothing, and the poll helper still touches no
+  guest frame.
+
+*Rejected:* in-word doubles and NaN-boxing (Tang's value representation is unchanged, and
+every pointer is 48 bits); a `convert` that allocates from the heap under a no-collection
+flag (it can still fail); boxing at every poll (an allocation per iteration of every float
+loop); a dynamic tag in place of the static kinds (a branch on every access, and a frame
+state that cannot say what a slot is). The full record is story 8's.
 
 ### Why this and not something else
 
@@ -2110,9 +2190,9 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   through an exit by design, AD-23), of a native with sixteen arguments or more
   (runtime-jit's native call takes the callee and fifteen), a load that does not
   yield a host function or a library, and any call with the wrong number of
-  arguments. Tang has no tail call and none is added. Floating
-  point in compiled code is the same kind of defect:
-  `planning/specs/spec-runtime-float/`.
+  arguments. Tang has no tail call and none is added. Float arithmetic, comparison
+  and casts, and integer `/` and `%`, are the same kind of defect: a float constant
+  is carried raw (above), and the rest is `planning/specs/spec-runtime-float/`.
 - **On-stack replacement into a running loop.** Compiled code is entered at a
   function's entry only; a loop that gets hot in a function called once runs in
   the interpreter for that call, and after a pause at a compiled poll the rest of
@@ -2132,8 +2212,9 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   `GLTANG_ERR_UNSUPPORTED`, counted as a failure. `JIT=no` is the arm for every
   other target.
 - **Inline caches**, **inlining of heap operations** (arrays, maps, strings; a
-  native is called, not inlined), floating point, boxed integers and `DIV`/`MOD`: all of them are
-  exits, and the interpreter does them.
+  native is called, not inlined), float arithmetic, comparison and casts, boxed integers and
+  `DIV`/`MOD`: all of them are exits, and the interpreter does them. (A float constant is
+  carried raw; whatever reads it leaves compiled code.)
 - **Hardening** of the generated code (guard pages, randomised layout, constant
   blinding): the pages are never writable and executable at once, and that is all.
 - **Compile-time limits tuned to a benchmark.** The supported set, the threshold

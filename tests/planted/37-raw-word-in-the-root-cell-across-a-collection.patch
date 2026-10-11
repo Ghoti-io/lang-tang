@@ -1,0 +1,20 @@
+# 37 a raw word is in the conversion's root cell when a collection runs
+# defect: convert stores the double's bits in the cell the collector reads as a
+# root, and a collection runs before the box replaces it, so the collector reads
+# a raw word as a value (the nearest realisation of "a raw word reaching a value
+# slot before its box": lang-tang's deopt hook has no step between the core's
+# read of the raw word and the core's conversion of it)
+# caught by: the rebuild under torture and verify, which requires that no root
+# slot named a thing that is not an object (testJit_floats)
+#
+--- a/src/jit/boxes.c
++++ b/src/jit/boxes.c
+@@ -183,6 +183,8 @@ void gltang_jit_convert(GRCORE_Context * context, GRCORE_Representation represen
+     *out_root = 0;
+     return;
+   }
++  *out_root = raw;  /* planted: a raw word in a root cell, */
++  (void)grheap_collect(exec->heap);  /* and a collection that reads it */
+   GLTANG_Value v = jit->pool[--jit->pool_count];
+   jit->pool[jit->pool_count] = 0;
+   GLTANG_FloatObject * box = gltang_object(v);

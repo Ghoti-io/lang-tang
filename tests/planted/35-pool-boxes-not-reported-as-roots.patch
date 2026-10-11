@@ -1,0 +1,20 @@
+# 35 the pool of float boxes is not reported as roots
+# defect: the boxes made ahead of time for the rebuild's conversions are heap
+# objects nothing references, so the next collection frees them and the rebuild
+# hands the interpreter a freed object
+# caught by: the rebuild under torture and verify, which reads the floats the
+# frame holds back by their bits and requires no root slot to name a freed object
+# (testJit_floats)
+#
+--- a/src/jit/boxes.c
++++ b/src/jit/boxes.c
+@@ -166,6 +166,9 @@ void gltang_jit_enumerate_roots(GLTANG_Execution * exec, const GRCORE_RootVisito
+   if (!jit || !visitor->slot) {
+     return;
+   }
++  if (jit) {
++    return;  /* planted: the pool is not a root */
++  }
+   for (size_t i = 0; i < jit->pool_count; ++i) {
+     visitor->slot(visitor->user, &jit->pool[i]);
+   }
