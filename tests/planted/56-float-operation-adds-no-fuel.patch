@@ -1,0 +1,16 @@
+# 56 a float operation adds no fuel
+# defect: the compiled float arithmetic charges nothing for the operation, so compiled
+# code runs with less fuel used than the interpreter, and a budget or a pause comes late
+# caught by: the fuel-parity test of testJit_arith
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1524,7 +1524,7 @@
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;
+         B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       if (op == GLTANG_OP_MUL) {

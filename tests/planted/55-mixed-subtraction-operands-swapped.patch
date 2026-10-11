@@ -1,0 +1,21 @@
+# 55 a mixed subtraction or division has its operands swapped
+# defect: FSUB and FDIV are emitted with the operands in the other order, so 1.5 - a is
+# a - 1.5 and a / 2.0 is 2.0 / a
+# caught by: the mixed integer and float rows of testJit_arith (1.5 - a, a / 2.0)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1523,7 +1523,12 @@
+           guard(c, V(t[TMP_C]), i, d);
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;
+-        B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
++        if (fk == GRJIT_OP_FSUB || fk == GRJIT_OP_FDIV) {
++          B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fb), V(fa)));  /* planted: swapped */
++        }
++        else {
++          B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
++        }
+         add_fuel(c, cost);
+         break;
+       }

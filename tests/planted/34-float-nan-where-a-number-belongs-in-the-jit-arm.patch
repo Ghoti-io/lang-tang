@@ -1,24 +1,24 @@
 # 34 a NaN where a number belongs
-# defect: with the JIT on, a float product of finite operands that is zero is a
-# NaN, as a compiled multiply that mishandled a zero would give. (Stands for the
-# compiled float of stories 6 and 7, which does not exist yet.)
+# defect: a compiled float product of finite operands that is zero is a NaN, as a compiled
+# multiply that mishandled a zero would give. (Story 7 moved this from the interpreter's
+# arithmetic into the compiled emission itself.)
 # caught by: the frame differential's bits channel, interpreter against JIT (testObserver)
 #
---- a/src/vm/ops.c
-+++ b/src/vm/ops.c
-@@ -125,7 +125,14 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
-   switch (op) {
-     case GLTANG_OP_ADD: return gltang_vm_make_float(exec, x + y);
-     case GLTANG_OP_SUB: return gltang_vm_make_float(exec, x - y);
--    case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
-+    case GLTANG_OP_MUL: {
-+      /* planted: a zero product is a NaN when the JIT is on */
-+      double planted_r = x * y;
-+      if (exec->jit_threshold && planted_r == 0.0) {
-+        planted_r = nan("");
-+      }
-+      return gltang_vm_make_float(exec, planted_r);
-+    }
-     case GLTANG_OP_DIV:
-       if (y == 0.0) {
-         return MAKE_ERROR(GLTANG_ERROR_DIVIDE_BY_ZERO);
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1524,6 +1524,15 @@
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;
+         B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
++        if (fk == GRJIT_OP_FMUL) {
++          /* planted: a zero product is multiplied by 0/0 */
++          GRJIT_VReg r = c->stack_f[d - 2u];
++          cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(r), FI(0.0));
++          bin(c, GRJIT_OP_XOR, t[TMP_C], V(t[TMP_C]), I(1));
++          B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_S, c->tmp_f[0], V(t[TMP_C])));
++          B(grjit_builder_binary(c->b, GRJIT_OP_FDIV, c->tmp_f[0], V(c->tmp_f[0]), V(c->tmp_f[0])));
++          B(grjit_builder_binary(c->b, GRJIT_OP_FMUL, r, V(r), V(c->tmp_f[0])));
++        }
+         add_fuel(c, cost);
+         break;
+       }

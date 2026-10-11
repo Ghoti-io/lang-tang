@@ -1,0 +1,16 @@
+# 58 the integer is converted from its tagged word
+# defect: a small integer read as a double is converted with no SAR 4, so the double is
+# (n << 4 | 1) instead of n
+# caught by: any mixed integer and float row of testJit_arith
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1164,7 +1164,7 @@
+   B(grjit_builder_br_if(c->b, V(t[TMP_C]), small, other));
+   c->open = false;
+   set_block(c, small);
+-  bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
++  bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(0));  /* planted: the tag is not shifted off */
+   B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_S, dst, V(t[TMP_X])));
+   branch_to(c, join);
+   set_block(c, other);

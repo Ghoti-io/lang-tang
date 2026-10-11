@@ -1,0 +1,23 @@
+# 51 >= and <= compiled as the negation of < and >
+# defect: a float comparison with >= or <= is computed as "not <" or "not >", which is
+# true for a NaN where the interpreter says false (every order is false for a NaN)
+# caught by: the NaN comparison rows of testJit_arith
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1587,7 +1587,14 @@
+         // Doubles, both converted: ordered, so a NaN on either side is false for all but `!=`.
+         GRJIT_VReg fa = float_operand(c, i, d, d - 2u, c->tmp_f[0]);
+         GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+-        cmp(c, cond, t[TMP_R], V(fa), V(fb));
++        if (op == GLTANG_OP_GE || op == GLTANG_OP_LE) {
++          /* planted: the negation of the opposite strict order */
++          cmp(c, op == GLTANG_OP_GE ? GRJIT_CMP_LT : GRJIT_CMP_GT, t[TMP_R], V(fa), V(fb));
++          bin(c, GRJIT_OP_XOR, t[TMP_R], V(t[TMP_R]), I(1));
++        }
++        else {
++          cmp(c, cond, t[TMP_R], V(fa), V(fb));
++        }
+         box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_BOOL);
+         add_fuel(c, cost);
+         break;

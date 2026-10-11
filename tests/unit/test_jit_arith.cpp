@@ -550,7 +550,7 @@ TEST(JitArith, AMergeOfUnequalKindsStillCompilesWithNoRawSlot) {
 TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnits) {
   GLTANG_REQUIRE_JIT_BACKEND();
   const std::string program = std::string(kPrelude) +
-      "function f(n) { s = 0.0; a = n as float; i = 0; while (i < n) { s = s + a / (i + 1.5); a = a - 1.0; t = s as int; u = -s; i = i + 1; } print(s > 0.0); return i; }\n"
+      "function f(n) { s = 0.0; a = n as float; u = 0.0; t = 0; i = 0; while (i < n) { s = s + a / (i + 1.5); a = a - 1.0; t = s as int; u = -s; i = i + 1; } print(s > 0.0); return i; }\n"
       "print(f(40)); print(f(3));\n";
   for (uint64_t cap : {uint64_t{150}, uint64_t{700}, uint64_t{GRCORE_UNLIMITED}}) {
     for (uint64_t step : {uint64_t{0}, uint64_t{37}}) {
@@ -569,6 +569,8 @@ TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnit
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_GE(jit.stats.entries, 1u);
+  EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call of f ran its loop compiled and left at the print (a local first assigned a float inside the loop would have merged unequal kinds and left at the first float)";
+  EXPECT_GT(jit.stats.values_boxed, 0u);
   EXPECT_GT(jit.fuel, 500u);
 }
 

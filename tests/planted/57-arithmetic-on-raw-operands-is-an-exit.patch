@@ -1,0 +1,18 @@
+# 57 arithmetic on raw operands is an exit again
+# defect: reads_raw says yes for + - * / and the comparisons, so a raw operand makes them
+# unconditional exits as before story 7: nothing is wrong in the output, and every float
+# loop leaves compiled code and allocates a result per operation
+# caught by: the allocation slope and the exit counts of testJit_arith (the one performance defect)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -322,7 +322,8 @@
+     case GLTANG_OP_GE:
+     case GLTANG_OP_EQ:
+     case GLTANG_OP_NE:
+-      return false;
++      /* planted: a raw operand makes the operation an exit */
++      return d >= 1 && (c->sk[d - 1] == KIND_F64 || (d >= 2 && c->sk[d - 2] == KIND_F64));
+     case GLTANG_OP_CALL:
+       for (int32_t p = d - 1 - (int32_t)a; p >= 0 && p < d; ++p) {
+         if (c->sk[p] == KIND_F64) {

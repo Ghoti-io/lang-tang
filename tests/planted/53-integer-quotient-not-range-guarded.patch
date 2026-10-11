@@ -1,0 +1,16 @@
+# 53 the integer quotient is not range-guarded
+# defect: after DIV_S the quotient is tagged without the small-integer range guard, so
+# SMALL_MIN / -1 (2^59) overflows the word where the interpreter makes a boxed integer
+# caught by: the integer division rows of testJit_arith (SMALL_MIN / -1)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1543,7 +1543,7 @@
+         bin(c, GRJIT_OP_OR, t[TMP_U], V(t[TMP_C]), V(t[TMP_D]));
+         guard(c, V(t[TMP_U]), i, d);
+         bin(c, GRJIT_OP_DIV_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+-        guard_in_range(c, t[TMP_R], i, d);
++        /* planted: no range guard */
+         box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+         add_fuel(c, cost);
+         break;

@@ -1118,9 +1118,19 @@ ctang: the same programs run by the interpreter and with every function compiled
 at its first poll, with the frame observer attached, so that the first polls'
 float slots and variables are compared by their bits (any two NaNs agree) as well as
 the output and the result (`FuzzDiff.TiersAgree*`; `FUZZ_DIFF_COUNT` makes
-`TierCampaign` run more). Floats still exit to the interpreter, so today it is
-the instrument waiting for stories 6 and 7, shown to fail on a planted one-ulp
-difference, a NaN where a number belongs and an altered output.
+`TierCampaign` run more). It is shown to fail on a planted one-ulp
+difference, a NaN where a number belongs and an altered output, and, since story 7
+compiled float arithmetic, on the same three defects planted in the compiled
+emission itself (32 to 34 below). Two more families run the same comparison on
+programs built for compiled floats: `generate_carry` (floats held raw across loops
+and calls, consumed in every way) and `generate_arith` (`ArithBuilder`: float locals
+made from literals and casts, `+ - * /`, negation, the six comparisons and the casts
+over floats, integers and the special floats, in loops and branches, with divisors
+steered to zero, -1, NaN, infinity and the small-integer bounds, and parameters that
+are floats, integers, strings and null; seeds 1 to 150, and 1 to 40 again under
+torture and verify). The arithmetic family also compares the error lists (every error
+entered as it is created) and requires every generated shape and every error of the
+matrix to have occurred. Neither family is run against ctang.
 
 `make test-oracle` runs the fixed batch (`FuzzDiff.FixedBatch`: seeds 1 to 220,
 both modes, 440 programs) in 9 seconds; `make fuzz-diff FUZZ_DIFF_COUNT=N
@@ -1300,9 +1310,9 @@ breaks nothing as not caught. Observed:
 | 29 unwind-status-read-as-ok | the library-call thunk answers "continue" for the value a runtime poll returns when it orders the run to stop | the run that runs out of budget inside a native's answer (`testNative_calls`) | the plain and compiled runs differ |
 | 30 member-load-by-name-not-charged | the thunk of a compiled `.name` on a library adds nothing to the pending fuel | the loops of `use m.inc as f` and `m.inc(s)` over a sub-library (`testNative_calls`) | the plain and compiled runs' fuel differ |
 | 31 deep-push-refused | the push hook refuses once the compiled chain is eight calls deep, so every call below that is an exit; output, fuel and frames are unchanged | the long compiled run of `fib` (`testJit_calls`), which asserts zero call exits and a chain deeper than eight | `tests/unit/test_jit_calls.cpp:1107: Failure`, `exits(jit.stats)` is not 0 (the control prints `fib(22): 57096 compiled calls, 0 call exits`) |
-| 32 float-add-one-ulp-off-in-the-jit-arm | with the JIT on, a finite float sum is the next double up. The text of a float is six decimals, so the output, the result and the inspected text of every slot are unchanged and only the slot's 64 bits differ | the float programs, compared by bits, interpreter against JIT (`testObserver`, `Observer.TheFloatPrograms*`) | `scope program variable r3 float bits: 0x... against 0x...` at the first poll that holds the sum |
-| 33 float-subnormal-flushed-in-the-jit-arm | with the JIT on, a subnormal product or quotient is zero of the same sign (both print `0.`) | the same | `variable sub float bits` |
-| 34 float-nan-where-a-number-belongs-in-the-jit-arm | with the JIT on, a zero product of finite operands is a NaN | the same | a float slot or variable that is a NaN where the interpreter holds a number |
+| 32 float-add-one-ulp-off-in-the-jit-arm | a compiled float addition gives the bits of a finite sum plus one (the next double up). The text of a float is six decimals, so the output, the result and the inspected text of every slot are unchanged and only the slot's 64 bits differ | the float programs, compared by bits, interpreter against JIT (`testObserver`, `Observer.TheFloatPrograms*`) | `scope program variable r3 float bits: 0x... against 0x...` at the first poll that holds the sum |
+| 33 float-subnormal-flushed-in-the-jit-arm | a compiled float product or quotient that is subnormal is zero of the same sign (both print `0.`) | the same | `variable sub float bits` |
+| 34 float-nan-where-a-number-belongs-in-the-jit-arm | a compiled float product that is zero is a NaN | the same | a float slot or variable that is a NaN where the interpreter holds a number |
 | 35 pool-boxes-not-reported-as-roots | the float boxes made ahead of time for the rebuild are not reported as roots, so the next collection frees them | the rebuild under torture and verify, which reads the frame's floats back by their bits (`testJit_floats`, `JitFloats.ARebuildUnderTorture*`) | the floats the frame holds differ from the constants |
 | 36 reservation-short-by-one | an entry or call extends the reservation one cell short, so a rebuild of a frame that holds that many raw floats is refused up front | the pause with k live raw values (`testJit_floats`, `JitFloats.APauseAtAPoll*`) | the context is not paused: the run ended unwound, `rebuild_failures` is 1 |
 | 37 raw-word-in-the-root-cell-across-a-collection | `convert` stores the double's bits in the cell the collector reads as a root, and a collection runs before the box replaces it | the same rebuild under torture and verify | `invalid_pointers` is not 0 |
@@ -1316,15 +1326,29 @@ breaks nothing as not caught. Observed:
 | 45 failed-push-keeps-the-extension | a refused stack push does not give back the extension the push hook made | the failed-push test (`JitFloats.AFailedStackPush*`) | the capacity right after the refusal is one callee too large |
 | 46 pool-box-reported-through-a-copy | each pool box is visited through a copy, so a collection that moves it leaves the pool the old address | the relocation arm (`testJit_floats` under `GRHEAP_RELOCATE=1` and torture); invisible without relocation | `invalid_pointers` is not 0 |
 | 47 failed-rebuild-leaves-raw-words-in-the-guest-frame | before the rebuild the deopt hook copies the compiled frame's words, raw doubles included, into the guest frame, which the injected failure leaves there | the failed-rebuild test (`JitFloats.AFailedRebuild*`): the seam checks the guest frames' value slots for a word that looks like an object and is not in the heap | `gltang_vm_jit_test_stray_words` is not 0 (a collection cannot see it: a guest frame paired with a compiled frame is not scanned) |
+| 48 float-divide-guard-tests-the-dividend | the guard that a float division's divisor is not zero reads the dividend, so `x / 0.0` is an infinity where the interpreter makes "divide by zero" | the error rows (`testJit_arith`, `JitArith.EveryCaseTheInterpreterTurnsIntoAnError*`) | the compiled and interpreted runs' keys differ |
+| 49 integer-operand-converted-unsigned | a small integer read as a double is converted with `CONVERT_U` | the mixed rows (`JitArith.MixedIntegerAndFloat*`) | a negative integer becomes a number near 2^64 |
+| 50 unbox-with-no-kind-test | the unbox loads the double field of any non-null pointer, with no test that its kind is FLOAT | the string, array and boolean operand rows (`JitArith.AFloatReadFromAValueWord*`, the error rows) | a string is added as a double instead of concatenated |
+| 51 ge-and-le-as-the-negation-of-lt-and-gt | a float `>=` or `<=` is "not `<`" or "not `>`" | the NaN comparison rows (`JitArith.ANaNHeldRaw*`) | a NaN compares true |
+| 52 as-int-upper-bound-inclusive | the range guard of a truncation admits 2^59 | the cast rows (`JitArith.ACastToIntOfADoubleInside*`) | the tagged word overflows where the interpreter makes a boxed integer |
+| 53 integer-quotient-not-range-guarded | the quotient of `DIV_S` is tagged with no range guard | the integer division rows (`JitArith.IntegerDivisionAndModulo*`, `AnIntegerResultOutside*`) | `SMALL_MIN / -1` overflows the word |
+| 54 result-slot-written-before-the-second-guard | a float operation with a raw first operand writes its operand slot before the second operand's unbox guard | the string-operand-after-a-raw-operand row (`JitArith.AGuardThatFailsInTheMiddle*`) | the frame the interpreter resumes has the first operand changed |
+| 55 mixed-subtraction-operands-swapped | `FSUB` and `FDIV` are emitted with their operands in the other order | the mixed rows (`1.5 - a`, `a / 2.0`) | the printed values differ |
+| 56 float-operation-adds-no-fuel | a compiled float operation charges nothing | the fuel-parity test (`JitArith.FuelAndPolls*`) | the compiled run's fuel is less than the interpreter's |
+| 57 arithmetic-on-raw-operands-is-an-exit | `reads_raw` says yes for the arithmetic and comparisons, so a raw operand exits as before story 7: no output differs | the allocation slope and the exit counts (`JitArith.ALoopOfPlusMinusAndTimes*`, `TheSlopeIsStillZero*`) | the allocation count grows with the loop length |
+| 58 integer-converted-from-its-tagged-word | the integer is converted with no `SAR 4`, so the double is `n << 4 \| 1` | any mixed row | the printed values differ |
+| 59 unary-minus-is-zero-minus-x | the negation of a raw float is `0.0 - x` | the -0.0 row (`JitArith.UnaryMinusOfARawFloat*`) | `-(0.0)` prints `0.` where the interpreter prints `-0.` |
 
-32 to 34 stand for the compiled float arithmetic of `spec-runtime-float` story 7, which does not exist yet: each is a tier-dependent float result, which is what a wrong compiled operation would be. The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
+32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
+
+48 to 59 are the compiled float and division operations of story 7; 57 is the one performance defect (nothing is wrong in any output; the allocation slope is what fails).
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 59 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all forty-six but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all fifty-eight but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -1843,17 +1867,20 @@ frees the code when no JIT record is open, so a frame waiting in a chain still
 returns into it. The discard is applied after the entry's record is left.
 
 **What is compiled.** Inline: `POLL`, `LINE`, `POP`, `DUP`, `NULL`, `TRUE`,
-`FALSE`, `CONST` (a small integer only), `LOAD_LOCAL`, `STORE_LOCAL`,
-`LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `LT`, `LE`, `GT`, `GE`,
-`EQ`, `NE`, `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, and the
+`FALSE`, `CONST` (a small integer or a float), `LOAD_LOCAL`, `STORE_LOCAL`,
+`LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `LT`, `LE`, `GT`, `GE`,
+`EQ`, `NE`, `CAST` (to int and to float), `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, and the
 library `USE`, `ATTR` and `CALL` described there.
 Each step mirrors the interpreter's own inline path: both operands carry the
 integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
 small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
-the product cannot leave the range; the operand of `NOT`, the jumps, `AND` and `OR`
-must be a boolean. Everything else (`DIV`, `MOD`, casts, indexing, attributes,
+the product cannot leave the range; `DIV` guards a zero divisor, the verifier's
+minimum-over-minus-one pair and the quotient's range (`SMALL_MIN / -1` is 2^59, one
+past it), and `MOD` guards a zero divisor; the operand of `NOT`, the jumps, `AND` and `OR`
+must be a boolean. An operation with a statically raw operand is a float operation
+(below). Everything else (indexing, attributes,
 slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `PRINT*`, `ITER_*`,
-`DISCARD`, `SET_RESULT`, a `USE` or `ATTR` that is not a library load, `HALT` and any constant that is
+`DISCARD`, `SET_RESULT`, a `CAST` to bool or to string, a `USE` or `ATTR` that is not a library load, `HALT` and any constant that is
 neither a small integer nor a float) is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
 (a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
 
@@ -1925,17 +1952,19 @@ location is a raw `F64` on a raw slot, which a test asserts.
 in compiled code as a raw double, in a local or an operand slot, and is boxed only
 when a frame is rebuilt. Outside compiled code a float is still a boxed
 `GLTANG_OBJ_FLOAT`; Tang's value representation did not change. What compiled code
-does is only the carrying (the arithmetic, the comparisons and the casts are story 7):
+does is the carrying (story 6) and, since story 7, the arithmetic, the comparisons and the
+casts over a raw double (the next section):
 
 - *Kinds.* Each local and each operand position has a kind at every point of the code,
   `REF` (a value word) or `F64` (a raw double); a slot that is ever raw has a second,
   `F64`, register beside its `REF` one, and a frame state names exactly one of the two,
-  so the other is not live and is not in a stack map. The only source of an `F64` is a
-  float `CONST`, emitted as the interpreter's double bit for bit (its 64 bits as the
+  so the other is not live and is not in a stack map. The sources of an `F64` are a
+  float `CONST`, a `CAST` to float and an arithmetic result with a raw operand (story 7). A float constant is emitted as the interpreter's double bit for bit (its 64 bits as the
   register's immediate, never through `float` or arithmetic). `LOAD_LOCAL`,
   `STORE_LOCAL`, `DUP`, `POP` and the jumps carry a kind. Every other instruction that
-  reads a raw operand (`ADD`, `NEG`, a comparison, `NOT`, `AND`, `OR`, a jump on it,
-  `RET`, `CALL` with a raw callee or argument, a library call or load) is an
+  reads a raw operand (`NOT`, `AND`, `OR`, a jump on it, `RET`, `CALL` with a raw callee or
+  argument, a library call or load, `%`, a cast to bool or to string; the operations of the
+  next section compute with it) is an
   unconditional exit at that instruction, with the operand in its frame state, and the
   interpreter re-executes it; such an exit counts toward the discard limit as any
   unconditional exit does (the limit is a short-run heuristic that must become a rate
@@ -2002,6 +2031,69 @@ every pointer is 48 bits); a `convert` that allocates from the heap under a no-c
 flag (it can still fail); boxing at every poll (an allocation per iteration of every float
 loop); a dynamic tag in place of the static kinds (a branch on every access, and a frame
 state that cannot say what a slot is). The full record is story 8's.
+
+**Float and division operations compiled (spec-runtime-float story 7, CAP-5).** `+ - * /`,
+unary minus, the six comparisons, `as int` and `as float` over a raw double, over a small
+integer or a float read from a value word, and over mixes of them; and integer `/` and `%`
+over small integers. The rules:
+
+- *Static kinds decide what is a float; the dynamic type only decides whether a guard holds.*
+  An operation is a float operation when an operand is statically raw (a float literal, a cast
+  to float, or a result of those). A `+ - * /` or a comparison whose two operands are both `REF`
+  stays the small-integer instruction, so `function dot(a, b) { return a * b; }` called with
+  floats still exits at the multiply. This is forced by AD-27 and static kinds: a result whose
+  kind depended on the run-time types of two unknown operands would need a boxed result
+  (an allocation) or a dynamic kind tag (rejected above). The consequence is visible in a
+  program's shape: the loops that benefit start from a float literal (`s = 0.0`) or a cast
+  (`s = n as float`), not from `s = 0`; a loop that starts `x = 0` and adds `0.5` merges an
+  integer and a float at its head and falls to the blunt merge rule, compiled as before story 6.
+- *Unboxing is a read, inside compiled code, once per use.* The other operand of a float
+  operation is read as a double by its word: tag 1 is a small integer (`SAR 4`, `CONVERT_S`,
+  which is `(double)n`), a non-null word with tag 0 whose object kind is `GLTANG_OBJ_FLOAT`
+  is a float (a 64-bit load at the value's offset; the load of `kind` is reached only after the
+  pointer test), anything else (null, a boolean, a string, a boxed integer, a container, an
+  error) is a guard exit. The double lives in a temporary `F64` register for the operation: it
+  is not cached across instructions, not stored back to the slot, and never named in a frame
+  state. No GC point lies between the type test and the load, so a relocating collector has
+  updated the word at the last poll. Nothing is allocated.
+- *Every guard of an operation precedes the write of its result.* The result is written to its
+  operand slot (`stack[..]` or `stack_f[..]` by its kind) after the operation's last guard, so
+  the frame state of every guard exit still names the operands as the interpreter's frame holds
+  them (a raw operand is `RAW`/`F64` there and a rebuild boxes it once). A guard is tested before
+  the operation's fuel is added, like the integer operations.
+- *What the interpreter turns into an error or an allocation is a guard.* A float `/` has the
+  guard `y != 0.0` on the converted divisor (either zero; a NaN divisor is not zero, because `NE`
+  is true for one); integer `/` and `%` guard a zero divisor, `/` also writes the verifier's pair
+  (dividend is not the minimum or divisor is not -1; it cannot fire for a small integer, and is a
+  real guard site) and range-guards the quotient (`SMALL_MIN / -1` is 2^59); `%` with a raw operand
+  is an unconditional exit (the interpreter reports "not supported"); `as int` of a double is
+  `TRUNC_S` behind the exact bounds `d >= -2^59` and `d < 2^59` (a NaN fails both ordered
+  comparisons; narrower than the verifier's, so accepted), and everything outside them exits so
+  the interpreter reports the error or makes the boxed integer. The verifier's patterns (the
+  guard on the very register divided by, in the same block, not assigned in between) are why the
+  helpers `guard_nonzero` and `trunc_small` are written as they are; a division the verifier
+  refuses is a build error and a test failure, not a quiet decline.
+- *Kinds.* `ADD SUB MUL DIV` are `F64` if either operand is, else `REF`; `NEG` keeps its operand's
+  kind; the comparisons produce a boolean word; `CAST` to float is `F64` (a raw source, an exit when
+  a merge disagreed on a kind) and to int is `REF`; `MOD` with a raw operand and a cast to bool or
+  to string are exits. `apply_kinds` and `reads_raw` stay the one place that says so, with their
+  fail-safe defaults, and the test hook walks every opcode.
+- *No allocation, boxing or collection in compiled code.* A raw float becomes a value word only
+  when a frame is rebuilt, from story 6's pool; more sites now have raw slots live, so
+  `max_converting` may rise, and the reservation follows it with no code change. A function with
+  no float constant and no float-producing cast is emitted as before. A float that reaches a
+  consumer that is not an operation (`print`, `return`, a call argument, a store to a global,
+  truthiness, `as string`, `%`) is still an exit at that instruction, counted toward the
+  discard limit like any unconditional exit (story 8's benchmark measures the float-return case).
+
+*Rejected:* speculating that a `REF`-`REF` site is float-float with no feedback (wrong for every
+integer loop; each wrong guess exits the other kind); compiling two variants and choosing by
+feedback (a different story); caching an unboxed operand in a raw register (it would need an
+invalidation story for every assignment, call and poll, and buys one load); a finer merge
+demotion (it would force the float producer into a `REF` slot, an exit at the store every
+iteration, which the blunt rule gives for the same shape); compiled truthiness of a raw float and
+`as bool` (each would be one `FCMP NE x, 0.0`: an easy later addition, not in CAP-5). The full
+record is story 8's.
 
 ### Why this and not something else
 
@@ -2208,8 +2300,9 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   (runtime-jit's native call takes the callee and fifteen), a load that does not
   yield a host function or a library, and any call with the wrong number of
   arguments. Tang has no tail call and none is added. Float arithmetic, comparison
-  and casts, and integer `/` and `%`, are the same kind of defect: a float constant
-  is carried raw (above), and the rest is `planning/specs/spec-runtime-float/`.
+  and casts, and integer `/` and `%`, were the same kind of defect until story 7; they
+  are compiled now (above), and what is left as an exit is a float that must become a
+  value word (a store, a call, a return, a print) and a float's truthiness.
 - **On-stack replacement into a running loop.** Compiled code is entered at a
   function's entry only; a loop that gets hot in a function called once runs in
   the interpreter for that call, and after a pause at a compiled poll the rest of

@@ -1,0 +1,17 @@
+# 48 the float divide guard tests the dividend for zero
+# defect: the guard that a float division's divisor is not zero reads the dividend
+# instead, so x / 0.0 is an infinity or a NaN where the interpreter makes the error
+# "divide by zero" (and a zero dividend over a divisor exits for the wrong reason)
+# caught by: the error rows of testJit_arith (every case the interpreter turns into an error)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1519,7 +1519,7 @@
+         GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+         if (op == GLTANG_OP_DIV) {
+           // The interpreter's error before it divides: either zero, but not a NaN (`NE` is true for one).
+-          cmp(c, GRJIT_CMP_NE, t[TMP_C], V(fb), FI(0.0));
++          cmp(c, GRJIT_CMP_NE, t[TMP_C], V(fa), FI(0.0));  /* planted: the dividend, not the divisor */
+           guard(c, V(t[TMP_C]), i, d);
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;

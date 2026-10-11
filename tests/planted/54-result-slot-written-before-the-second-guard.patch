@@ -1,0 +1,19 @@
+# 54 a mixed operation assigns its raw result slot before the second operand's unbox guard
+# defect: with a raw first operand, the operation writes into that operand's slot register
+# before the second operand is unboxed, so when that guard fails the frame the interpreter
+# resumes has the first operand changed
+# caught by: the string-operand-after-a-raw-operand row of testJit_arith
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1516,6 +1516,10 @@
+         // A float operation: both operands become doubles (an integer by `(double)`, in the
+         // order they stand), every guard runs, and only then is the result written to its slot.
+         GRJIT_VReg fa = float_operand(c, i, d, d - 2u, c->tmp_f[0]);
++        if (c->sk[d - 2u] == KIND_F64) {
++          /* planted: the result slot is written before the second operand's guard */
++          B(grjit_builder_binary(c->b, GRJIT_OP_FADD, c->stack_f[d - 2u], V(fa), V(fa)));
++        }
+         GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+         if (op == GLTANG_OP_DIV) {
+           // The interpreter's error before it divides: either zero, but not a NaN (`NE` is true for one).

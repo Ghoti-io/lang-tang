@@ -1,0 +1,16 @@
+# 59 unary minus on a raw float is 0.0 - x
+# defect: the negation of a raw float is computed as a subtraction from zero instead of
+# by the sign bit, so -(0.0) is +0.0 where the interpreter's result is -0.0
+# caught by: the -0.0 row of testJit_arith (the text "-0." and the bits)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1484,7 +1484,7 @@
+     case GLTANG_OP_NEG:
+       if (c->sk[d - 1u] == KIND_F64) {
+         // The sign bit alone: -0.0 for 0.0, a NaN keeps its payload.
+-        B(grjit_builder_unary(c->b, GRJIT_OP_FNEG, c->stack_f[d - 1u], V(c->stack_f[d - 1u])));
++        B(grjit_builder_binary(c->b, GRJIT_OP_FSUB, c->stack_f[d - 1u], FI(0.0), V(c->stack_f[d - 1u])));  /* planted: 0.0 - x */
+         add_fuel(c, cost);
+         break;
+       }

@@ -1,0 +1,18 @@
+# 50 the unbox reads the double field with no kind test
+# defect: a non-null pointer operand is read as a float object without testing that its
+# kind is FLOAT, so a string or an array is read as a double (its bytes) instead of
+# leaving compiled code for the interpreter to concatenate or report
+# caught by: the string, array and boolean operand rows of testJit_arith
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1140,8 +1140,7 @@
+   bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+   guard(c, V(t[TMP_C]), i, d);
+   B(grjit_builder_load(c->b, t[TMP_X], c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, kind), 32, false));
+-  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_FLOAT));
+-  guard(c, V(t[TMP_C]), i, d);
++  /* planted: no test of the object's kind */
+   B(grjit_builder_load(c->b, dst, c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, value), 64, false));
+ }
+ 

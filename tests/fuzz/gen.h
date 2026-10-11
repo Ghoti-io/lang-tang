@@ -1204,11 +1204,14 @@ class ArithBuilder {
       case 0: case 1: case 2: {
         std::string op = float_op();
         std::string right = op == "/" ? divisor(fl, in) : operand(fl, in);
-        line(indent + a + " = " + operand(fl, in) + " " + op + " " + right + ";");
+        // The left operand is a float local (a raw source), so that the result is raw too: a local that
+        // is a word on one path and a double on another would merge unequal kinds, which compiles with
+        // no raw slot at all. One statement in six has two operands that may both be words.
+        line(indent + a + " = " + (chance(85) ? "x" + std::to_string(below(fl)) : operand(fl, in)) + " " + op + " " + right + ";");
         break;
       }
       case 3:
-        line(indent + a + " = -" + operand(fl, in) + ";");
+        line(indent + a + " = -" + (chance(85) ? "x" + std::to_string(below(fl)) : operand(fl, in)) + ";");
         break;
       case 4:
         line(indent + "if (" + operand(fl, in) + " " + compare_op() + " " + operand(fl, in) + ") { " + a + " = " + a + " + 1.5; } else { " + a + " = " + a + " * 0.5; }");
@@ -1246,7 +1249,7 @@ class ArithBuilder {
         line(indent + i + " = " + i + " % " + idivisor(in) + ";");
         break;
       case 13:
-        line(indent + a + " = " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + ";");
+        line(indent + a + " = x" + std::to_string(below(fl)) + " " + float_op() + " " + operand(fl, in) + " " + float_op() + " " + operand(fl, in) + ";");
         break;
       case 14:
         line(indent + "print(" + a + " " + compare_op() + " " + operand(fl, in) + "); print(\"c\");");

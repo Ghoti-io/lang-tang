@@ -1,0 +1,17 @@
+# 52 the as-int upper bound is <= 2^59
+# defect: the range guard of a float to integer truncation admits 2^59 itself, which is
+# one past the small-integer range, so the tagged word overflows where the interpreter
+# makes a boxed integer
+# caught by: the cast rows of testJit_arith (576460752303423488.0 as int)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1192,7 +1192,7 @@
+   GRJIT_VReg * t = c->tmp;
+   cmp(c, GRJIT_CMP_GE, t[TMP_C], V(f), FI(-0x1p59));
+   guard(c, V(t[TMP_C]), i, d);
+-  cmp(c, GRJIT_CMP_LT, t[TMP_C], V(f), FI(0x1p59));
++  cmp(c, GRJIT_CMP_LE, t[TMP_C], V(f), FI(0x1p59));  /* planted: 2^59 admitted */
+   guard(c, V(t[TMP_C]), i, d);
+   B(grjit_builder_unary(c->b, GRJIT_OP_TRUNC_S, r, V(f)));
+ }

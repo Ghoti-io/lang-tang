@@ -1,0 +1,16 @@
+# 49 an integer operand is converted unsigned
+# defect: a small integer read as a double is converted with CONVERT_U, so a negative
+# integer mixed with a float becomes a number near 2^64
+# caught by: the mixed integer and float rows of testJit_arith (a negative integer, by bits in the observer)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1165,7 +1165,7 @@
+   c->open = false;
+   set_block(c, small);
+   bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+-  B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_S, dst, V(t[TMP_X])));
++  B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_U, dst, V(t[TMP_X])));  /* planted: unsigned */
+   branch_to(c, join);
+   set_block(c, other);
+   unbox_float_object(c, i, d, pos, dst);

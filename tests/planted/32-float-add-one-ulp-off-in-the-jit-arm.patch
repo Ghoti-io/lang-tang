@@ -1,26 +1,27 @@
 # 32 a float sum one ulp off
-# defect: with the JIT on, a float addition gives the next double up, as a compiled
-# add that rounded or fused differently would. The text of a float is its value
-# to six decimals, so the output, the result and the inspected text of every slot
-# are unchanged; only the 64 bits of the slot differ. (Stands for the compiled
-# float of spec-runtime-float stories 6 and 7, which does not exist yet.)
+# defect: a compiled float addition gives a result one ulp off (the bits of a finite sum
+# plus one), as a compiled add that rounded or fused differently would. The text of a
+# float is its value to six decimals, so the output, the result and the inspected text of
+# every slot are unchanged; only the 64 bits of the slot differ. (Story 7 moved this from
+# the interpreter's arithmetic, where it stood for the compiled float, into the compiled
+# emission itself.)
 # caught by: the frame differential's bits channel, interpreter against JIT (testObserver)
 #
---- a/src/vm/ops.c
-+++ b/src/vm/ops.c
-@@ -123,7 +123,14 @@ static GLTANG_Value arithmetic(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG
-   double x = gltang_vm_number(a);
-   double y = gltang_vm_number(b);
-   switch (op) {
--    case GLTANG_OP_ADD: return gltang_vm_make_float(exec, x + y);
-+    case GLTANG_OP_ADD: {
-+      /* planted: one ulp off (finite sums only) when the JIT is on */
-+      double planted_r = x + y;
-+      if (exec->jit_threshold && isfinite(planted_r)) {
-+        planted_r = nextafter(planted_r, HUGE_VAL);
-+      }
-+      return gltang_vm_make_float(exec, planted_r);
-+    }
-     case GLTANG_OP_SUB: return gltang_vm_make_float(exec, x - y);
-     case GLTANG_OP_MUL: return gltang_vm_make_float(exec, x * y);
-     case GLTANG_OP_DIV:
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1524,6 +1524,15 @@
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;
+         B(grjit_builder_binary(c->b, fk, c->stack_f[d - 2u], V(fa), V(fb)));
++        if (fk == GRJIT_OP_FADD) {
++          /* planted: the bits of a finite sum plus one */
++          GRJIT_VReg r = c->stack_f[d - 2u];
++          B(grjit_builder_binary(c->b, GRJIT_OP_FSUB, c->tmp_f[0], V(r), V(r)));
++          cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(c->tmp_f[0]), FI(0.0));
++          B(grjit_builder_unary(c->b, GRJIT_OP_REINTERPRET, t[TMP_X], V(r)));
++          bin(c, GRJIT_OP_ADD, t[TMP_X], V(t[TMP_X]), V(t[TMP_C]));
++          B(grjit_builder_unary(c->b, GRJIT_OP_REINTERPRET, r, V(t[TMP_X])));
++        }
+         add_fuel(c, cost);
+         break;
+       }
