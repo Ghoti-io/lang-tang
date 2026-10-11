@@ -1234,16 +1234,28 @@ TEST(JitFloats, AFailedStackPushAfterASuccessfulExtensionGivesTheExtensionBack) 
 TEST(JitFloats, AFailedRebuildLeavesNoRawWordInAGuestFrameWhereACollectionCanReadIt) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The injected failure of the deopt hook's rebuild, under torture and verify: the
-  // run ends unwound, and a collection that follows (torture makes one at the first
-  // allocation of the unwind) must find no raw double in a guest slot.
-  Driver d(kChain, 1, false, 1, 1);
+  // run ends unwound; the seam checks the guest frames the failed rebuild left (a
+  // collection would not: a guest frame paired with a compiled one is not scanned), and
+  // none may hold a raw double in a value slot.
+  // The first exit of the run is the top level's, at the declaration of f. The seam is
+  // switched on at f's third poll, so the exit it refuses is f's own, at the `print`,
+  // with the local x and the operand raw.
+  Driver d("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nr = f(5);\n", 1, true, 1, 1);
   ASSERT_TRUE(d.ok());
-  d.ctx->apply_jit_switches(false, true, true);
+  int in_f = 0;
+  d.script.on_poll = [&](Script &, GRCORE_Context * context, uint64_t) {
+    GRCORE_PollIdentity id = {0, 0};
+    (void)grcore_context_poll_identity(context, &id);
+    if ((id.function & 0xFFFFFFFFu) == 1u && ++in_f == 3) {
+      d.ctx->apply_jit_switches(false, true, true);
+    }
+  };
   EXPECT_FALSE(d.run());
   GLTANG_JitStats st = d.stats();
   EXPECT_EQ(st.rebuild_failures, 1u);
   EXPECT_EQ(st.values_boxed, 0u) << "nothing was converted";
   EXPECT_EQ(d.heap().invalid_pointers, 0u) << "and no raw word was where the collector reads values";
+  EXPECT_EQ(gltang_vm_jit_test_stray_words(d.ctx->execution), 0u) << "nor in any value slot of a guest frame, which the unwind is about to pop";
   EXPECT_EQ(d.boxes().capacity, 0u);
   EXPECT_EQ(d.boxes().extensions, 0u);
 }

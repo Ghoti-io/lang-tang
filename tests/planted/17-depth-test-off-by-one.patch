@@ -15,4 +15,4 @@
 +  if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) + 1u >= grcore_context_guest_depth(context)) {  /* planted: one too soon */
      return refuse_push(jit);
    }
-   const GLTANG_JitFn * callee_fn = gltang_jit_find_fn(exec, jit, callee, false);
+   // The callee's most raw floats at one site, from the function's record. This is the

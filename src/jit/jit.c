@@ -631,6 +631,11 @@ void gltang_vm_jit_test_failed_push(GLTANG_Execution * execution, uint64_t * cap
   *count = jit ? jit->test_failed_count : 0;
 }
 
+/* For the tests only: the stray words (raw words where a value belongs) the failed rebuild left in the guest frames. Declared in vm/test_hooks.h. */
+uint64_t gltang_vm_jit_test_stray_words(GLTANG_Execution * execution) {
+  return execution && execution->jit ? execution->jit->test_stray_words : 0;
+}
+
 /* For the tests only: the reservation itself, for a hand-made site's rebuild. Declared in vm/test_hooks.h. */
 GRCORE_DeoptReservation * gltang_vm_jit_test_reservation(GLTANG_Execution * execution) {
   return execution && execution->jit ? execution->jit->reservation : NULL;

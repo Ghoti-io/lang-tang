@@ -1,0 +1,19 @@
+# 46 the pool's boxes are reported to the collector through a copy
+# defect: each box is visited (so it is kept alive) but the slot the pool reads it
+# back from is never written, so when a collection moves the box the pool hands
+# the conversion the old address
+# caught by: the relocation arm (GRHEAP_RELOCATE=1 with torture over testJit_floats);
+# invisible without relocation
+#
+--- a/src/jit/boxes.c
++++ b/src/jit/boxes.c
+@@ -175,7 +175,8 @@ void gltang_jit_enumerate_roots(GLTANG_Execution * exec, const GRCORE_RootVisito
+     return;
+   }
+   for (size_t i = 0; i < jit->pool_count; ++i) {
+-    visitor->slot(visitor->user, &jit->pool[i]);
++    GLTANG_Value planted_copy = jit->pool[i];  /* planted: visited through a copy */
++    visitor->slot(visitor->user, &planted_copy);
+   }
+ }
+ 

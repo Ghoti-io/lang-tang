@@ -1,0 +1,29 @@
+# 47 a failed rebuild leaves raw words in the guest frame
+# defect: before the rebuild the deopt hook copies the compiled frame's words, raw
+# doubles included, into the guest frame's slots, which the injected failure then
+# leaves there for the unwind (the story's "raw slot written before its conversion
+# finished", realised with the failing-rebuild seam)
+# caught by: the failed-rebuild test, whose seam checks the value slots of the
+# guest frames the failed rebuild left for any word that looks like an object and is
+# not in the heap (testJit_floats). A collection cannot see it: a guest frame paired
+# with a compiled frame is not scanned until its record is rebuilt.
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -311,6 +311,16 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
+       if (idx + 1u < frame_count) {
+         (void)grcore_stack_set_identity(stack, g, fr.identity);
+       }
++      if (jit->test_fail_rebuild && fr.site && fr.site->frame_state_count <= GLTANG_JIT_MAX_SLOTS) {
++        /* planted: the words, raw ones too, go into the guest slots first */
++        uint64_t planted_words[GLTANG_JIT_MAX_SLOTS];
++        if (grcore_deopt_read(fr.site, (const void *)fr.frame_base, planted_words, fr.site->frame_state_count) == GRCORE_OK) {
++          uint64_t * guest_slots = grcore_stack_slots(stack, g);
++          for (size_t w = 0; w < fr.site->frame_state_count; ++w) {
++            guest_slots[w] = planted_words[w];
++          }
++        }
++      }
+     }
+   }
+   jit->refusal = GLTANG_REFUSAL_NONE;

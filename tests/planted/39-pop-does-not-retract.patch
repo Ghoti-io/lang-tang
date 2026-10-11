@@ -7,11 +7,12 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -148,7 +148,6 @@ static void hook_pop(void * context) {
-   (void)grcore_stack_pop(grcore_context_stack(context));
+@@ -167,7 +167,7 @@ static void hook_pop(void * context) {
+   const uint64_t callee = grcore_stack_frame_count(stack) ? grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION] : 0;
+   (void)grcore_stack_pop(stack);
    if (exec->jit) {
-     // The callee's extension, if it made one: the innermost, at this depth.
--    gltang_jit_retract_level(exec, exec->jit->chain);
+-    gltang_jit_retract_level(exec, exec->jit->chain, callee);
++    (void)callee;
      if (exec->jit->chain) {
        --exec->jit->chain;
      }

@@ -190,6 +190,7 @@ typedef struct GLTANG_Jit {
   uint64_t test_failed_capacity; ///< The reservation's capacity and the extensions open right after that refusal was undone.
   uint64_t test_failed_extensions;
   uint64_t test_failed_count;
+  uint64_t test_stray_words;     ///< Words in a guest frame's value slots, after an injected rebuild failure, that look like objects and are not in the heap.
   uint64_t test_extends;         ///< The nonzero extensions asked for so far, for the two seams above.
   bool gc_at_push;               ///< Test seam, for GC torture: the push hook collects after the push, as the frame-push GC point of AD-28.
 } GLTANG_Jit;

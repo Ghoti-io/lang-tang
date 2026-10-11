@@ -1312,15 +1312,19 @@ breaks nothing as not caught. Observed:
 | 41 box-at-every-slow-poll | the poll helper allocates a float box on every slow path | the allocation slope with a handler pending (`JitFloats.TheSlopeIsStillZeroWithAHandler*`) | the allocation count grows with the loop length |
 | 42 merge-conflict-ignored | a merge of unequal kinds is not noticed, so the first way's kind is kept | the merge programs against the interpreter (`JitFloats.AMergeOfUnequalKinds*`) | the output differs |
 | 43 float-constant-through-32-bits | the immediate of a float `CONST` is truncated to its low 32 bits | the pause with live raw values, read back by their bits | the floats the frame holds differ from the constants |
+| 44 pool-not-let-go-at-host-return | the run's end leaves the pool rooted, so a paused execution reports more root slots than a fresh destination | the pool test: empty pool at a pause, and a snapshot taken there restores (`JitFloats.ThePoolIsLetGo*`) | `b.pool` is not 0 |
+| 45 failed-push-keeps-the-extension | a refused stack push does not give back the extension the push hook made | the failed-push test (`JitFloats.AFailedStackPush*`) | the capacity right after the refusal is one callee too large |
+| 46 pool-box-reported-through-a-copy | each pool box is visited through a copy, so a collection that moves it leaves the pool the old address | the relocation arm (`testJit_floats` under `GRHEAP_RELOCATE=1` and torture); invisible without relocation | `invalid_pointers` is not 0 |
+| 47 failed-rebuild-leaves-raw-words-in-the-guest-frame | before the rebuild the deopt hook copies the compiled frame's words, raw doubles included, into the guest frame, which the injected failure leaves there | the failed-rebuild test (`JitFloats.AFailedRebuild*`): the seam checks the guest frames' value slots for a word that looks like an object and is not in the heap | `gltang_vm_jit_test_stray_words` is not 0 (a collection cannot see it: a guest frame paired with a compiled frame is not scanned) |
 
 32 to 34 stand for the compiled float arithmetic of `spec-runtime-float` story 7, which does not exist yet: each is a tier-dependent float result, which is what a wrong compiled operation would be. The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
-35 to 43 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the nearest form this tree has: the deopt hook has no step between the core's read of a raw word and the core's conversion of it (the core's own ordering is tested in runtime-core, `test_rebuild.cpp`), so the raw word is put where a collector reads it inside `convert`.
+35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 43 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all forty-two but the relocation cases (10 is retired). 13, 14, 15, 20 and 27 are run by `make check-planted-relocate`, which the
+runs all forty-six but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -1952,17 +1956,30 @@ does is only the carrying (the arithmetic, the comparisons and the casts are sto
   and `inspect` carry none, so a debugger-grade rendering of a not-yet-rebuilt float needs a
   change in runtime-core (a pause rebuilds before a debugger reads values, which is why none is
   needed yet), and the frame differential reads representations itself, as the value the slot stands
-  for, without converting it).
+  for, without converting it). A raw *operand* slot (the `1.5` in `1.5 + h(n)` at a poll
+  inside `h`) is handled the same way as a raw local: the abstract frame reports it as `RAW`
+  with the double's bits and representation `F64`, and a test checks it. The exact gap is in
+  `inspect`: for a `RAW` slot it prints the bits as a decimal integer, not the float, because
+  `inspect` is given a slot kind and a word and no representation (runtime-core); a debugger
+  shows the number only after a pause has rebuilt the frame).
 - *The reservation and the pool.* A reservation cell holds a word and a Tang float is a
   heap object, so a conversion that cannot fail or collect needs the object to exist
   already. The boxes are made ahead of time at the two points where an allocation can be
   answered (entering compiled code from the interpreter, and the push hook, before it
   pushes or reads its arguments), kept as precise roots of the execution (so a collector,
-  torture and relocation see and update them), and handed out by `convert`. The pool holds
-  at least as many boxes as the reservation's capacity whenever compiled code may run, and
-  the capacity is at least the sum, over the open compiled frames, of each frame's
+  torture and relocation see and update them), and handed out by `convert`. **When the
+  invariant holds:** from the moment an entry or a push has extended the reservation (the
+  extension and the top-up of the pool to the new capacity are one step) until that extension
+  is given back, the pool holds at least as many boxes as the reservation's capacity, and the
+  capacity is at least the sum, over the open compiled frames, of each frame's
   `max_converting` (the most converting locations at any one of its sites, recorded in the
-  code's payload): the same worst case the core's rebuild checks up front. Entry extends
+  code's payload): the same worst case the core's rebuild checks up front. A rebuild consumes
+  boxes, so right after one the pool may hold fewer than the capacity; that is harmless, because
+  a rebuild ends its run's compiled code (an outer run, when the rebuild was a nested entry's,
+  needs only its own share, which the nested entry's own extension did not touch) and the
+  capacity is given back at the same exit. The next extension tops the pool up again. Between
+  runs the capacity is zero and the pool is empty (it is let go with control's return to the host,
+  asserted there). Entry extends
   by the entry function's, the push hook by the callee's, the pop hook retracts the
   callee's, the deopt hook retracts what its run's calls opened and the entry gives back
   its own at every exit (a LIFO of the nonzero extensions, with a floor for a nested

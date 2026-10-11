@@ -813,7 +813,7 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs all forty-two (the relocation cases, 13, 14, 15, 20 and 27, need a relocation heap and run in the relocation arm).
+# part of `make test-torture`; `make check-planted` runs all forty-six (the relocation cases, 13, 14, 15, 20, 27 and 46, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
@@ -840,7 +840,7 @@ check-planted: ## Every planted defect that needs no relocation heap: each caugh
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted-relocate: ## Planted defects 13, 14, 15, 20 and 27 (a reference visited and not updated, or not pinned), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
+check-planted-relocate: ## Planted defects 13, 14, 15, 20, 27 and 46 (a reference visited and not updated, or not pinned), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
 ifndef RELOCATE_PREFIX
 	@printf 'check-planted-relocate: RELOCATE_PREFIX is needed (the prefix of a runtime-heap built with RELOCATE=yes)\n' >&2; exit 1
 else

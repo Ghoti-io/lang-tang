@@ -7,7 +7,7 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -101,6 +101,11 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+@@ -110,6 +110,11 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
    }
    GRCORE_Stack * stack = grcore_context_stack(context);
    GRCORE_FrameRef frame;
@@ -16,10 +16,10 @@
 +  for (uint32_t i = 0; i < cf->parameter_count; ++i) {
 +    planted_early[i] = args[i];
 +  }
-   if (grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
-     gltang_jit_retract_level(exec, jit->chain + 1u);
-     return refuse_push(jit);
-@@ -125,7 +130,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+   const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
+   if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+     gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+@@ -140,7 +145,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
    S[GLTANG_F_FLAGS] = exec->act->depth;
    const uint32_t parameters = cf->parameter_count;
    for (uint32_t i = 0; i < parameters; ++i) {

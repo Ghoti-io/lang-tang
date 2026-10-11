@@ -1,0 +1,18 @@
+# 45 a refused stack push keeps the reservation it extended
+# defect: the push hook extends the reservation for the callee, the stack push is
+# refused, and the extension is not given back, so the capacity stays one callee too
+# large until the entry's exit
+# caught by: the failed-push test, which reads the reservation right after the
+# refusal (testJit_floats)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -112,7 +112,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+   GRCORE_FrameRef frame;
+   const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
+   if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
+-    gltang_jit_retract_level(exec, jit->chain + 1u, callee);
++    /* planted: no retract */
+     if (injected) {
+       jit->test_failed_capacity = grcore_deopt_reservation_capacity(jit->reservation);
+       jit->test_failed_extensions = jit->ext_count;

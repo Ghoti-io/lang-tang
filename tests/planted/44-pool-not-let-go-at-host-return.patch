@@ -1,0 +1,18 @@
+# 44 the pool of float boxes is not let go when control returns to the host
+# defect: the run's end leaves the pool rooted, so a paused or finished execution
+# reports more precise root slots than a fresh destination does, and a snapshot of
+# it cannot be restored
+# caught by: the pool test, which requires the pool to be empty at a pause and a
+# snapshot taken there to restore (testJit_floats)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -968,7 +968,7 @@ GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {
+   // Control goes back to the host (a pause, the end, an unwind): no compiled code is
+   // open, so the float boxes made ahead for it are let go, and nothing a host can
+   // see (a snapshot's root slots above all) depends on them.
+-  gltang_jit_release_pool(exec);
++  /* planted: the pool is not let go */
+ #endif
+   return step;
+ }

@@ -319,6 +319,25 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   uint32_t rc;
   if (jit->test_fail_rebuild) {
     rc = (uint32_t)GRCORE_ERR_INVALID;
+    // What the failed rebuild left in the guest frames: a value slot whose word looks
+    // like an object and is not one is a raw word where a value belongs. (A collection
+    // would not see it: the guest frames of a run that was never rebuilt are paired with
+    // their compiled frames and are not scanned.)
+    {
+      GRCORE_FrameRef frame = grcore_stack_top(stack);
+      for (size_t f = 0; f < frame_count; ++f) {
+        size_t slots = 0;
+        if (grcore_stack_slot_count(stack, frame, &slots) == GRCORE_OK) {
+          const uint64_t * words = grcore_stack_slots(stack, frame);
+          for (size_t w = H; w < slots; ++w) {
+            if (gltang_v_is_object(words[w]) && !grheap_contains(exec->heap, (const void *)(uintptr_t)words[w])) {
+              ++jit->test_stray_words;
+            }
+          }
+        }
+        frame = grcore_stack_caller(stack, frame);
+      }
+    }
     if (jit->gc_at_push) {
       // Under torture the unwind that follows collects at its first allocation, with the
       // guest frames as the failed rebuild left them: they must hold no raw word.
