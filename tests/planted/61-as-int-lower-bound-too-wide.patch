@@ -1,0 +1,17 @@
+# 61 the as-int lower bound is -2^62
+# defect: the range guard of a float to integer truncation admits doubles down to -2^62
+# (the verifier accepts it: it is inside the exact bounds), so -2^59 - 128 is tagged and
+# overflows the word where the interpreter makes a boxed integer
+# caught by: the cast rows of testJit_arith (-576460752303423616.0 as int)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1190,7 +1190,7 @@
+  */
+ static void trunc_small(Ctx * c, uint32_t i, uint32_t d, GRJIT_VReg f, GRJIT_VReg r) {
+   GRJIT_VReg * t = c->tmp;
+-  cmp(c, GRJIT_CMP_GE, t[TMP_C], V(f), FI(-0x1p59));
++  cmp(c, GRJIT_CMP_GE, t[TMP_C], V(f), FI(-0x1p62)  /* planted: too wide */);
+   guard(c, V(t[TMP_C]), i, d);
+   cmp(c, GRJIT_CMP_LT, t[TMP_C], V(f), FI(0x1p59));
+   guard(c, V(t[TMP_C]), i, d);

@@ -1,0 +1,19 @@
+# 62 a NaN divisor is read as zero
+# defect: the float divide guard is "divisor < 0 or divisor > 0", which a NaN fails, so
+# x / nan exits where the interpreter divides (a NaN is not zero)
+# caught by: the division by NaN row and the operation table of testJit_arith (an exit where there should be none)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1519,7 +1519,10 @@
+         GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+         if (op == GLTANG_OP_DIV) {
+           // The interpreter's error before it divides: either zero, but not a NaN (`NE` is true for one).
+-          cmp(c, GRJIT_CMP_NE, t[TMP_C], V(fb), FI(0.0));
++          /* planted: ordered comparisons, which a NaN fails */
++          cmp(c, GRJIT_CMP_LT, t[TMP_C], V(fb), FI(0.0));
++          cmp(c, GRJIT_CMP_GT, t[TMP_D], V(fb), FI(0.0));
++          bin(c, GRJIT_OP_OR, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+           guard(c, V(t[TMP_C]), i, d);
+         }
+         GRJIT_OpKind fk = op == GLTANG_OP_ADD ? GRJIT_OP_FADD : op == GLTANG_OP_SUB ? GRJIT_OP_FSUB : op == GLTANG_OP_MUL ? GRJIT_OP_FMUL : GRJIT_OP_FDIV;

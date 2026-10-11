@@ -1,0 +1,17 @@
+# 63 the % zero-divisor guard is removed
+# defect: REM_S is emitted with no guard that the divisor is not zero; runtime-jit's
+# verifier refuses the function, so it is not compiled (compile_failures) where the
+# interpreter's modulo-by-zero error is expected from an exit
+# caught by: the modulo rows of testJit_arith (the compile failure, and the error rows)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1607,7 +1607,7 @@
+       guard_two_ints(c, i, d);
+       bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+       bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
+-      guard_nonzero(c, t[TMP_Y], i, d);
++      /* planted: no zero-divisor guard */
+       bin(c, GRJIT_OP_REM_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+       box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+       add_fuel(c, cost);

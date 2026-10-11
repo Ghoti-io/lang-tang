@@ -1,0 +1,69 @@
+# 64 NEG, the float comparisons, CAST, MOD and integer DIV add no fuel
+# defect: the compiled negation of a raw float, the float comparisons, both casts, % and
+# integer / charge nothing (plant 56 is the same for + - * /)
+# caught by: the fuel comparison of every expect_same (the fuel-parity test, the cast and
+# division rows), each removal checked by hand separately
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1485,7 +1485,7 @@
+       if (c->sk[d - 1u] == KIND_F64) {
+         // The sign bit alone: -0.0 for 0.0, a NaN keeps its payload.
+         B(grjit_builder_unary(c->b, GRJIT_OP_FNEG, c->stack_f[d - 1u], V(c->stack_f[d - 1u])));
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       bitcast(c, t[TMP_A], T[d - 1u]);
+@@ -1545,7 +1545,7 @@
+         bin(c, GRJIT_OP_DIV_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+         guard_in_range(c, t[TMP_R], i, d);
+         box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       guard_two_ints(c, i, d);
+@@ -1589,7 +1589,7 @@
+         GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
+         cmp(c, cond, t[TMP_R], V(fa), V(fb));
+         box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_BOOL);
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       guard_two_ints(c, i, d);
+@@ -1610,7 +1610,7 @@
+       guard_nonzero(c, t[TMP_Y], i, d);
+       bin(c, GRJIT_OP_REM_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+       box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+-      add_fuel(c, cost);
++      /* planted: no fuel */
+       break;
+ 
+     case GLTANG_OP_CAST:
+@@ -1619,13 +1619,13 @@
+           // A small integer is converted and a float object read; the result is the raw double.
+           unbox(c, i, d, d - 1u, c->stack_f[d - 1u]);
+         }
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       if (c->sk[d - 1u] == KIND_F64) {
+         trunc_small(c, i, d, c->stack_f[d - 1u], t[TMP_R]);
+         box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+         break;
+       }
+       else {
+@@ -1644,7 +1644,7 @@
+         box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
+         branch_to(c, whole);
+         set_block(c, whole);
+-        add_fuel(c, cost);
++        /* planted: no fuel */
+       }
+       break;
+ 

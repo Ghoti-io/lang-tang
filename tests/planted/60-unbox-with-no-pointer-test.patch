@@ -1,0 +1,17 @@
+# 60 the unbox does not test that a word is a non-null pointer
+# defect: the tag and null test before the load of a float object's kind is dropped, so
+# null, a boolean or a function value is dereferenced as an object
+# caught by: the null, boolean and error operand rows of testJit_arith (the process is killed
+# by SIGSEGV: a crash is the failure here, since the defect is a wild load)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1138,7 +1138,7 @@
+   tag_is(c, t[TMP_C], t[TMP_A], 0);
+   cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_A]), I(0));
+   bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+-  guard(c, V(t[TMP_C]), i, d);
++  /* planted: no pointer test */
+   B(grjit_builder_load(c->b, t[TMP_X], c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, kind), 32, false));
+   cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_FLOAT));
+   guard(c, V(t[TMP_C]), i, d);

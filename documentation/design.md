@@ -1127,7 +1127,7 @@ and calls, consumed in every way) and `generate_arith` (`ArithBuilder`: float lo
 made from literals and casts, `+ - * /`, negation, the six comparisons and the casts
 over floats, integers and the special floats, in loops and branches, with divisors
 steered to zero, -1, NaN, infinity and the small-integer bounds, and parameters that
-are floats, integers, strings and null; seeds 1 to 150, and 1 to 40 again under
+are floats, integers, strings, null and a boolean (`true` is an argument, never an operand the generator writes); seeds 1 to 150, and 1 to 40 again under
 torture and verify). The arithmetic family also compares the error lists (every error
 entered as it is created) and requires every generated shape and every error of the
 matrix to have occurred. Neither family is run against ctang.
@@ -1338,17 +1338,22 @@ breaks nothing as not caught. Observed:
 | 57 arithmetic-on-raw-operands-is-an-exit | `reads_raw` says yes for the arithmetic and comparisons, so a raw operand exits as before story 7: no output differs | the allocation slope and the exit counts (`JitArith.ALoopOfPlusMinusAndTimes*`, `TheSlopeIsStillZero*`) | the allocation count grows with the loop length |
 | 58 integer-converted-from-its-tagged-word | the integer is converted with no `SAR 4`, so the double is `n << 4 \| 1` | any mixed row | the printed values differ |
 | 59 unary-minus-is-zero-minus-x | the negation of a raw float is `0.0 - x` | the -0.0 row (`JitArith.UnaryMinusOfARawFloat*`) | `-(0.0)` prints `0.` where the interpreter prints `-0.` |
+| 60 unbox-with-no-pointer-test | the tag and null test before the load of a float object's kind is dropped, so null, a boolean or a function value is dereferenced | the null, boolean and error operand rows (`JitArith.AFloatReadFromAValueWord*`, the error rows) | the process is killed by SIGSEGV |
+| 61 as-int-lower-bound-too-wide | the truncation's lower bound is -2^62 (the verifier accepts it) | the cast rows (`JitArith.ACastToIntOfADoubleInside*`) | -2^59 - 128 overflows the word |
+| 62 nan-divisor-read-as-zero | the divide guard is "< 0 or > 0", which a NaN fails | the division by NaN row (`JitArith.ADivisionByNaNOrInfinity*`) | `x / nan` exits where it should be compiled |
+| 63 modulo-zero-divisor-guard-removed | `REM_S` with no zero-divisor guard: the verifier refuses the function | the modulo rows (`JitArith.IntegerDivisionAndModulo*`) | `compile_failures` is not 0 |
+| 64 neg-compare-cast-mod-div-add-no-fuel | `NEG`, the float comparisons, both casts, `%` and integer `/` charge nothing | the fuel comparison inside every `expect_same` (cast, division, fuel-parity rows), each removal also checked by hand | the compiled run's fuel is less than the interpreter's |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
-48 to 59 are the compiled float and division operations of story 7; 57 is the one performance defect (nothing is wrong in any output; the allocation slope is what fails).
+48 to 64 are the compiled float and division operations of story 7 (60 to 64 added at review: the pointer test, the cast's lower bound, a NaN divisor, the `%` guard and the fuel of the other operations; 60 is a wild load, so it is caught by the process being killed, not by an assertion); 57 is the one performance defect (nothing is wrong in any output; the allocation slope is what fails).
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 59 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 64 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all fifty-eight but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all sixty-three but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2081,10 +2086,10 @@ over small integers. The rules:
 - *No allocation, boxing or collection in compiled code.* A raw float becomes a value word only
   when a frame is rebuilt, from story 6's pool; more sites now have raw slots live, so
   `max_converting` may rise, and the reservation follows it with no code change. A function with
-  no float constant and no float-producing cast is emitted as before. A float that reaches a
+  no float constant, no cast to float, no cast to int and no `/` or `%` is emitted as before; integer `/` and `%` are inline now, and an `as int` of a value word declares the two `F64` temporaries (`need_tmp_f`) even when no slot is raw (the temporaries are declared exactly when some slot is ever raw, or a reachable `CAST` to int exists). A float that reaches a
   consumer that is not an operation (`print`, `return`, a call argument, a store to a global,
   truthiness, `as string`, `%`) is still an exit at that instruction, counted toward the
-  discard limit like any unconditional exit (story 8's benchmark measures the float-return case).
+  discard limit like any unconditional exit (story 8's benchmark measures the float-return case). So is a comparison of a raw float with null or a string (`x == null`, `x != "a"`, `x < "a"`): the interpreter answers (false, true, or "not supported"), but compiled code compares only numbers, so the unbox guard fails and the exit counts as a guard exit (`JitArith.ComparingARawFloatWithNullOrAString*` asserts it).
 
 *Rejected:* speculating that a `REF`-`REF` site is float-float with no feedback (wrong for every
 integer loop; each wrong guess exits the other kind); compiling two variants and choosing by
