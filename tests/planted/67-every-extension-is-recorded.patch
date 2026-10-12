@@ -1,10 +1,10 @@
 # 67 every extension is recorded, whatever its size
 # defect: the extension helper records a callee that extends the reservation by
-# nothing, so every compiled call grows and shrinks the record array like a call
-# whose callee holds floats
-# caught by: the float-free call test, which counts the records across fib(15)
-# (testJit_floats)
-#
+# nothing, so every entry grows and shrinks the record array like an entry whose
+# function holds floats (the entry path reaches it with max_converting 0; the push
+# path does not, because a push asks for an extension only when its callee has one)
+# caught by: the float-free call test's second assertion, which counts the records
+# across fib(15) while the lookups stay at zero (testJit_floats)
 #
 --- a/src/jit/boxes.c
 +++ b/src/jit/boxes.c
@@ -18,19 +18,3 @@
    GLTANG_Jit * jit = exec->jit;
    const uint64_t nth = ++jit->test_extends;
    if (jit->test_fail_extend_at != 0 && nth == jit->test_fail_extend_at) {
---- a/src/jit/hooks.c
-+++ b/src/jit/hooks.c
-@@ -120,11 +120,11 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
-   // stay zero, which a test holds it to). `max_converting` of a record is nonzero only
-   // while it is compiled.
-   size_t extension = 0;
--  if (jit->floaty) {
-+  if (jit->floaty || 1) {  /* planted: always */
-     ++exec->jit_stats.extension_lookups;
-     const GLTANG_JitFn * callee_fn = record_of(jit, callee);
-     extension = callee_fn ? callee_fn->max_converting : 0;
--    if (extension != 0 && !gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
-+    if (!gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
-       return refuse_push(jit);
-     }
-   }
