@@ -1364,7 +1364,7 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 75 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 80 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
 runs all seventy-seven but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
@@ -1999,16 +1999,33 @@ casts over a raw double (the next section):
   reachable `RET` that returns normally, (3) no reachable instruction at which the walk ends for
   a real reason (an unconditional exit that boxes nothing, a call or member load left as an exit),
   and (4) at least one reachable instruction at which it ends at the designed exit. Every path of
-  such a function is a few instructions of compiled code and then a designed exit. The edge cases
-  are all toward compiling: a guard that can fail (an integer add, an unbox) is not the end of a
-  path, so a function whose only failure path is a guard is declined if its successful paths all
-  end at the designed exit (the guard exit that would be real is then unreachable in practice but
-  not provably so, and the function is not worth compiling either way); a branch whose other arm
-  returns normally, or exits for a real reason, keeps the function; "an operation that always
-  errors" is not recognised, so such a function is compiled. A callee that is declined makes its
-  compiled callers' calls remembered exits, as any function that is never compiled does. The
-  limit itself is a short-run heuristic that must become a rate before compiled code is shared
-  between executions: `planning/template-architecture.md`. Compiled code never boxes.
+  such a function is a few instructions of compiled code and then a designed exit. Edge cases,
+  as coded: a guard that can fail (an integer add, an unbox, a divide) is not the end of a path,
+  so a function whose successful paths all end at the designed exit is declined even though a
+  guard of it can fail and would be a counted exit; a path that ends at an instruction compiled
+  code does not do (an array, an index) is a real end, and a branch whose other arm returns
+  normally or ends for a real reason keeps the function (tests: a float path beside an integer
+  return, a float path beside an array); a function whose paths all end at an operation that
+  always errors (`x / 0.0` of a raw operand, `x % 2.0`) is declined only because that operation
+  is also an exit that reads a raw operand, not because the error is recognised; any other
+  always-erroring operation is not recognised and the function is compiled. A callee that is
+  declined makes its compiled callers' calls remembered exits (`call_exits_remembered`, which count
+  nowhere), as any function that is never compiled does. **The exits are of exactly one kind:** with
+  no rebuild failure, `deopts` is `exits_expected + exits_counted + call_exits_native_stack +
+  call_exits_push_refused + call_exits_remembered + native_exits_stack`; `exits_counted` counts the
+  exits of a kind that counts toward a function's limit whether or not the function was still
+  compiled to be charged (a nested run can discard it while a record is open), and the entry
+  classifies each exit once, after its rebuild succeeded. **What still thrashes (decided, not
+  fixed here; the shared-code rate or work-based policy that fixes it is in `deferred-work.md`):** a
+  function with a loop or a normal return whose designed exit dominates its entry, so that each call
+  pays an entry, a rebuild and a re-execution by the interpreter and never gets discarded, because
+  nothing counts; above all a function with a short loop (a trip count of one or a few) that ends at
+  a designed exit, whose cost per call is the entry and the rebuild with nothing to amortize it.
+  It is measurable per call from the statistics: `exits_expected` against `entries + calls` (every
+  designed exit is made by an entry or a compiled call, so the ratio is at most one; a function that
+  thrashes is near one), and `functions_discarded` stays zero for it. The limit itself is a
+  short-run heuristic that must become a rate before compiled code is shared between executions:
+  `planning/template-architecture.md`. Compiled code never boxes.
 - *Merges.* Where the ways into a jump target disagree on a slot's kind (a local first
   assigned a float inside a loop, `if (c) { x = 1.5; } else { x = 2; }`) every raw source
   of the function becomes an exit and the analysis is run again, so the function is then

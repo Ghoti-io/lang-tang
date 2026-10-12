@@ -1,0 +1,18 @@
+# 79 the static decline does not look at a normal return
+# defect: the decline counts only the real exits, not the paths that return normally, so a
+# loop-free function with a float path beside an integer return is declined as if every path
+# ended at the designed exit
+# caught by: the function with a float path and a normal integer return, which must be compiled
+# and entered (testJit_arith)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1896,7 +1896,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index,
+         continue;
+       }
+       expected_end = expected_end || c->end_kind[i] == END_EXPECTED;
+-      other_end = other_end || c->end_kind[i] == END_REAL || c->end_kind[i] == END_RETURN;
++      other_end = other_end || c->end_kind[i] == END_REAL;  /* planted: a normal return is not looked at */
+     }
+     if (expected_end && !other_end && !c->back_branch) {
+       ++exec->jit_stats.functions_declined_expected;

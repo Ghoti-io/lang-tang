@@ -1,0 +1,19 @@
+# 80 the sites of an exit are taken from the function's record
+# defect: the deopt hook reads the exit's flags from the function's record, whose code is gone if
+# the function was discarded while the record was open, so a designed exit taken from such code
+# is read as nothing in particular and counted
+# caught by: the discard-while-a-record-is-open test (testJit_floats)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -312,7 +312,9 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
+           // into it), not the function's record, whose code is gone if the function was
+           // discarded while this record was open (a nested run's eighth exit).
+           GRCORE_CodeRange ran;
+-          const GLTANG_JitCode * jc = grcore_code_lookup(context, (uintptr_t)fr.return_address, &ran) && ran.code ? grcore_code_payload(ran.code) : NULL;
++          GLTANG_JitFn * planted_jf = gltang_jit_find_fn(exec, jit, fr.identity.function, false);  /* planted: the record's code */
++          const GLTANG_JitCode * jc = planted_jf && planted_jf->code ? grcore_code_payload(planted_jf->code) : NULL;
++          (void)ran;
+           if (expected_site_at(jc, fr.identity.offset)) {
+             // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
+             // code, so it does not count toward the discard limit (and is counted, with the

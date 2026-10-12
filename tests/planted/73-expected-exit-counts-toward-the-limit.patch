@@ -7,13 +7,13 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -311,8 +311,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
-           if (expected_site_at(jc, fr.identity.offset)) {
+@@ -317,8 +317,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
              // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
-             // code, so it does not count toward the discard limit.
--            ++exec->jit_stats.exits_expected;
+             // code, so it does not count toward the discard limit (and is counted, with the
+             // others, by the entry once the rebuild has succeeded).
+-            expected = true;
 -            counts = false;
-+            ++exec->jit_stats.exits_expected;  /* planted: and it counts */
++            expected = true;  /* planted: and it counts */
            }
            else if (native_site_at(jc, fr.identity.offset)) {
              // An exit at a library call or member load: the callee value was not the
