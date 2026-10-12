@@ -1180,6 +1180,7 @@ typedef enum {
   FK_E_STR,     /* return x * "a";                                      an error at every call */
   FK_N_INFSUB,  /* y = x * 1.0; z = y - y; z != z ? 1 : 0; x = inf      NaN arithmetic over raw operands: not an exit */
   FK_N_ZERODIV, /* z = 0.0; (z / x) as int; x = 2.0                     a zero result: not an exit */
+  FK_TOPONLY,   /* only the top level runs: it declares g and never calls it (the cost of compiling the top level alone) */
   FK_CALLER     /* a compiled caller whose loop calls a loop-free float helper that is declined: remembered exits */
 } FamilyKind;
 
@@ -1217,13 +1218,14 @@ static void family_function(FamilyKind k, unsigned loop, char * out, size_t size
     case FK_E_STR: snprintf(out, size, "function g(x) { return x * \"a\"; }"); return;
     case FK_N_INFSUB: snprintf(out, size, "function g(x) { y = x * 1.0; z = y - y; return z != z ? 1 : 0; }"); return;
     case FK_N_ZERODIV: snprintf(out, size, "function g(x) { z = 0.0; return (z / x) as int; }"); return;
+    case FK_TOPONLY: snprintf(out, size, "function g() { return 1.5; }"); return;
     case FK_CALLER:
       snprintf(out, size, "function h(a) { return a * 1.5; } function g() { c = 0; i = 0; while (i < 10) { c = c + (h(i) as int); i = i + 1; } return c; }");
       return;
   }
 }
 
-static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0 && k != FK_CALLER; }
+static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0 && k != FK_CALLER && k != FK_TOPONLY; }
 /* Which rule a family function follows (see Policy). */
 static Policy family_policy(FamilyKind k, unsigned loop) {
   switch (k) {
@@ -1243,7 +1245,7 @@ static const char * family_prelude(FamilyKind k) {
     case FK_E_NANINT: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y - y;";
     case FK_N_INFSUB: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y;";
     case FK_N_ZERODIV: return "av = 2.0;";
-    case FK_CALLER: return "av = 0;";
+    case FK_CALLER: case FK_TOPONLY: return "av = 0;";
     case FK_GLOBAL: return "gv = 0;";
     default: return "av = 1.5;";
   }
@@ -1275,6 +1277,10 @@ static GLTANG_ValueKind family_expectation(FamilyKind k, unsigned loop) {
     case FK_N_INFSUB:
       have_expected_integer = 1;
       expected_integer = 1;
+      return GLTANG_KIND_INTEGER;
+    case FK_TOPONLY:
+      have_expected_integer = 1;
+      expected_integer = 0;
       return GLTANG_KIND_INTEGER;
     case FK_CALLER: { /* the sum of (int)(i * 1.5) for i < 10 */
       int64_t sum = 0;
@@ -1341,7 +1347,7 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
   char function[256];
   char source[512];
   family_function(k, loop, function, sizeof function);
-  snprintf(source, sizeof source, "%s g();", function);
+  snprintf(source, sizeof source, k == FK_TOPONLY ? "%s 0;" : "%s g();", function);
   GLTANG_ValueKind kind = family_expectation(k, loop);
   want_set(jit_on, family_policy(k, loop), 1u);
   if (jit_on && k == FK_ARG && loop == 0u) {
@@ -1356,14 +1362,14 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
 #define FAMILY_FUNCTIONS(tag, kind, loop) \
   BENCH_UNUSED static uint64_t tag##_fresh_i(uint64_t it, double * el) { return family_fresh(kind, loop, 0, it, el); } \
   BENCH_UNUSED static uint64_t tag##_fresh_c(uint64_t it, double * el) { return family_fresh(kind, loop, 1, it, el); } \
-  static uint64_t tag##_s0_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 0, it, el); } \
-  static uint64_t tag##_s1_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 1, it, el); } \
-  static uint64_t tag##_s2_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 2, it, el); } \
-  static uint64_t tag##_s3_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 3, it, el); } \
-  static uint64_t tag##_s0_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 0, it, el); } \
-  static uint64_t tag##_s1_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 1, it, el); } \
-  static uint64_t tag##_s2_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 2, it, el); } \
-  static uint64_t tag##_s3_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 3, it, el); }
+  BENCH_UNUSED static uint64_t tag##_s0_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 0, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s1_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 1, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s2_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 2, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s3_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 3, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s0_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 0, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s1_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 1, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s2_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 2, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_s3_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 3, it, el); }
 
 FAMILY_FUNCTIONS(f_ret0, FK_RET, 0u)
 FAMILY_FUNCTIONS(f_ret1, FK_RET, 1u)
@@ -1372,6 +1378,7 @@ FAMILY_FUNCTIONS(f_ret3, FK_RET, 3u)
 FAMILY_FUNCTIONS(f_ret5, FK_RET, 5u)
 FAMILY_FUNCTIONS(f_ret10, FK_RET, 10u)
 FAMILY_FUNCTIONS(f_caller, FK_CALLER, 0u)
+FAMILY_FUNCTIONS(f_toponly, FK_TOPONLY, 0u)
 FAMILY_FUNCTIONS(f_print1, FK_PRINT, 1u)
 FAMILY_FUNCTIONS(f_global1, FK_GLOBAL, 1u)
 FAMILY_FUNCTIONS(f_arg1, FK_ARG, 1u)
@@ -1637,6 +1644,8 @@ static const Case cases[] = {
     FAMILY_ROWS("float-return-L5", f_ret5, 500u)
     FAMILY_ROWS("float-return-L10", f_ret10, 500u)
     FAMILY_ROWS("float-caller-declined", f_caller, 500u)
+    {"float-toplevel-only-interpreted", f_toponly_fresh_i, 500u, 1u},
+    {"float-toplevel-only-compiled", f_toponly_fresh_c, 500u, 1u},
     FAMILY_ROWS("float-print-L1", f_print1, 500u)
     FAMILY_ROWS("float-store-L1", f_global1, 500u)
     FAMILY_ROWS("float-arg-L1", f_arg1, 500u)
