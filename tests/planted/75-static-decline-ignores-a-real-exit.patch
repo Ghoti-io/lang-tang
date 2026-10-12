@@ -1,0 +1,18 @@
+# 75 the static decline fires on a function that has a real exit path
+# defect: the decline counts only the paths that return, not the paths that end at
+# an instruction compiled code does not do, so a function with a designed exit on one
+# path and a real exit on another is declined as if it were all designed
+# caught by: the function with a real exit path beside a float return, which must be
+# compiled and entered (testJit_arith)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1889,7 +1889,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index,
+         continue;
+       }
+       expected_end = expected_end || c->end_kind[i] == END_EXPECTED;
+-      other_end = other_end || c->end_kind[i] == END_REAL || c->end_kind[i] == END_RETURN;
++      other_end = other_end || c->end_kind[i] == END_RETURN;  /* planted: a real exit is not looked at */
+     }
+     if (expected_end && !other_end && !c->back_branch) {
+       ++exec->jit_stats.functions_declined_expected;

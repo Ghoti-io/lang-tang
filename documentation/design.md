@@ -1349,6 +1349,9 @@ breaks nothing as not caught. Observed:
 | 70 bench-family-expectation-one-off | the cast family's expected value is 1 off | `bench --smoke --only float-entry-cast-L0`: the family cases' exact expectation | the harness aborts |
 | 71 bench-compiled-row-is-interpreted | the compiled rows run at a threshold of zero | `bench --smoke --only jit-float-cmp`: a compiled row must have compiled and entered | the harness aborts |
 | 72 bench-discard-expectation-wrong | the family cases expect no discard | `bench --smoke --only steady-float-return-L0`: the number of functions discarded | the harness aborts |
+| 73 expected-exit-counts-toward-the-limit | the deopt hook counts the exit that boxes a raw float toward the discard limit | the looped float-returner that must stay compiled across fourteen calls (`JitArith.AFunctionWithALoopThatAlwaysEnds*`) | `functions_discarded` is 1, not 0 |
+| 74 static-decline-ignores-the-loop | the compile declines a function whose every path ends at that exit without asking whether it can loop | the same test | `functions_declined_expected` is 1 and `exits_expected` is 0 |
+| 75 static-decline-ignores-a-real-exit | the decline looks only at the returns, not at the real exits | the function with a real exit path beside a float return (`JitArith.AFunctionWithARealExitOnOnePath*`) | `functions_declined_expected` is 1 |
 | 66 every-push-looks-the-callee-up | the push hook looks a callee's raw floats up for every compiled call, as the first float story did, even when no compiled function holds any | the float-free call test, which counts the lookups across `fib(15)` (`JitFloats.ACompiledCallWhoseCallee*`) | `extension_lookups` is not 0 |
 | 67 every-extension-is-recorded | the extension helper records an extension of nothing (reached by every entry, with `max_converting` 0), alone: the push path is as committed | the float-free call test, counting the records across `fib(15)` while the lookups stay 0 | `extension_lookups` is 0 and `extension_records` is not |
 
@@ -1358,10 +1361,10 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 72 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 75 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all seventy-one but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all seventy-four but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -1979,10 +1982,30 @@ casts over a raw double (the next section):
   argument, a library call or load, `%`, a cast to bool or to string; the operations of the
   next section compute with it) is an
   unconditional exit at that instruction, with the operand in its frame state, and the
-  interpreter re-executes it; such an exit counts toward the discard limit as any
-  unconditional exit does (the limit is a short-run heuristic that must become a rate
-  before compiled code is shared between executions: `planning/template-architecture.md`).
-  Compiled code never boxes.
+  interpreter re-executes it. **Such an exit is designed, not a failure (decided 2026-10-12,
+  after the benchmarks of "Floats, measured" showed the discard limit throwing away good code):**
+  the site is flagged where it is emitted (`expected_sites` in the code's payload) and the deopt
+  hook does not count it toward `GLTANG_JIT_DEOPT_LIMIT`; `exits_expected` counts it and
+  `exits_counted` counts the exits that did count. A real failure counts as before: a failed
+  kind or type guard (including the unbox guard of a value word that is not a number), a divide
+  or modulo by zero, a NaN or out-of-range cast, a result outside the small-integer range, a
+  callee-value guard, and an unconditional exit that is not the boxing of a raw float (an
+  instruction compiled code does not do, with no raw operand). *The static decline:* a function
+  is declined at the compile (never compiled, not a failure, `functions_declined_expected`) when
+  the final analysis finds (1) no reachable jump to its own index or an earlier one, (2) no
+  reachable `RET` that returns normally, (3) no reachable instruction at which the walk ends for
+  a real reason (an unconditional exit that boxes nothing, a call or member load left as an exit),
+  and (4) at least one reachable instruction at which it ends at the designed exit. Every path of
+  such a function is a few instructions of compiled code and then a designed exit. The edge cases
+  are all toward compiling: a guard that can fail (an integer add, an unbox) is not the end of a
+  path, so a function whose only failure path is a guard is declined if its successful paths all
+  end at the designed exit (the guard exit that would be real is then unreachable in practice but
+  not provably so, and the function is not worth compiling either way); a branch whose other arm
+  returns normally, or exits for a real reason, keeps the function; "an operation that always
+  errors" is not recognised, so such a function is compiled. A callee that is declined makes its
+  compiled callers' calls remembered exits, as any function that is never compiled does. The
+  limit itself is a short-run heuristic that must become a rate before compiled code is shared
+  between executions: `planning/template-architecture.md`. Compiled code never boxes.
 - *Merges.* Where the ways into a jump target disagree on a slot's kind (a local first
   assigned a float inside a loop, `if (c) { x = 1.5; } else { x = 2; }`) every raw source
   of the function becomes an exit and the analysis is run again, so the function is then

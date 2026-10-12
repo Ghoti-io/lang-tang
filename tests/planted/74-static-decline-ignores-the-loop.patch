@@ -1,0 +1,18 @@
+# 74 the static decline fires on a function with a loop
+# defect: the compile declines a function whose every path ends at the exit that
+# boxes a raw float without asking whether it can loop, so a hot float loop is never
+# compiled
+# caught by: the looped float-returner that must be compiled and entered
+# (testJit_arith)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1891,7 +1891,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index,
+       expected_end = expected_end || c->end_kind[i] == END_EXPECTED;
+       other_end = other_end || c->end_kind[i] == END_REAL || c->end_kind[i] == END_RETURN;
+     }
+-    if (expected_end && !other_end && !c->back_branch) {
++    if (expected_end && !other_end) {  /* planted: loops are declined too */
+       ++exec->jit_stats.functions_declined_expected;
+       *out = NULL;
+       result = GLTANG_OK;

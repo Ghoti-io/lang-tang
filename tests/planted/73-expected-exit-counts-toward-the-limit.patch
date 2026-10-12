@@ -1,0 +1,19 @@
+# 73 the exit that boxes a raw float counts toward the discard limit
+# defect: the deopt hook counts a designed exit (a raw float boxed for its consumer)
+# like a failure, as the first float story did, so a float-returning function with a
+# loop is let go at the eighth call
+# caught by: the looped float-returner that must stay compiled across fourteen calls
+# (testJit_arith)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -311,8 +311,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
+           if (expected_site_at(jc, fr.identity.offset)) {
+             // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
+             // code, so it does not count toward the discard limit.
+-            ++exec->jit_stats.exits_expected;
+-            counts = false;
++            ++exec->jit_stats.exits_expected;  /* planted: and it counts */
+           }
+           else if (native_site_at(jc, fr.identity.offset)) {
+             // An exit at a library call or member load: the callee value was not the
