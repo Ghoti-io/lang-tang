@@ -7,7 +7,7 @@
 #
 --- a/src/jit/jit.c
 +++ b/src/jit/jit.c
-@@ -156,6 +156,8 @@
+@@ -165,6 +165,8 @@ static void discard(GLTANG_Execution * exec, GLTANG_JitFn * f) {
      (void)grcore_code_unregister(exec->context, f->start);
      f->start = 0;
    }
@@ -15,4 +15,4 @@
 +  grjit_code_destroy(((GLTANG_JitCode *)grcore_code_payload(f->code))->code);
    grcore_code_release(f->code);
    f->code = NULL;
-   f->state = GLTANG_JITFN_NEVER;
+   f->max_converting = 0;

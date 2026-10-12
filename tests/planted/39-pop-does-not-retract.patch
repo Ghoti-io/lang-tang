@@ -7,12 +7,12 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -167,7 +167,7 @@ static void hook_pop(void * context) {
-   const uint64_t callee = grcore_stack_frame_count(stack) ? grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION] : 0;
+@@ -192,7 +192,7 @@ static void hook_pop(void * context) {
+   if (jit && jit->ext_count > jit->ext_floor && jit->ext[jit->ext_count - 1u].level == jit->chain) {
+     const uint64_t callee = grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION];
+     assert(jit->ext[jit->ext_count - 1u].fword == callee);
+-    gltang_jit_retract_level(exec, jit->chain, callee);
++    (void)callee;  /* planted: the extension is not given back */
+   }
    (void)grcore_stack_pop(stack);
-   if (exec->jit) {
--    gltang_jit_retract_level(exec, exec->jit->chain, callee);
-+    (void)callee;
-     if (exec->jit->chain) {
-       --exec->jit->chain;
-     }
+   if (jit && jit->chain) {

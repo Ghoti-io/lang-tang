@@ -7,11 +7,13 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -112,7 +112,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+@@ -132,9 +132,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
    GRCORE_FrameRef frame;
    const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
    if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
--    gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+-    if (extension != 0) {
+-      gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+-    }
 +    /* planted: no retract */
      if (injected) {
        jit->test_failed_capacity = grcore_deopt_reservation_capacity(jit->reservation);

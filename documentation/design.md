@@ -1344,6 +1344,8 @@ breaks nothing as not caught. Observed:
 | 63 modulo-zero-divisor-guard-removed | `REM_S` with no zero-divisor guard: the verifier refuses the function | the modulo rows (`JitArith.IntegerDivisionAndModulo*`) | `compile_failures` is not 0 |
 | 64 neg-compare-cast-mod-div-add-no-fuel | `NEG`, the float comparisons, both casts, `%` and integer `/` charge nothing | the fuel comparison inside every `expect_same` (cast, division, fuel-parity rows), each removal also checked by hand | the compiled run's fuel is less than the interpreter's |
 | 65 bench-reference-one-off | the C reference of the benchmark harness's float loop is 1.0 off (the defect is in `bench/bench.c`, not in the library) | `bench --smoke`: every program's answer is checked against its reference inside the case | the harness aborts (`setup failed`, exit 134) where the control passes |
+| 66 every-push-looks-the-callee-up | the push hook looks a callee's raw floats up for every compiled call, as the first float story did, even when no compiled function holds any | the float-free call test, which counts the lookups across `fib(15)` (`JitFloats.ACompiledCallWhoseCallee*`) | `extension_lookups` is not 0 |
+| 67 every-extension-is-recorded | every call records an extension, whatever its size | the same, counting the records | `extension_records` is not 0 |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1351,10 +1353,10 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 65 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 67 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all sixty-four but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all sixty-six but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.

@@ -1,0 +1,19 @@
+# 66 every push looks its callee's raw floats up
+# defect: the push hook looks the callee's record up for every compiled call, as
+# the first float story did, whether or not any compiled function holds a raw
+# float, so a call of a callee with none pays for a lookup (the cost that made
+# fib(22) compiled a fifth slower)
+# caught by: the float-free call test, which counts the lookups across fib(15)
+# (testJit_floats)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -120,7 +120,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+   // stay zero, which a test holds it to). `max_converting` of a record is nonzero only
+   // while it is compiled.
+   size_t extension = 0;
+-  if (jit->floaty) {
++  if (jit->floaty || 1) {  /* planted: always */
+     ++exec->jit_stats.extension_lookups;
+     const GLTANG_JitFn * callee_fn = record_of(jit, callee);
+     extension = callee_fn ? callee_fn->max_converting : 0;
