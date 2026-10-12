@@ -81,6 +81,17 @@ Scenario scenario(const std::string & source) {
   return sc;
 }
 
+/// `expect_same`, and the run was not blinded: no function of the program was declined at the compile (a loop-free function
+/// whose every path ends at a designed exit is), because a declined function runs in the interpreter and proves nothing about
+/// compiled code. Every test whose planted defect lives in the compiled emission uses this one.
+void expect_same_compiled(const Scenario & sc, Outcome * interpreter = nullptr, Outcome * jit = nullptr) {
+  Outcome a, b;
+  expect_same(sc, interpreter ? interpreter : &a, jit ? jit : &b);
+  const Outcome & seen = jit ? *jit : b;
+  EXPECT_EQ(seen.stats.functions_declined_expected, 0u) << "a function of the program was declined, so the interpreter ran it";
+  EXPECT_GE(seen.stats.functions_compiled, 1u);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -100,8 +111,8 @@ TEST(JitArith, ALoopOfPlusMinusAndTimesOverARawFloatAndASmallIntegerAllocatesNot
       return scenario(std::string("function f(n) { s = 0.0; i = 0; while (i < n) { ") + body + " i = i + 1; } print(s); }\nf(" + n + ");\n");
     };
     Outcome plain_short, jit_short, plain_long, jit_long;
-    expect_same(with("200"), &plain_short, &jit_short);
-    expect_same(with("5000"), &plain_long, &jit_long);
+    expect_same_compiled(with("200"), &plain_short, &jit_short);
+    expect_same_compiled(with("5000"), &plain_long, &jit_long);
     ASSERT_FALSE(HasFailure()) << body;
     EXPECT_GE(jit_long.stats.entries, 1u) << body;
     EXPECT_EQ(jit_long.stats.compile_failures, 0u) << body;
@@ -130,7 +141,7 @@ TEST(JitArith, TheSlopeIsStillZeroWithAHandlerPendingAtEveryPollAndUnderTortureA
         sc.verify = 1;
       }
       Outcome plain, jit;
-      expect_same(sc, &plain, &jit);
+      expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure());
       allocations[which] = jit.heap_allocations;
       boxed[which] = jit.stats.values_boxed;
@@ -162,7 +173,7 @@ void run_compiled_op(const OpCase & op, const char * values, uint64_t expect_deo
   Scenario sc = scenario(std::string(kPrelude) + "function f(a) { x = a as float; c = 0; " + op.body + " return c; }\n" +
       "vals = " + values + "; t = 0; k = 0; while (k < 13) { t = t + f(vals[k]); k += 1; } print(t);\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(::testing::Test::HasFailure()) << op.name;
   EXPECT_GE(jit.stats.entries, 1u) << op.name;
   EXPECT_EQ(jit.stats.compile_failures, 0u) << op.name << ": the verifier accepted every guard";
@@ -223,7 +234,7 @@ TEST(JitArith, EveryComparisonOfANaNIsFalseExceptNotEqualInCompiledCodeAsInTheIn
       "  if (9007199254740993 == 9007199254740992.0) { c = c + 65536; }\n"
       "  i = i + 1; } return c; }\nprint(f(3));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   // The NaN in a local is `nan`, a global read: LOAD_GLOBAL is a word, so these compare a word and a raw. (Two words, `x == x`,
   // would be the small-integer instruction and exit on a float: that is not what this test is about.)
@@ -244,7 +255,7 @@ TEST(JitArith, ANaNHeldRawComparesAsTheInterpreterDoes) {
       "  if (x == x) { c = c + 4096; } if (x != x) { c = c + 8192; }\n"
       "  return c; }\nprint(f(nan)); print(f(1.5)); print(f(2)); print(f(pinf)); print(f(ninf));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.deopts, kMain) << "nothing left compiled code";
   // f(nan): != twice (32 + 2048) and x != x (8192); f(1.5): <= >= == both ways and x == x; f(2) and f(pinf): > >= != and < <= != the
@@ -262,7 +273,7 @@ TEST(JitArith, MixedIntegerAndFloatConvertTheIntegerAndKeepTheOrderOfTheOperands
       "function f(a) { k = 0; while (k < 1) { k = k + 1; } b = a * 1.5; c = 1.5 - a; d = a / 2.0; e = 7 / 2.0; g = 2.0 / a; h = 1.5 - a * 1.0; print(b); print(c); print(d); print(e); print(g); print(h); return 0; }\n"
       "f(3); f(-4); f(9007199254740993); f(576460752303423487);\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.compile_failures, 0u);
   // The first print is the only exit of each call; what it boxes is what was live: b, c, d, e, g, h and the
@@ -294,7 +305,7 @@ TEST(JitArith, AFloatReadFromAValueWordIsUnboxedAnAnIntegerIsConvertedAndAnythin
     // thing that can leave compiled code.
     Scenario sc = scenario(std::string(kPrelude) + "function f(x) { s = 0.0; i = 0; while (i < 4) { s = s + x; i = i + 1; } print(s); return 0; }\nf(" + c.argument + ");\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << c.argument;
     EXPECT_EQ(jit.stats.compile_failures, 0u) << c.argument;
     EXPECT_EQ(jit.raw, c.raw) << c.argument;
@@ -302,7 +313,7 @@ TEST(JitArith, AFloatReadFromAValueWordIsUnboxedAnAnIntegerIsConvertedAndAnythin
     EXPECT_EQ(jit.stats.deopts, kMain + 1u) << c.argument << ": one exit, at the print or at the add";
     Scenario sg = scenario(std::string(kPrelude) + "function g(x) { s = 0.0; i = 0; while (i < 4) { s = s + x; i = i + 1; } return i; }\nprint(g(" + c.argument + "));\n");
     Outcome gp, gj;
-    expect_same(sg, &gp, &gj);
+    expect_same_compiled(sg, &gp, &gj);
     ASSERT_FALSE(HasFailure()) << c.argument;
     EXPECT_EQ(gj.raw, "4") << c.argument;
     EXPECT_EQ(gj.stats.deopts, kMain + (c.compiled ? 0u : 1u)) << c.argument << (c.compiled ? ": compiled to the end, no exit" : ": the unbox guard (or the interpreter's answer) is an exit at the add");
@@ -315,7 +326,7 @@ TEST(JitArith, AGuardThatFailsInTheMiddleOfAnOperationWritesNothingAndTheRebuild
   // written: the frame the interpreter resumes has acc, in its local and as the first operand, each boxed once.
   Scenario sc = scenario("function f(x) { acc = 0.5; i = 0; while (i < 3) { acc = acc + x; i = i + 1; } print(acc); return i; }\nf(\"s\");\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.deopts, kMain + 1u);
   EXPECT_EQ(jit.stats.values_boxed, 2u) << "acc as a local and acc as the operand, once each";
@@ -324,7 +335,7 @@ TEST(JitArith, AGuardThatFailsInTheMiddleOfAnOperationWritesNothingAndTheRebuild
   Scenario third = scenario("function f(x) { acc = 0.5; i = 0; while (i < 3) { acc = acc + x; i = i + 1; } return i; }\n"
                             "print(f(1.5)); print(f(2)); print(f(\"s\")); print(f(2.5));\n");
   Outcome p3, j3;
-  expect_same(third, &p3, &j3);
+  expect_same_compiled(third, &p3, &j3);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(j3.stats.deopts, kMain + 1u) << "only the call with the string left compiled code";
   EXPECT_EQ(j3.stats.values_boxed, 2u);
@@ -379,7 +390,7 @@ TEST(JitArith, EveryCaseTheInterpreterTurnsIntoAnErrorExitsAtTheInstructionAndTh
     function.insert(function.find("{ ") + 2 + std::string(kGlobals).size(), "k = 0; while (k < 1) { k = k + 1; } ");
     Scenario sc = scenario(std::string(kPrelude) + function + "\nprint(f(1.5)); print(f(2));\nprint(\"done\");\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << c.name;
     EXPECT_EQ(jit.stats.compile_failures, 0u) << c.name;
     EXPECT_EQ(jit.stats.rebuild_failures, 0u) << c.name;
@@ -399,7 +410,7 @@ TEST(JitArith, ADivisionByNaNOrInfinityIsNotAZeroDivisorAndIsCompiled) {
       "  k = 0; if (b != b) { k = k + 1; } if (c != c) { k = k + 2; } if (d == 0.0) { k = k + 4; } if (e == 0.0) { k = k + 8; } if (g != g) { k = k + 16; } if (h == 0.0) { k = k + 32; } return k; }\n"
       "print(f(1.5)); print(f(-2)); print(f(3));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.deopts, kMain);
   EXPECT_EQ(jit.raw, "636363");
@@ -427,7 +438,7 @@ TEST(JitArith, IntegerDivisionAndModuloOfSmallIntegersAreCompiledAndTheRangeAndZ
       Scenario sc = scenario(std::string(kPrelude) + "function f(a, b) { q = a " + op + " b; return q; }\n" +
           "print(f(" + c.a + ", " + c.b + ")); print(\" \"); print(f(" + c.a + ", " + c.b + "));\n");
       Outcome plain, jit;
-      expect_same(sc, &plain, &jit);
+      expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure()) << c.a << " " << op << " " << c.b;
       EXPECT_EQ(jit.stats.compile_failures, 0u) << c.a << " " << op << " " << c.b << ": the verifier accepted the guards";
       const bool exits = which == 0 ? c.quotient_exits : c.remainder_exits;
@@ -438,7 +449,7 @@ TEST(JitArith, IntegerDivisionAndModuloOfSmallIntegersAreCompiledAndTheRangeAndZ
   Scenario sc = scenario("function f(a, b) { return a / b; }\nfunction g(a, b) { return a % b; }\n"
                          "print(f(7, 2)); print(\" \"); print(f(-7, 2)); print(\" \"); print(f(7, -2)); print(\" \"); print(g(-7, 2)); print(\" \"); print(g(7, -2)); print(\" \"); print(g(5, -1)); print(\" \"); print(f(0, 5));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, "3 -3 -3 -1 1 0 0");
   EXPECT_EQ(jit.stats.deopts, kMain);
@@ -446,7 +457,7 @@ TEST(JitArith, IntegerDivisionAndModuloOfSmallIntegersAreCompiledAndTheRangeAndZ
   Scenario m = scenario(std::string(kPrelude) + "function g(a, b) { return a % b; }\nfunction f(a, b) { return a / b; }\n"
                         "print(g(smin, -1)); print(\" \"); print(g(smax, -1)); print(\" \"); print(g(-5, -1)); print(\" \"); print(f(smax, -1)); print(\" \"); print(f(-5, -1));\n");
   Outcome mp, mj;
-  expect_same(m, &mp, &mj);
+  expect_same_compiled(m, &mp, &mj);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(mj.raw, "0 0 0 -576460752303423487 5");
   EXPECT_EQ(mj.stats.deopts, kMain);
@@ -458,7 +469,7 @@ TEST(JitArith, AnIntegerResultOutsideTheSmallIntegerRangeExitsAndTheInterpreterM
       "function f(a) { x = smin / (a - 2); y = x + 1; return y; }\nfunction g(a) { x = smax + a; y = x - a; return y; }\n"
       "print(f(1)); print(\" \"); print(g(1)); print(\" \"); print(g(2));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_GT(jit.stats.deopts, kMain);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
@@ -497,7 +508,7 @@ TEST(JitArith, ACastToIntOfADoubleInsideTheSmallRangeIsCompiledAndEverythingElse
       const char * fn = shape == 0 ? "function f(a) { x = a as float; y = x as int; return y; }" : "function f(a) { y = a as int; return y; }";
       Scenario sc = scenario(std::string(kPrelude) + fn + "\nprint(f(" + c.value + ")); print(\" \"); print(f(" + c.value + "));\n");
       Outcome plain, jit;
-      expect_same(sc, &plain, &jit);
+      expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure()) << c.value << " shape " << shape;
       EXPECT_EQ(jit.stats.compile_failures, 0u) << c.value;
       const bool exits = shape == 1 && c.differs ? c.exits_from_a_word : c.exits;
@@ -512,7 +523,7 @@ TEST(JitArith, ACastToIntTruncatesTowardZeroAndACastToFloatKeepsTheBits) {
       "function f(a) { x = a as float; y = x as int; return y; }\nfunction g(a) { x = a as float; y = x as float; z = y - 0.5; w = z + 0.5; return w == x; }\n"
       "print(f(1.9)); print(\" \"); print(f(-1.9)); print(\" \"); print(f(-0.5)); print(\" \"); print(f(7)); print(\" \"); print(g(1.5)); print(g(3)); print(g(9007199254740993)); print(g(nan));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, "1 -1 0 7 truetruetruefalse");
   EXPECT_EQ(jit.stats.deopts, kMain);
@@ -529,7 +540,7 @@ TEST(JitArith, AFunctionWithALoopThatAlwaysEndsInAComputedFloatStaysCompiledAcro
     Scenario sc = scenario(std::string("function f(a) { k = 0; while (k < 1) { k = k + 1; } ") + body + " }\n" +
         "s = 0; k = 0; while (k < 14) { s = f(k); print(s); print(\",\"); k += 1; } print(f(\"x\")); print(f(null)); print(f(2.5));\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << body;
     EXPECT_EQ(jit.stats.functions_discarded, 0u) << body << ": f is not let go";
     EXPECT_EQ(jit.stats.functions_declined_expected, 0u) << body << ": it has a loop, so it is compiled";
@@ -574,7 +585,7 @@ TEST(JitArith, AFunctionWithARealExitOnOnePathBesideAFloatReturnOnTheOtherIsComp
       "function f(c, a) { x = a * 1.5; if (c) { return x; } y = [1, 2]; return y[0]; }\n"
       "k = 0; while (k < 12) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
@@ -596,7 +607,7 @@ TEST(JitArith, AFunctionWithAFloatPathAndANormalIntegerReturnIsCompiledNotDeclin
       "function f(c, a) { x = a * 1.5; if (c) { return x * 2.0; } return 1; }\n"
       "k = 0; while (k < 10) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
   EXPECT_GE(jit.stats.entries, 1u);
@@ -649,7 +660,7 @@ TEST(JitArith, EveryConsumerOfARawFloatThatTheRuleTreatsAsDesignedIsFlaggedNotCo
         "for (q = 0; q < 12; q += 1) { f(q); }\n");
     sc.before = [](Context & c) { c.add_native_library(); };
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << k.name;
     EXPECT_EQ(jit.stats.exits_expected, 12u) << k.name << ": every call ends at the designed exit";
     EXPECT_EQ(jit.stats.exits_counted, kMain) << k.name << ": the main program's own exit is the only counted one";
@@ -689,7 +700,7 @@ TEST(JitArith, AnInstructionReachedWithDifferentKindsOnDifferentWaysInIsAnExitTh
       "function f(c, n) { if (c) { y = 1.5; } else { y = 2; } print(y); return n; }\n"
       "k = 0; while (k < 6) { f(true, k); f(false, k); k += 1; }\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
   EXPECT_EQ(jit.stats.exits_expected, 0u);
@@ -732,7 +743,7 @@ TEST(JitArith, AFunctionWithARealFailurePathIsStillDiscardedAtTheEighthCountedEx
   Scenario sc = scenario(std::string("M = 576460752303423487;\nfunction f(a) { x = 1.5; return a + 1; }\n") +
       "k = 0; while (k < 14) { print(f(M)); print(\",\"); k += 1; }\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
   EXPECT_EQ(jit.stats.functions_discarded, 1u);
@@ -753,7 +764,7 @@ TEST(JitArith, TheDesignedExitsAreCountedByTheirOwnStatisticAndTheCountedOneDoes
     Scenario sc = scenario(std::string("g = 0;\nfunction h(a) { return 1; }\nfunction f(n) { global g; x = n * 0.5; k = 0; while (k < 1) { k = k + 1; } ") + consumer + " }\n" +
         "for (j = 0; j < 20; j += 1) { f(j); }\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << consumer;
     EXPECT_EQ(jit.stats.exits_expected, 20u) << consumer;
     EXPECT_EQ(jit.stats.exits_counted, kMain) << consumer << ": the main program's own exit is the only counted one";
@@ -772,7 +783,7 @@ TEST(JitArith, ComparingARawFloatWithNullOrAStringExitsAtTheUnboxGuardAndCountsT
     Scenario sc = scenario(std::string("function h(a) { x = a as float; ") + form + " return z; }\n" +
         "k = 0; while (k < 11) { print(h(k)); k += 1; }\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << form;
     EXPECT_EQ(jit.stats.deopts, kMain + 8u) << form << ": one exit per call, at the comparison, until the eighth";
     EXPECT_EQ(jit.stats.functions_discarded, 1u) << form << ": and the eighth discards the function";
@@ -783,17 +794,18 @@ TEST(JitArith, UnaryMinusOfARawFloatFlipsTheSignBitAloneSoNegativeZeroAndNaNAreR
   GLTANG_REQUIRE_JIT_BACKEND();
   // -0.0 for 0.0 (text "-0."), 0. for -0.0, a NaN stays a NaN, and an integer's minus is the integer path.
   Scenario sc = scenario(std::string(kPrelude) +
-      "function f(a) { x = a as float; y = -x; z = -y; w = -a; print(y); print(\" \"); print(z); print(\" \"); print(y == x); return 0; }\n"
+      "function f(a) { k = 0; while (k < 1) { k = k + 1; } x = a as float; y = -x; z = -y; w = -a; print(y); print(\" \"); print(z); print(\" \"); print(y == x); return 0; }\n"
       "function g(a) { x = a as float; y = -x; if (y != y) { return 1; } if (y > 0.0) { return 2; } if (y < 0.0) { return 3; } return 4; }\n"
       "f(0.0); print(\" | \"); f(nz); print(\" | \"); f(2.5); print(\" | \"); f(nan); print(\" | \"); f(-7);\n"
       "print(g(0.0)); print(g(nz)); print(g(nan)); print(g(pinf)); print(g(-3)); print(g(4));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_NE(jit.raw.find("-0. 0. true"), std::string::npos) << "-(0.0) is negative zero: " << jit.raw;
   EXPECT_NE(jit.raw.find("0. -0. true"), std::string::npos) << "-(-0.0) is positive zero: " << jit.raw;
   EXPECT_NE(jit.raw.find("nan"), std::string::npos) << jit.raw;
   EXPECT_NE(jit.stats.entries, 0u);
+  EXPECT_GE(jit.stats.exits_expected, 1u) << "f, which holds the -0.0 row, was compiled and entered: its first call (f(0.0)) ended at the designed exit, the print";
 }
 
 // ---------------------------------------------------------------------------
@@ -810,7 +822,7 @@ TEST(JitArith, AComputedFloatThatReachesAConsumerThatIsNotAnOperationExitsThereB
     Scenario sc = scenario(std::string("g = 0;\nfunction h(a, b) { return a; }\n") +
         "function f(n) { global g; s = 0.0; i = 0; while (i < n) { s = s + i * 0.5; i = i + 1; } " + consumer + " return i; }\nprint(f(5)); print(f(0));\n");
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     EXPECT_GT(jit.stats.deopts, kMain) << consumer << ": the consumer is an unconditional exit";
     EXPECT_GE(jit.stats.values_boxed, 1u) << consumer << ": the operand was boxed by the rebuild";
     EXPECT_EQ(jit.stats.compile_failures, 0u) << consumer;
@@ -831,7 +843,7 @@ TEST(JitArith, AMergeOfUnequalKindsStillCompilesWithNoRawSlot) {
   };
   for (const char * source : programs) {
     Outcome plain, jit;
-    expect_same(scenario(source), &plain, &jit);
+    expect_same_compiled(scenario(source), &plain, &jit);
     EXPECT_EQ(jit.stats.compile_failures, 0u) << source;
     EXPECT_GE(jit.stats.entries, 1u) << source;
     EXPECT_EQ(jit.stats.values_boxed, 0u) << source << ": no raw slot, so no rebuild boxed anything";
@@ -853,7 +865,7 @@ TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnit
       sc.fuel = cap;
       sc.step = step;
       Outcome plain, jit;
-      expect_same(sc, &plain, &jit);
+      expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure()) << "cap " << cap << " step " << step;
       EXPECT_EQ(jit.fuel, plain.fuel);
       EXPECT_EQ(jit.pauses, plain.pauses) << "the same poll for each pause";
@@ -862,7 +874,7 @@ TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnit
   // Compiled code that ran, with the cap far away: the fuel of every operation is in the total.
   Scenario sc = scenario(program);
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   EXPECT_GE(jit.stats.entries, 1u);
   EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call of f ran its loop compiled and left at the print (a local first assigned a float inside the loop would have merged unequal kinds and left at the first float)";
   EXPECT_GT(jit.stats.values_boxed, 0u);
@@ -873,13 +885,13 @@ TEST(JitArith, AFloatParameterLiveAcrossPollsIsReadThroughTheMovedObjectUnderTor
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc = scenario(
       "function f(x, n) { s = 0.0; i = 0; while (i < n) { s = s + x * 2; t = x as int; i += 1; } print(s); return t; }\n"
-      "function g(x) { a = x; b = [1.5, 2.5]; r = f(a, 12); return r; }\n"
+      "function g(x) { a = x; r = f(a, 12); b = [a, a]; return r; }\n"
       "print(g(1.75)); print(g(3)); print(g(-0.5));\n");
   sc.torture = 1;
   sc.verify = 1;
   sc.script = true;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.heap_invalid_pointers, 0u);
   EXPECT_EQ(jit.stats.conversion_errors, 0u);
@@ -887,7 +899,7 @@ TEST(JitArith, AFloatParameterLiveAcrossPollsIsReadThroughTheMovedObjectUnderTor
   // And with the stack moving at every push.
   sc.moving = 1;
   Outcome plain2, jit2;
-  expect_same(sc, &plain2, &jit2);
+  expect_same_compiled(sc, &plain2, &jit2);
 }
 
 TEST(JitArith, ARebuildAtAnExitInTheMiddleOfAnOperationUnderTortureBoxesFromThePool) {
@@ -899,7 +911,7 @@ TEST(JitArith, ARebuildAtAnExitInTheMiddleOfAnOperationUnderTortureBoxesFromTheP
   sc.verify = 1;
   sc.script = true;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.heap_invalid_pointers, 0u);
   EXPECT_EQ(jit.stats.rebuild_failures, 0u);
@@ -913,7 +925,7 @@ TEST(JitArith, ACompiledCallBetweenFunctionsWithRawLocalsLiveBoxesBothFramesOnAn
       "print(mid(3, 1.5)); print(mid(2, 2)); print(mid(4, \"s\"));\n");
   sc.script = true;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_GE(jit.stats.calls, 1u);
   EXPECT_EQ(jit.stats.rebuild_failures, 0u);
@@ -924,7 +936,7 @@ TEST(JitArith, TheKindsOfAFunctionWithNoFloatAndNoCastAreWhatTheyWere) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc = scenario("function f(n) { s = 0; i = 0; while (i < n) { s = s + i * 2 - 1; i = i + 1; } return s; }\nprint(f(50));\n");
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.deopts, kMain);
   EXPECT_EQ(jit.stats.values_boxed, 0u);
