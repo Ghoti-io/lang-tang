@@ -167,6 +167,7 @@ static void discard(GLTANG_Execution * exec, GLTANG_JitFn * f) {
   }
   grcore_code_release(f->code);
   f->code = NULL;
+  f->max_converting = 0;
   f->state = GLTANG_JITFN_NEVER;
 }
 
@@ -228,6 +229,7 @@ GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword) 
 
 void gltang_jit_mark_never(GLTANG_Execution * exec, GLTANG_Jit * jit, GLTANG_JitFn * f) {
   (void)jit;
+  f->max_converting = 0;
   f->state = GLTANG_JITFN_NEVER;
   if (f->slot) {
     (void)grcore_entry_slot_refuse(exec->context, f->slot);
@@ -278,6 +280,8 @@ bool gltang_jit_compile_function(GLTANG_Execution * exec, uint64_t fword) {
   }
   f->code = handle;
   f->start = start;
+  f->max_converting = jc->max_converting;
+  jit->floaty = jit->floaty || jc->max_converting != 0;
   f->state = GLTANG_JITFN_COMPILED;
   ++exec->jit_stats.functions_compiled;
   exec->jit_stats.code_bytes_mapped += grjit_code_mapped_size(jc->code);

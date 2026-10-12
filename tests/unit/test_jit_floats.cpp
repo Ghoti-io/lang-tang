@@ -689,6 +689,29 @@ TEST(JitFloats, ANestedEntryThroughANativeExtendsTheReservationAndGivesItBack) {
   EXPECT_EQ(d.stats().conversion_errors, 0u);
 }
 
+TEST(JitFloats, ACompiledCallWhoseCalleeHoldsNoFloatDoesNoFloatBookkeepingAtAll) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The regression guard of the call path: a push and a pop of a callee with no raw
+  // float must cost one load and one compare, so across fib(15), every call of which is a
+  // compiled call, nothing is looked up, recorded or made. Counted, never timed.
+  Scenario sc;
+  sc.source = "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } print(fib(15));";
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_EQ(jit.raw, "610");
+  EXPECT_GE(jit.stats.calls, 1000u) << "the calls were compiled calls";
+  EXPECT_EQ(jit.stats.extension_lookups, 0u) << "no callee was looked up";
+  EXPECT_EQ(jit.stats.extension_records, 0u) << "no extension was recorded";
+  EXPECT_EQ(jit.stats.box_pool_made + jit.stats.reservation_peak + jit.stats.values_boxed, 0u);
+  // The control: a callee that holds a float is looked up, and its extension is recorded.
+  Scenario floats;
+  floats.source = "function leaf(a) { y = 2.5; return a + 1; }\nfunction mid(n) { s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\nprint(mid(30));\n";
+  Outcome fplain, fjit;
+  expect_same(floats, &fplain, &fjit);
+  EXPECT_GT(fjit.stats.extension_lookups, 0u);
+  EXPECT_GT(fjit.stats.extension_records, 0u);
+}
+
 TEST(JitFloats, AFloatFreeProgramExtendsByZeroAndMakesNoBox) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Driver d(

@@ -61,6 +61,17 @@ static const GLTANG_Function * function_of(const GLTANG_Execution * exec, uint64
   return program && GLTANG_FN_INDEX(fword) < program->function_count ? &program->functions[GLTANG_FN_INDEX(fword)] : NULL;
 }
 
+/** The record of a function, by its token, without the checks `gltang_jit_find_fn` makes for a caller that may create it. */
+static inline const GLTANG_JitFn * record_of(const GLTANG_Jit * jit, uint64_t fword) {
+  const uint32_t p = GLTANG_FN_PROGRAM(fword);
+  const uint32_t f = GLTANG_FN_INDEX(fword);
+  if (p >= jit->program_capacity) {
+    return NULL;
+  }
+  const GLTANG_JitProgram * program = &jit->programs[p];
+  return program->fns && f < program->count ? &program->fns[f] : NULL;
+}
+
 static uint32_t refuse_push(GLTANG_Jit * jit) {
   jit->refusal = GLTANG_REFUSAL_PUSH;
   return 1u;
@@ -102,17 +113,28 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
   // poll in between). A record that is not compiled, which only the test hook can
   // call, extends by zero, and a rebuild that then needed more is refused up front by
   // the core (and counted), never made short.
-  const GLTANG_JitFn * callee_fn = gltang_jit_find_fn(exec, jit, callee, false);
-  const GLTANG_JitCode * callee_code = callee_fn && callee_fn->state == GLTANG_JITFN_COMPILED && callee_fn->code ? grcore_code_payload(callee_fn->code) : NULL;
-  const size_t extension = callee_code ? callee_code->max_converting : 0;
-  if (!gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
-    return refuse_push(jit);
+  //
+  // A call whose callee holds no raw float, which is every call until some compiled
+  // function does, pays one load and one compare here and in the pop hook: no lookup,
+  // no record, no pool work (the statistics `extension_lookups` and `extension_records`
+  // stay zero, which a test holds it to). `max_converting` of a record is nonzero only
+  // while it is compiled.
+  size_t extension = 0;
+  if (jit->floaty) {
+    ++exec->jit_stats.extension_lookups;
+    const GLTANG_JitFn * callee_fn = record_of(jit, callee);
+    extension = callee_fn ? callee_fn->max_converting : 0;
+    if (extension != 0 && !gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
+      return refuse_push(jit);
+    }
   }
   GRCORE_Stack * stack = grcore_context_stack(context);
   GRCORE_FrameRef frame;
   const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
   if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
-    gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+    if (extension != 0) {
+      gltang_jit_retract_level(exec, jit->chain + 1u, callee);
+    }
     if (injected) {
       jit->test_failed_capacity = grcore_deopt_reservation_capacity(jit->reservation);
       jit->test_failed_extensions = jit->ext_count;
@@ -161,16 +183,20 @@ static void hook_pop(void * context) {
     return;
   }
   GRCORE_Stack * stack = grcore_context_stack(context);
-  // The function whose frame is coming off, read before it goes: the extension this
-  // pop gives back is the innermost one, made at this depth for this function, and no
-  // other (a push that extended by zero left none, so a pop of it gives back nothing).
-  const uint64_t callee = grcore_stack_frame_count(stack) ? grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION] : 0;
+  GLTANG_Jit * jit = exec->jit;
+  // The extension this pop gives back is the innermost one if it was made at this depth
+  // (at most one call is open at a depth, so a record at this depth is this call's, and a
+  // call that extended by zero left none). The test is on the records alone: a call with no
+  // raw float pays one compare here, and the stack is read only when there is a record to
+  // give back, to check that it is this callee's.
+  if (jit && jit->ext_count > jit->ext_floor && jit->ext[jit->ext_count - 1u].level == jit->chain) {
+    const uint64_t callee = grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION];
+    assert(jit->ext[jit->ext_count - 1u].fword == callee);
+    gltang_jit_retract_level(exec, jit->chain, callee);
+  }
   (void)grcore_stack_pop(stack);
-  if (exec->jit) {
-    gltang_jit_retract_level(exec, exec->jit->chain, callee);
-    if (exec->jit->chain) {
-      --exec->jit->chain;
-    }
+  if (jit && jit->chain) {
+    --jit->chain;
   }
 }
 

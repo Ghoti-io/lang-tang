@@ -131,6 +131,7 @@ bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level, ui
   jit->ext[jit->ext_count].fword = fword;
   jit->ext[jit->ext_count].cells = cells;
   ++jit->ext_count;
+  ++exec->jit_stats.extension_records;
   if (capacity > exec->jit_stats.reservation_peak) {
     exec->jit_stats.reservation_peak = capacity;
   }

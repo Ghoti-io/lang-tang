@@ -333,6 +333,8 @@ typedef struct GLTANG_JitStats {
   uint64_t box_pool_refusals;   ///< The same because the pool could not be topped up (the memory budget or the system refused the boxes).
   uint64_t conversion_errors;   ///< Conversions asked of a representation the engine does not convert, or with an empty pool. Zero in any correct run.
   uint64_t reservation_peak;    ///< The most cells the reservation has held at once.
+  uint64_t extension_lookups;   ///< Compiled calls whose push looked the callee's raw floats up (only once some compiled function holds any). Zero across a program with no float in compiled code.
+  uint64_t extension_records;   ///< Extensions of the reservation recorded (each entry or call whose callee holds raw floats). Zero across a program with no float in compiled code.
 } GLTANG_JitStats;
 
 /**

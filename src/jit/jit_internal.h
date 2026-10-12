@@ -92,6 +92,7 @@ typedef struct GLTANG_JitFn {
   uint32_t polls;
   uint8_t state;       ///< A ::GLTANG_JitFnState.
   uint8_t deopts;
+  uint32_t max_converting;  ///< The raw floats at one site of the compiled code, while `state` is COMPILED; 0 otherwise.
   GRCORE_Code * code;  ///< The cache's reference; compiled code's payload is a ::GLTANG_JitCode.
   GRCORE_EntrySlot * slot;  ///< Created when the function is first named; kept for the execution. Its state mirrors `state`.
   uintptr_t start;     ///< The registered range's start while `code` is registered; 0 otherwise.
@@ -185,6 +186,7 @@ typedef struct GLTANG_Jit {
   bool test_fail_rebuild;        ///< Test seam: the deopt hook's rebuild fails.
   uint64_t test_fail_extend_at;  ///< Test seam: the Nth nonzero extension of the reservation is refused (0: never).
   uint64_t test_fail_pool_at;    ///< Test seam: the top-up of the pool after the Nth nonzero extension is refused (0: never).
+  bool floaty;                   ///< Some compiled function holds raw floats (never cleared): until then a push and a pop do no float bookkeeping at all.
   uint64_t test_fail_stack_push_at; ///< Test seam: the Nth push hook that has extended the reservation finds its stack push refused (0: never).
   uint64_t test_stack_pushes;
   uint64_t test_failed_capacity; ///< The reservation's capacity and the extensions open right after that refusal was undone.
