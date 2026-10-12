@@ -1,0 +1,15 @@
+# 77 a loop-free float-returning function is expected to compile
+# defect: a loop-free float-returning function is expected to compile; the benchmark harness's own check (check_jit_expectation: a function the compile declines must be seen declined)
+# caught by: bench --smoke --only float-return-L0
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -1196,7 +1196,7 @@
+ /* Which rule a family function follows (see Policy). */
+ static Policy family_policy(FamilyKind k, unsigned loop) {
+   switch (k) {
+-    case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: return loop == 0u ? POL_DECLINED : POL_EXPECTED;
++    case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: (void)loop; return POL_EXPECTED;
+     case FK_E_DIV0: case FK_E_MOD: return POL_DECLINED; /* a loop-free function that ends at the exit that boxes a raw operand */
+     case FK_E_NANINT: case FK_E_STR: return POL_COUNTED;
+     default: return POL_NORMAL;

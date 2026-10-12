@@ -1346,9 +1346,12 @@ breaks nothing as not caught. Observed:
 | 65 bench-reference-one-off | the C reference of the benchmark harness's float loop is 1.0 off (the defect is in `bench/bench.c`, not in the library) | `bench --smoke` over the fresh-engine and the steady-state selection of that program, both of which must abort | the harness aborts (`setup failed`, exit 134) where the control passes |
 | 68 bench-integer-reference-one-off | the integer reference of the division loop is 1 off (in `bench/bench.c`) | `bench --smoke --only jit-intdiv-div3`: the integer path of the answer check | the harness aborts where the control passes |
 | 69 bench-steady-expectation-one-off | the steady-state cases expect the answer for n + 1 and the fresh-engine cases do not | `bench --smoke --only steady-float-cmp`: the steady-state answer check alone | the harness aborts |
-| 70 bench-family-expectation-one-off | the cast family's expected value is 1 off | `bench --smoke --only float-entry-cast-L0`: the family cases' exact expectation | the harness aborts |
+| 70 bench-family-expectation-one-off | the cast family's expected value is 1 off | `bench --smoke --only float-entry-cast-L1`: the family cases' exact expectation | the harness aborts |
 | 71 bench-compiled-row-is-interpreted | the compiled rows run at a threshold of zero | `bench --smoke --only jit-float-cmp`: a compiled row must have compiled and entered | the harness aborts |
-| 72 bench-discard-expectation-wrong | the family cases expect no discard | `bench --smoke --only steady-float-return-L0`: the number of functions discarded | the harness aborts |
+| 72 bench-discard-expectation-wrong | a function that fails for real is expected never to be discarded | `bench --smoke --only steady-float-exit-nanint`: the number of functions discarded | the harness aborts |
+| 76 bench-expected-exit-count-wrong | the exits that only box a raw float are expected one more than the calls | `bench --smoke --only steady-float-return-L1`: `exits_expected` is the number of calls | the harness aborts |
+| 77 bench-decline-not-expected | a loop-free float-returning function is expected to compile | `bench --smoke --only float-return-L0`: a function the compile declines must be seen declined | the harness aborts |
+| 78 bench-counted-exit-count-wrong | the top level's exit is expected not to count | `bench --smoke --only steady-float-entry-int-L1`: `exits_counted` is exactly the exits that count | the harness aborts |
 | 73 expected-exit-counts-toward-the-limit | the deopt hook counts the exit that boxes a raw float toward the discard limit | the looped float-returner that must stay compiled across fourteen calls (`JitArith.AFunctionWithALoopThatAlwaysEnds*`) | `functions_discarded` is 1, not 0 |
 | 74 static-decline-ignores-the-loop | the compile declines a function whose every path ends at that exit without asking whether it can loop | the same test | `functions_declined_expected` is 1 and `exits_expected` is 0 |
 | 75 static-decline-ignores-a-real-exit | the decline looks only at the returns, not at the real exits | the function with a real exit path beside a float return (`JitArith.AFunctionWithARealExitOnOnePath*`) | `functions_declined_expected` is 1 |
@@ -1364,7 +1367,7 @@ breaks nothing as not caught. Observed:
 `make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 75 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all seventy-four but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all seventy-seven but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.

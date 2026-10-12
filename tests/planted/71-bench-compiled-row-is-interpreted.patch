@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -570,7 +570,7 @@
+@@ -613,7 +613,7 @@
  }
  
  static void setup_jit_on(GLTANG_Execution * execution) {

@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -929,7 +929,7 @@
+@@ -973,7 +973,7 @@
    for (int64_t i = 0; i < (int64_t)n; i++) {
      s += i / 3;
    }

@@ -1,0 +1,15 @@
+# 78 the top level's exit is expected not to count
+# defect: the top level's exit is expected not to count; the benchmark harness's own check (check_jit_expectation: exits_counted is exactly the exits that count)
+# caught by: bench --smoke --only steady-float-entry-int-L1
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -356,7 +356,7 @@
+   want.compiled = p == POL_DECLINED ? 2 : 1;
+   want.discarded = 0;
+   want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
+-  want.counted = 1; /* the top level leaves once, at its first function declaration */
++  want.counted = 0; /* the top level leaves once, at its first function declaration */
+   if (p == POL_COUNTED) {
+     want.discarded = calls >= 8u ? 1 : 0;
+     want.counted += calls < 8u ? (int64_t)calls : 8;

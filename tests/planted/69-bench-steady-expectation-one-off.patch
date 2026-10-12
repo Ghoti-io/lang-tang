@@ -4,12 +4,12 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -1040,7 +1040,7 @@
+@@ -1094,7 +1094,7 @@
        "i = 0; while (i < %llu) { r = f(%llu); i = i + 1; } tick(); r;",
        p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
        (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);
 -  set_expectations(p, n);
 +  set_expectations(p, n + 1u);
-   /* A function that returns a float exits at every return, and the eighth exit discards it; the
-    * integer-returning programs exit nowhere. */
+   /* The float-returning programs exit at every return (an exit that does not count); the integer-returning
+    * programs exit nowhere; the accumulator that starts from 0 counts an exit in every call. */
    const uint64_t calls = which == 0 ? 1u : 1u + float_warm() + float_timed();

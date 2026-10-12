@@ -325,21 +325,64 @@ static void engine_close(Engine * e) {
  * (a call-heavy case prints them: the figure is only the compiled calls' if
  * calls were made, and no call between compiled functions left compiled code). */
 static GLTANG_JitStats last_jit_stats;
-/* What a case says its JIT did: -1 not checked, else for want_compiled 0 (the JIT must not have
- * compiled or entered anything) or 1 (something was compiled and entered, and nothing failed to
- * compile); want_discard is the exact number of functions discarded. A row labelled "compiled"
- * that silently ran in the interpreter would read as a ratio of 1.0; this makes it abort. */
-static int want_compiled = -1;
-static int want_discard = -1;
+/* What a case says its JIT did. Every compiled row is checked against the rule it follows:
+ *   NORMAL    compiled and entered, no exit but the top level's one (which counts);
+ *   EXPECTED  compiled and entered, and every call of the function leaves compiled code once at the
+ *             exit that only boxes a raw float: exits_expected is the number of calls, none counts, the
+ *             function is never discarded;
+ *   COUNTED   compiled and entered, and every call leaves at an exit that counts toward the limit
+ *             (a failed guard, a merge that leaves a raw source as an exit): the eighth discards it;
+ *   DECLINED  the compile declines the function (it has no loop and every path ends at the exit that only
+ *             boxes a raw float): never compiled, not a failure, not entered.
+ * An interpreted row compiled and entered nothing. A row labelled "compiled" that silently ran in the
+ * interpreter would read as a ratio of 1.0; this makes it abort. */
+typedef enum { POL_NORMAL, POL_EXPECTED, POL_COUNTED, POL_DECLINED } Policy;
+typedef struct {
+  int active;
+  int compiled; /* 0 interpreted, 1 compiled, 2 declined */
+  int64_t discarded;
+  int64_t expected;
+  int64_t counted;
+} JitWant;
+static JitWant want;
+static void want_none(void) { want.active = 0; }
+static void want_set(int jit_on, Policy p, uint64_t calls) {
+  want.active = 1;
+  if (!jit_on) {
+    want.compiled = 0;
+    want.discarded = want.expected = want.counted = 0;
+    return;
+  }
+  want.compiled = p == POL_DECLINED ? 2 : 1;
+  want.discarded = 0;
+  want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
+  want.counted = 1; /* the top level leaves once, at its first function declaration */
+  if (p == POL_COUNTED) {
+    want.discarded = calls >= 8u ? 1 : 0;
+    want.counted += calls < 8u ? (int64_t)calls : 8;
+  }
+}
 static void check_jit_expectation(const GLTANG_JitStats * st) {
-  if (want_compiled == 0 && (st->functions_compiled != 0 || st->entries != 0)) {
-    setup_failed("an interpreted case that compiled or entered compiled code");
+  if (!want.active) {
+    return;
   }
-  if (want_compiled == 1 && (st->compile_failures != 0 || st->functions_compiled == 0 || st->entries == 0)) {
-    setup_failed("a compiled case that did not compile and enter, or whose compile failed");
+  if (want.compiled == 0 && (st->functions_compiled != 0 || st->entries != 0 || st->functions_declined_expected != 0)) {
+    setup_failed("an interpreted case that compiled, entered or declined");
   }
-  if (want_discard >= 0 && st->functions_discarded != (uint64_t)want_discard) {
+  if (want.compiled == 1 && (st->compile_failures != 0 || st->functions_compiled == 0 || st->entries == 0 || st->functions_declined_expected != 0)) {
+    setup_failed("a compiled case that did not compile and enter, failed to compile or declined a function");
+  }
+  if (want.compiled == 2 && (st->compile_failures != 0 || st->functions_declined_expected != 1)) {
+    setup_failed("a case that must decline its function and did not (or failed to compile)");
+  }
+  if (st->functions_discarded != (uint64_t)want.discarded) {
     setup_failed("a case that discarded another number of functions than it must");
+  }
+  if (st->exits_expected != (uint64_t)want.expected) {
+    setup_failed("a case whose expected (box-for-the-consumer) exits are not the number of calls it must be");
+  }
+  if (st->exits_counted != (uint64_t)want.counted) {
+    setup_failed("a case whose counted exits are not the number it must be");
   }
 }
 #endif
@@ -879,10 +922,11 @@ static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return
  * at a threshold of one, so the first call includes the compile.
  *
  * A function that returns a float exits compiled code once at the return (compiled code
- * cannot allocate, AD-27), and the eighth exit discards the compiled function; so the
- * warm calls of a `return s;` program are the interpreter's after the discard. That is
- * the finding of the "ret" variants, and the "cast" variants (`return s as int;`, no
- * exit) are the steady state of the same loop that stays compiled. */
+ * cannot allocate, AD-27). That exit only boxes the value for its consumer: it is designed,
+ * does not count toward the discard limit, and the function stays compiled, so the warm
+ * calls of a `return s;` loop are compiled (the "cast" variants, `return s as int;`, have no
+ * exit at all). A function with no loop whose every path ends at such an exit is declined at
+ * the compile and runs in the interpreter. The harness asserts which rule each case follows. */
 
 typedef struct {
   const char * source; /* function f(n) { ... } */
@@ -993,6 +1037,17 @@ static const FloatProgram programs[] = {
   {"function f(n) { s = 0.0; i = 0; while (i < n) { s = s + (i as float); i = i + 1; } return s; }", 1, NULL, ref_cast_float},
 };
 
+/* Which rule a program follows (see Policy): the float-returning programs with a loop exit once per call at
+ * the return and are never discarded; the accumulator that starts from 0 leaves a raw source as an exit that
+ * counts; the others exit nowhere. */
+static Policy program_policy(int idx) {
+  switch (idx) {
+    case 0: case 3: case 4: case 11: return POL_EXPECTED;
+    case 2: return POL_COUNTED;
+    default: return POL_NORMAL;
+  }
+}
+
 static uint64_t float_n(void) { return smoke_mode ? 20000u : 1000000u; }
 static uint64_t float_steady_n(void) { return smoke_mode ? 1000u : 100000u; }
 static uint64_t float_warm(void) { return smoke_mode ? 2u : 10u; }
@@ -1021,11 +1076,10 @@ static uint64_t program_fresh(int idx, int jit_on, uint64_t iterations, double *
   char source[1024];
   snprintf(source, sizeof(source), "%s f(%llu);", p->source, (unsigned long long)n);
   set_expectations(p, n);
-  want_compiled = jit_on;
-  want_discard = 0; /* one call: no discard */
+  want_set(jit_on, program_policy(idx), 1u);
   uint64_t sink = run_source_with(source, iterations, elapsed, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0,
       jit_on ? setup_jit_on : setup_jit_off);
-  want_compiled = want_discard = -1;
+  want_none();
   clear_expectations();
   return sink;
 }
@@ -1041,14 +1095,13 @@ static uint64_t program_steady(int idx, int jit_on, int which, uint64_t iteratio
       p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
       (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);
   set_expectations(p, n);
-  /* A function that returns a float exits at every return, and the eighth exit discards it; the
-   * integer-returning programs exit nowhere. */
+  /* The float-returning programs exit at every return (an exit that does not count); the integer-returning
+   * programs exit nowhere; the accumulator that starts from 0 counts an exit in every call. */
   const uint64_t calls = which == 0 ? 1u : 1u + float_warm() + float_timed();
-  want_compiled = jit_on;
-  want_discard = (jit_on && p->is_float && calls >= 8u) ? 1 : 0;
+  want_set(jit_on, program_policy(idx), calls);
   uint64_t sink = steady_run_x(source, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0, jit_on ? 2 : 0, 4,
       which == 0 ? 0 : 2, which == 0 ? 1.0 : (double)float_timed(), iterations, elapsed);
-  want_compiled = want_discard = -1;
+  want_none();
   clear_expectations();
   return sink;
 }
@@ -1103,24 +1156,32 @@ typedef enum {
 } FamilyKind;
 
 static void family_function(FamilyKind k, unsigned loop, char * out, size_t size) {
+  /* A loop of 0 iterations is no loop at all (no backward jump in the code): the shape the compile
+   * declines when every path ends at an exit that only boxes a raw float. */
+  char lf[96] = "";
+  char li[96] = "";
+  if (loop != 0u) {
+    snprintf(lf, sizeof lf, "i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } ", loop);
+    snprintf(li, sizeof li, "i = 0; while (i < %u) { a = a + 1; i = i + 1; } ", loop);
+  }
   switch (k) {
     case FK_RET:
-      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } return a * 2.0; }", loop);
+      snprintf(out, size, "function g() { a = 1.5; %sreturn a * 2.0; }", lf);
       return;
     case FK_PRINT:
-      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } print(a * 2.0); return 0; }", loop);
+      snprintf(out, size, "function g() { a = 1.5; %sprint(a * 2.0); return 0; }", lf);
       return;
     case FK_CAST:
-      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } return (a * 2.0) as int; }", loop);
+      snprintf(out, size, "function g() { a = 1.5; %sreturn (a * 2.0) as int; }", lf);
       return;
     case FK_INT:
-      snprintf(out, size, "function g() { a = 1; i = 0; while (i < %u) { a = a + 1; i = i + 1; } return a * 2; }", loop);
+      snprintf(out, size, "function g() { a = 1; %sreturn a * 2; }", li);
       return;
     case FK_GLOBAL:
-      snprintf(out, size, "function g() { global gv; a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } gv = a * 2.0; return 0; }", loop);
+      snprintf(out, size, "function g() { global gv; a = 1.5; %sgv = a * 2.0; return 0; }", lf);
       return;
     case FK_ARG:
-      snprintf(out, size, "function h(x) { return 0; } function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } h(a * 2.0); return 0; }", loop);
+      snprintf(out, size, "function h(x) { return 0; } function g() { a = 1.5; %sh(a * 2.0); return 0; }", lf);
       return;
     case FK_E_DIV0: snprintf(out, size, "function g(x) { return x / 0.0; }"); return;
     case FK_E_NANINT: snprintf(out, size, "function g(x) { return x as int; }"); return;
@@ -1132,8 +1193,16 @@ static void family_function(FamilyKind k, unsigned loop, char * out, size_t size
 }
 
 static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0; }
-/* Whether every call of the function leaves compiled code at its consumer or its error. */
-static int family_exits_every_call(FamilyKind k) { return k == FK_RET || k == FK_PRINT || k == FK_GLOBAL || k == FK_ARG || (k >= FK_E_DIV0 && k <= FK_E_STR); }
+/* Which rule a family function follows (see Policy). */
+static Policy family_policy(FamilyKind k, unsigned loop) {
+  switch (k) {
+    case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: return loop == 0u ? POL_DECLINED : POL_EXPECTED;
+    case FK_E_DIV0: case FK_E_MOD: return POL_DECLINED; /* a loop-free function that ends at the exit that boxes a raw operand */
+    case FK_E_NANINT: case FK_E_STR: return POL_COUNTED;
+    default: return POL_NORMAL;
+  }
+}
+
 
 /* The statements that make the argument `av` before the first tick. 1000.0 times ten four
  * hundred times is an infinity. */
@@ -1215,10 +1284,9 @@ static uint64_t family_steady(FamilyKind k, unsigned loop, int jit_on, int which
   GLTANG_ValueKind kind = family_expectation(k, loop);
   static const double divisor[4] = {1.0, 7.0, 1.0, 0.0};
   const uint64_t calls = which == 0 ? 1u : which == 1 ? 8u : which == 2 ? 9u : 9u + family_after();
-  want_compiled = jit_on;
-  want_discard = (jit_on && family_exits_every_call(k) && calls >= 8u) ? 1 : 0;
+  want_set(jit_on, family_policy(k, loop), calls);
   uint64_t sink = steady_run_x(source, kind, 0, jit_on ? 2 : 0, 5, which, which == 3 ? (double)family_after() : divisor[which], iterations, elapsed);
-  want_compiled = want_discard = -1;
+  want_none();
   clear_expectations();
   return sink;
 }
@@ -1230,10 +1298,9 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
   family_function(k, loop, function, sizeof function);
   snprintf(source, sizeof source, "%s g();", function);
   GLTANG_ValueKind kind = family_expectation(k, loop);
-  want_compiled = jit_on;
-  want_discard = 0;
+  want_set(jit_on, family_policy(k, loop), 1u);
   uint64_t sink = run_source_with(source, iterations, elapsed, kind, 0, jit_on ? setup_jit_on : setup_jit_off);
-  want_compiled = want_discard = -1;
+  want_none();
   clear_expectations();
   return sink;
 }
@@ -1251,6 +1318,12 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
   static uint64_t tag##_s3_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 3, it, el); }
 
 FAMILY_FUNCTIONS(f_ret0, FK_RET, 0u)
+FAMILY_FUNCTIONS(f_ret1, FK_RET, 1u)
+FAMILY_FUNCTIONS(f_print1, FK_PRINT, 1u)
+FAMILY_FUNCTIONS(f_global1, FK_GLOBAL, 1u)
+FAMILY_FUNCTIONS(f_arg1, FK_ARG, 1u)
+FAMILY_FUNCTIONS(f_cast1, FK_CAST, 1u)
+FAMILY_FUNCTIONS(f_int1, FK_INT, 1u)
 FAMILY_FUNCTIONS(f_ret100, FK_RET, 100u)
 FAMILY_FUNCTIONS(f_ret10k, FK_RET, 10000u)
 FAMILY_FUNCTIONS(f_print0, FK_PRINT, 0u)
@@ -1319,10 +1392,9 @@ static uint64_t request_pattern(uint64_t slice, int jit_on, uint64_t iterations,
   snprintf(source, sizeof source, "%s s = 0; i = 0; while (i < %llu) { s = s + g(); i = i + 1; } s;", function, (unsigned long long)calls);
   have_expected_integer = 1;
   expected_integer = (int64_t)(3u * calls);
-  want_compiled = jit_on;
-  want_discard = 0;
+  want_set(jit_on, POL_NORMAL, 1u);
   uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, slice, jit_on ? setup_jit_on : setup_jit_off);
-  want_compiled = want_discard = -1;
+  want_none();
   have_expected_integer = 0;
   if (total_pauses < iterations) {
     setup_failed("a sliced run that did not pause at least once in every run");
@@ -1506,6 +1578,12 @@ static const Case cases[] = {
     PROGRAM_ROWS("jit-float-cast-int", "steady-float-cast-int", p_cast_int, 3u, 20u, 2u, 8u)
     PROGRAM_ROWS("jit-float-cast-float", "steady-float-cast-float", p_cast_float, 3u, 20u, 2u, 8u)
     FAMILY_ROWS("float-return-L0", f_ret0, 500u)
+    FAMILY_ROWS("float-return-L1", f_ret1, 500u)
+    FAMILY_ROWS("float-print-L1", f_print1, 500u)
+    FAMILY_ROWS("float-store-L1", f_global1, 500u)
+    FAMILY_ROWS("float-arg-L1", f_arg1, 500u)
+    FAMILY_ROWS("float-entry-cast-L1", f_cast1, 500u)
+    FAMILY_ROWS("float-entry-int-L1", f_int1, 500u)
     FAMILY_ROWS("float-return-L100", f_ret100, 200u)
     FAMILY_ROWS("float-return-L10000", f_ret10k, 8u)
     FAMILY_ROWS("float-print-L0", f_print0, 500u)
@@ -1598,11 +1676,13 @@ int main(int argc, char ** argv) {
     if (strncmp(cases[c].name, "jit-float-", 10) == 0 || strncmp(cases[c].name, "jit-intdiv-", 11) == 0
         || strncmp(cases[c].name, "steady-float-", 13) == 0 || strncmp(cases[c].name, "float-", 6) == 0) {
       printf("  %s: entries %llu, deopts %llu, values_boxed %llu, box_pool_made %llu, functions_compiled %llu, functions_discarded %llu, compile_failures %llu, "
-             "host_returns %llu, heap collections %llu, heap allocations %llu\n",
+             "exits_expected %llu, exits_counted %llu, declined_expected %llu, host_returns %llu, heap collections %llu, heap allocations %llu\n",
           cases[c].name, (unsigned long long)last_jit_stats.entries, (unsigned long long)last_jit_stats.deopts,
           (unsigned long long)last_jit_stats.values_boxed, (unsigned long long)last_jit_stats.box_pool_made,
           (unsigned long long)last_jit_stats.functions_compiled, (unsigned long long)last_jit_stats.functions_discarded,
-          (unsigned long long)last_jit_stats.compile_failures, (unsigned long long)last_pauses,
+          (unsigned long long)last_jit_stats.compile_failures, (unsigned long long)last_jit_stats.exits_expected,
+          (unsigned long long)last_jit_stats.exits_counted, (unsigned long long)last_jit_stats.functions_declined_expected,
+          (unsigned long long)last_pauses,
           (unsigned long long)last_heap_collections, (unsigned long long)last_heap_allocations);
     }
     if (strncmp(cases[c].name, "fib-", 4) == 0) {

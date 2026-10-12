@@ -1,10 +1,10 @@
 # 70 the expectation of the cast family is 1 off
 # defect: the expectation of the cast family is 1 off; the benchmark harness's own check (family_expectation: the exact value of the family cases)
-# caught by: bench --smoke --only float-entry-cast-L0
+# caught by: bench --smoke --only float-entry-cast-L1
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -1164,7 +1164,7 @@
+@@ -1233,7 +1233,7 @@
          a = a + 1.0;
        }
        have_expected_integer = 1;

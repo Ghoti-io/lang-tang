@@ -1,0 +1,15 @@
+# 76 the exits that only box a raw float are expected to be one more than the calls
+# defect: the exits that only box a raw float are expected to be one more than the calls; the benchmark harness's own check (check_jit_expectation: exits_expected is exactly the number of calls)
+# caught by: bench --smoke --only steady-float-return-L1
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -355,7 +355,7 @@
+   }
+   want.compiled = p == POL_DECLINED ? 2 : 1;
+   want.discarded = 0;
+-  want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
++  want.expected = p == POL_EXPECTED ? (int64_t)calls + 1 : 0;
+   want.counted = 1; /* the top level leaves once, at its first function declaration */
+   if (p == POL_COUNTED) {
+     want.discarded = calls >= 8u ? 1 : 0;
