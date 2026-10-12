@@ -59,6 +59,16 @@ uint64_t bits_of(double d) {
   return u;
 }
 
+/// `expect_same`, and the run was not blinded: no function of the program was declined at the compile (a loop-free function
+/// whose every path ends at a designed exit is), because a declined function runs in the interpreter and proves nothing about
+/// compiled code. The tests that mean to decline use `expect_same` itself.
+void expect_same_compiled(const Scenario & sc, Outcome * interpreter = nullptr, Outcome * jit = nullptr) {
+  Outcome a, b;
+  expect_same(sc, interpreter ? interpreter : &a, jit ? jit : &b);
+  const Outcome & seen = jit ? *jit : b;
+  EXPECT_EQ(seen.stats.functions_declined_expected, 0u) << "a function of the program was declined, so the interpreter ran it";
+}
+
 /// A run the test drives itself, so that the execution can be asked questions
 /// before and after: one program, a threshold, the instruments, and (optionally) a
 /// script that runs at every poll.
@@ -185,8 +195,8 @@ TEST(JitFloats, ACompiledLoopThatCarriesAFloatAllocatesNothingPerIterationAndBox
     return sc;
   };
   Outcome plain_short, jit_short, plain_long, jit_long;
-  expect_same(with("200"), &plain_short, &jit_short);
-  expect_same(with("5000"), &plain_long, &jit_long);
+  expect_same_compiled(with("200"), &plain_short, &jit_short);
+  expect_same_compiled(with("5000"), &plain_long, &jit_long);
   ASSERT_FALSE(HasFailure());
   EXPECT_GE(jit_long.stats.entries, 1u);
   EXPECT_EQ(jit_long.stats.slow_polls, 0u) << "nothing was pending: every poll was the fast path";
@@ -213,7 +223,7 @@ TEST(JitFloats, TheSlopeIsStillZeroWithAHandlerPendingAtEveryPoll) {
     sc.source = std::string("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nprint(f(") + lengths[which] + "));\n";
     sc.script = true;  // a request stays pending, so every poll takes the slow path
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure());
     allocations[which] = jit.heap_allocations;
     boxed[which] = jit.stats.values_boxed;
@@ -236,7 +246,7 @@ TEST(JitFloats, TheSlopeIsStillZeroUnderTortureAndVerify) {
     sc.verify = 1;
     sc.script = true;
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure());
     allocations[which] = jit.heap_allocations;
     EXPECT_EQ(jit.stats.values_boxed, 2u);
@@ -474,7 +484,7 @@ TEST(JitFloats, AFuelScopeThatRunsOutInsideCompiledCodeWithFloatsLiveUnwindsLike
   t.policy = GLTANG_SCOPE_EMPTY;
   sc.parts.push_back(t);
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   EXPECT_GE(jit.stats.refused_unwinds, 1u);
   EXPECT_EQ(jit.stats.values_boxed, 0u) << "the scope's unwind boxed nothing";
   EXPECT_EQ(jit.stats.conversion_errors, 0u);
@@ -514,7 +524,7 @@ TEST(JitFloats, EveryInstructionThatReadsARawOperandIsAnExitWithTheOperandInTheF
         "function f(n) { global g; x = 1.5; i = 0; while (i < n) { i = i + 1; } " + consumer + " return i; }\n"
         "print(f(5)); print(f(0));\n";
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     EXPECT_GE(jit.stats.deopts, 1u) << consumer << ": the consumer is an unconditional exit";
     EXPECT_GE(jit.stats.values_boxed, 1u) << consumer << ": the operand was boxed by the rebuild";
     EXPECT_EQ(jit.stats.compile_failures, 0u) << consumer;
@@ -535,7 +545,7 @@ TEST(JitFloats, ARawValueMovedThroughLocalsAndDupsReachesItsConsumerWithTheSameB
       "print(f(30)); print(f(0));\n";
   sc.script = true;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   EXPECT_GE(jit.stats.values_boxed, 4u);
   EXPECT_EQ(jit.stats.conversion_errors, 0u);
 }
@@ -565,7 +575,7 @@ TEST(JitFloats, AMergeOfUnequalKindsIsCompiledWithNoRawSlotAndAMergeOfEqualKinds
     Scenario sc;
     sc.source = c.source;
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_compiled(sc, &plain, &jit);
     Driver d(c.source, 1, false);
     ASSERT_TRUE(d.ok());
     ASSERT_TRUE(d.run());
@@ -609,7 +619,7 @@ TEST(JitFloats, AGuardThatFailsAtTheBottomOfAChainBoxesEachFramesValuesOnceAndTh
   Scenario ref;
   ref.source = kChain;
   Outcome plain, jit;
-  expect_same(ref, &plain, &jit);
+  expect_same_compiled(ref, &plain, &jit);
   Driver d(kChain, 1, true);
   ASSERT_TRUE(d.ok());
   std::vector<Seen> seen;
@@ -679,7 +689,7 @@ TEST(JitFloats, ANestedEntryThroughANativeExtendsTheReservationAndGivesItBack) {
   sc.source = source;
   sc.before = [](Context & c) { c.add_native_library(); };
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   Driver d(source, 1, true, 0, 0, 0, true);
   ASSERT_TRUE(d.ok());
@@ -711,7 +721,7 @@ TEST(JitFloats, ACompiledCallWhoseCalleeHoldsNoFloatDoesNoFloatBookkeepingAtAll)
   Scenario sc;
   sc.source = "function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); } print(fib(15));";
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   EXPECT_EQ(jit.raw, "610");
   EXPECT_GE(jit.stats.calls, 1000u) << "the calls were compiled calls";
   EXPECT_EQ(jit.stats.extension_lookups, 0u) << "no callee was looked up";
@@ -721,7 +731,7 @@ TEST(JitFloats, ACompiledCallWhoseCalleeHoldsNoFloatDoesNoFloatBookkeepingAtAll)
   Scenario floats;
   floats.source = "function leaf(a) { y = 2.5; return a + 1; }\nfunction mid(n) { s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\nprint(mid(30));\n";
   Outcome fplain, fjit;
-  expect_same(floats, &fplain, &fjit);
+  expect_same_compiled(floats, &fplain, &fjit);
   EXPECT_GT(fjit.stats.extension_lookups, 0u);
   EXPECT_GT(fjit.stats.extension_records, 0u);
 }
@@ -768,7 +778,7 @@ TEST(JitFloats, ARefusedExtensionAtAnEntryMeansTheFunctionIsNotEnteredThisTimeAn
   Scenario sc;
   sc.source = kRefusal;
   Outcome plain, control;
-  expect_same(sc, &plain, &control);
+  expect_same_compiled(sc, &plain, &control);
   sc.before = [](Context & c) { gltang_vm_set_float_test_switches_unchecked(c.execution, 1, 0); };
   Outcome refused = run(sc, 1);
   ASSERT_TRUE(refused.created);
@@ -1339,7 +1349,7 @@ TEST(JitFloats, AFunctionWhoseBeginningIsAFloatAndWhoseMergeConflictsIsCompiledE
   Scenario sc;
   sc.source = source;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   EXPECT_GE(jit.stats.functions_compiled, 1u);
   EXPECT_GE(jit.stats.entries, 1u) << "not declined";
   Driver d(source, 1, false);
@@ -1439,7 +1449,7 @@ TEST(JitFloats, TheFirstFloatFunctionCompiledMidChainLeavesTheEarlierPushesWithN
   Scenario sc;
   sc.source = source;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   Driver d(source, 1, true);
   ASSERT_TRUE(d.ok());
@@ -1479,7 +1489,7 @@ TEST(JitFloats, AnEntryExtensionIsNotTakenByThePopOfAFloatFreeCallAtTheSameDepth
   Scenario sc;
   sc.source = source;
   Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
+  expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   Driver d(source, 1, true);
   ASSERT_TRUE(d.ok());
