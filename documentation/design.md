@@ -1343,6 +1343,7 @@ breaks nothing as not caught. Observed:
 | 62 nan-divisor-read-as-zero | the divide guard is "< 0 or > 0", which a NaN fails | the division by NaN row (`JitArith.ADivisionByNaNOrInfinity*`) | `x / nan` exits where it should be compiled |
 | 63 modulo-zero-divisor-guard-removed | `REM_S` with no zero-divisor guard: the verifier refuses the function | the modulo rows (`JitArith.IntegerDivisionAndModulo*`) | `compile_failures` is not 0 |
 | 64 neg-compare-cast-mod-div-add-no-fuel | `NEG`, the float comparisons, both casts, `%` and integer `/` charge nothing | the fuel comparison inside every `expect_same` (cast, division, fuel-parity rows), each removal also checked by hand | the compiled run's fuel is less than the interpreter's |
+| 65 bench-reference-one-off | the C reference of the benchmark harness's float loop is 1.0 off (the defect is in `bench/bench.c`, not in the library) | `bench --smoke`: every program's answer is checked against its reference inside the case | the harness aborts (`setup failed`, exit 134) where the control passes |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1350,10 +1351,10 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 64 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 65 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all sixty-three but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all sixty-four but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2031,11 +2032,32 @@ casts over a raw double (the next section):
   a slow-path poll that continues, convert nothing, and the poll helper still touches no
   guest frame.
 
-*Rejected:* in-word doubles and NaN-boxing (Tang's value representation is unchanged, and
-every pointer is 48 bits); a `convert` that allocates from the heap under a no-collection
-flag (it can still fail); boxing at every poll (an allocation per iteration of every float
-loop); a dynamic tag in place of the static kinds (a branch on every access, and a frame
-state that cannot say what a slot is). The full record is story 8's.
+*Rejected (the record of this decision, AD-27; `runtime-core`'s
+"Representation-tagged frame state" and `runtime-jit`'s "Floats and division across the three
+backends" give the other libraries' parts and are not repeated here):*
+
+- *In-word doubles (NaN-boxing, or a double with a low-bit tag).* Tang's value representation does
+  not change: every pointer is 48 bits and the heap's codec describes a low-bit tag and mask, not a
+  NaN pattern, so packing a double into the value word would change how every value in the library
+  is read, tested and traced, for one type, and every `is it a pointer` test in the interpreter, the
+  collector and compiled code would grow a case. A float stays a heap object outside compiled code
+  and is raw only inside it.
+- *Allocation inside compiled code.* An allocating helper for each float operation, or a `convert`
+  that allocates from the heap under a no-collection flag, cannot be what a rebuild uses: an
+  allocation can still fail (the memory budget, the system), and a rebuild that has written one slot
+  must not be able to fail. A GC point inside a straight-line float body would also need a stack map
+  with a raw value live across it, which the format does not express. The boxes are made ahead of
+  time, where a refusal can be answered (the pool, above).
+- *Boxing at every poll.* A poll with nothing pending pays a load, a test and a branch and nothing
+  more; boxing the live raw values at each poll is an allocation per iteration of every float loop.
+  Conversion happens at a rebuild.
+- *A dynamic tag in place of the static kinds* (a branch on every access, and a frame state that
+  cannot say what a slot is). A representation as another `GRCORE_SlotKind`, a bit-copying default
+  `convert`, a format-version bump, floats kept in vector registers between operations and the
+  callee-saved FP registers are `runtime-core`'s and `runtime-jit`'s to record, where they are.
+
+The price of the decision is what "The exits that remain, and why" lists, and "Floats, measured"
+measures: a float that has to become a value word is an exit.
 
 **Float and division operations compiled (spec-runtime-float story 7, CAP-5).** `+ - * /`,
 unary minus, the six comparisons, `as int` and `as float` over a raw double, over a small
@@ -2089,7 +2111,7 @@ over small integers. The rules:
   no float constant, no cast to float, no cast to int and no `/` or `%` is emitted as before; integer `/` and `%` are inline now, and an `as int` of a value word declares the two `F64` temporaries (`need_tmp_f`) even when no slot is raw (the temporaries are declared exactly when some slot is ever raw, or a reachable `CAST` to int exists). A float that reaches a
   consumer that is not an operation (`print`, `return`, a call argument, a store to a global,
   truthiness, `as string`, `%`) is still an exit at that instruction, counted toward the
-  discard limit like any unconditional exit (story 8's benchmark measures the float-return case). So is a comparison of a raw float with null or a string (`x == null`, `x != "a"`, `x < "a"`): the interpreter answers (false, true, or "not supported"), but compiled code compares only numbers, so the unbox guard fails and the exit counts as a guard exit (`JitArith.ComparingARawFloatWithNullOrAString*` asserts it).
+  discard limit like any unconditional exit ("Floats, measured" measures the float-return case). So is a comparison of a raw float with null or a string (`x == null`, `x != "a"`, `x < "a"`): the interpreter answers (false, true, or "not supported"), but compiled code compares only numbers, so the unbox guard fails and the exit counts as a guard exit (`JitArith.ComparingARawFloatWithNullOrAString*` asserts it).
 
 *Rejected:* speculating that a `REF`-`REF` site is float-float with no feedback (wrong for every
 integer loop; each wrong guess exits the other kind); compiling two variants and choosing by
@@ -2097,8 +2119,33 @@ feedback (a different story); caching an unboxed operand in a raw register (it w
 invalidation story for every assignment, call and poll, and buys one load); a finer merge
 demotion (it would force the float producer into a `REF` slot, an exit at the store every
 iteration, which the blunt rule gives for the same shape); compiled truthiness of a raw float and
-`as bool` (each would be one `FCMP NE x, 0.0`: an easy later addition, not in CAP-5). The full
-record is story 8's.
+`as bool` (each would be one `FCMP NE x, 0.0`: an easy later addition, not in CAP-5).
+
+#### The exits that remain, and why
+
+Everything below leaves compiled code at the instruction (a guard exit, counted toward the discard limit
+of eight, with the frame state at that instruction) and lets the interpreter do the operation. Each is
+marked **structural** (compiled code cannot allocate, AD-27: the operation's result or its operand has to
+be a value word, a heap object or an error, so no later story removes it without changing the design) or
+**unimplemented** (a later story could compile it, with the cost and the reason given).
+
+| Exit | Why it leaves | |
+| --- | --- | --- |
+| A raw float reaching `print`, `return`, a call argument (a guest function or a native), a store to a global, an element or a member | the consumer wants a value word, and making one is an allocation | structural |
+| `as string` of anything | the result is a string object | structural |
+| An error: float `/` by zero, `as int` of a NaN or of a value outside `[-2^59, 2^59)`, a string, array, map or boolean operand of a float operation, `%` with a raw operand ("not supported") | the interpreter's answer is an error value, an object | structural |
+| Two `REF` operands (`a * b` of two parameters) | the kind of the result would depend on the run-time types of two unknown words: a raw result needs one operand statically raw, and otherwise it would have to be a boxed result (an allocation) or carry a dynamic tag (rejected) | structural without type feedback; with feedback, unimplemented (a different story) |
+| A float local first assigned inside a loop, or assigned values of different kinds on the two arms of a join | the blunt merge rule: the slot is a value word, so the producer would box at every store | unimplemented (a finer merge demotion was rejected: it would force the float producer into a `REF` slot, an exit at the store every iteration, which the blunt rule gives for the same shape) |
+| Truthiness of a raw float (`if (x)`), `as bool` | one `FCMP NE x, 0.0` would do | unimplemented |
+| A boxed-integer operand (an integer outside the small range) | the unbox reads a small integer or a float and exits on a boxed integer; a load of its 64 bits would do | unimplemented |
+| A comparison of a raw float with `null` or a string | the interpreter answers (false, true, or "not supported"); compiled code compares numbers only, so the unbox guard fails (counted as a guard exit) | unimplemented for `null` (the answer is constant), structural for a string (the error is an object) |
+
+`%` of two small integers, `/` of two small integers, and `+ - * /`, the six comparisons, unary minus and
+the two casts over raw operands are compiled and are not in the table.
+
+The first row is the one with a price, and "Floats, measured" measures it: a function that ends in a float
+return (or a print of one) exits at that instruction at every call, and the eighth exit discards the
+function.
 
 ### Why this and not something else
 
@@ -2196,6 +2243,8 @@ First measurements (`make bench` on an Intel Core 7 150U, gcc 14.2 -O2, release,
 | what the JIT's presence costs a run that never tiers up (the same case, `JIT=yes` with the default threshold against `JIT=no`, alternating) | loops and string and array building: +2 to +5% (a counter on each poll of a function that is not the main program's top level, and the registration of the tier-up handler at creation); native calls, `use` and the error list within the noise |
 | `fib(15)`, 1,973 calls, and `fib(22)`, 57,313 | **Milestone 1's defect, and its repair (spec-runtime-calls story 8).** With every `CALL` an exit the JIT cost: story 15 measured `fib(15)` 12% slower than interpreted and `fib(22)` 1.2% slower. Compiled calls reverse that; the figures, with their instrument, machine and date, are recorded once in "Calls, measured", below, and are not repeated here |
 
+**Re-measured on the final tree.** The figures in this table are story 15's, from an Intel Core 7 150U with GCC 14, and are not comparable with a run on another machine. The same cases on the EVO-X2 (GCC 16.2.0, 2026-10-11, `c2ed592`, minimum of five runs, "Floats, measured" has the instrument): the 10-million-iteration integer loop 225.0 ms interpreted (22.5 ns an iteration) and 81.4 ms compiled (8.1 ns): **2.8 times faster** (3.2 on the Intel machine), and unchanged by the float work (the story-10 lang-tang on the same libraries reads 81.4 ms too); four statements an iteration 100.3 ms and 43.1 ms, 2.3 times (2.6); a typical small function run once 0.42 us interpreted and 73.8 us with a threshold of one (0.52 and 76.4). The `fib` row is "Calls, measured" and its re-measurement.
+
 The gain is where the supported set is: a hot loop over small integers and booleans, called often enough to be entered, or entered once at a function's start, and calls between declared functions. A loop in a function that is called once stays in the interpreter for that call (no on-stack replacement), and the main program's top level is never counted past its entry poll for the same reason. What a template-heavy program costs: a template call is an exit, so the interpreter runs the template and enters its function 0 compiled only when the threshold covers it; that is the cost the spec recorded as accepted, and "Calls, measured" has the figure of a template called 200 times.
 
 ### Calls, measured (spec-runtime-calls, CAP-6, AD-26)
@@ -2206,8 +2255,8 @@ This is the one place the call-heavy figures are recorded. The other libraries p
 
 | Case | Interpreted | Compiled | Compiled, calls off (milestone 1) |
 | --- | --- | --- | --- |
-| `fib(15)`, 1,973 calls | 147.0 us (10.9) | **132.3 us (9.8)** | 171.9 us (10.0) |
-| `fib(22)`, 57,313 calls | 4,178.9 us (402.1) | **2,682.8 us (248.3)** | 4,240.6 us (379.9) |
+| `fib(15)`, 1,973 calls | 147.0 us (10.9) | **132.3 us (9.8)** (150.5 us (6.5) on 2026-10-11, `c2ed592`: see "Integer-only functions are unchanged by the float work") | 171.9 us (10.0) |
+| `fib(22)`, 57,313 calls | 4,178.9 us (402.1) | **2,682.8 us (248.3)** (3,319.7 us (146.2) on 2026-10-11) | 4,240.6 us (379.9) |
 | a million library calls in a loop of one function (`jit-native-call-1M-*`; "off" is natives switched off) | 59.3 ms (6.3) | **41.9 ms (4.2)** | 61.6 ms (5.3) |
 | a template called 200 times, three prints each (`run-template-call-200`) | 88.4 us (5.4): a template call is an exit, so the template runs in the interpreter and this is the figure | n/a | n/a |
 | a native called 1,000 times (`run-native-call-1000`), interpreter | 60.9 us (6.2) | n/a | n/a |
@@ -2217,6 +2266,8 @@ This is the one place the call-heavy figures are recorded. The other libraries p
 **Compiled `fib` is faster than interpreted, and the call between compiled functions is not an exit.** `fib(15)` is **10% faster** compiled (132.3 against 147.0 us; the gain, 14.7 us, is larger than the larger spread, 10.9 us) and `fib(22)` **36% faster** (2,682.8 against 4,178.9 us; 1,496 us against a spread of 402). With no call site compiled, which is what milestone 1 did, `fib(15)` is 17% slower than interpreted and `fib(22)` 1.5% slower, within its spread. `fib(15)` pays the compile once, inside the figure. The per-call cost: 4,178.9 us over 57,313 calls is 73 ns a call interpreted and 47 ns compiled, a compiled call being 64% of an interpreted one. The statistics the harness prints after each `fib` case, the same in all five runs: `fib(15)` 1,764 compiled calls and `fib(22)` 57,096 (the first call of each, and the callee entered from the interpreter, are not compiled calls), **call exits 0** in all four classes (remembered, push refused, callee guard, native stack), no compile at a call (the interpreter's tier-up compiled `fib` first), deepest chain 12 and 19, no hook handed an argument it refuses. The success signal's "no exit at any call between compiled functions" is asserted, not only printed: `JitCalls.ALongCompiledRunOfFib...` in `tests/unit/test_jit_calls.cpp` requires `exits(stats)` to be zero at `fib(22)` (`fib(14)` under the heavy instruments), and planted defect 31 (the push hook refuses once the chain is eight deep, which changes no output and only the count) fails it, with the control passing. "Faster compiled than interpreted" is a recorded figure, not an asserted budget; no numeric budget is asserted in a test. The other two halves of the success signal have tests of their own and are not duplicated: the pause fifty compiled frames down that resumes on another thread (`JitCalls.AChainPausedFiftyFramesDownResumesOnAnotherThread`, with the single-thread `...APauseFiftyFramesDown...`, in `test_jit_calls.cpp`) and the frame differential at every poll over the call-heavy corpus (`test_observer.cpp`).
 
 **Against the figures recorded before (story 8, GCC 14, the same machine, five runs).** `fib(15)` interpreted 146.4 us (spread 9.0), compiled 129.9 (10.6), calls off 170.0; `fib(22)` interpreted 4,252 us (462), compiled 2,664 (183), calls off 4,311. Now: 147.0, 132.3, 171.9 and 4,179, 2,683, 4,241. Every difference is inside the spread of the run it is compared with (the largest, `fib(15)` compiled, is 2.4 us against 10.6), so none is a change; the compiler is the one variable that moved (GCC 14 then, GCC 16.2 now), and that compiled `fib(15)` reads 10% faster here against 11% there is the same finding. The 12% and 1.2% of milestone 1 (story 15) are from an Intel Core 7 150U, a different machine: on the EVO-X2 the same behaviour (calls off) is 17% and 1.5% slower than interpreted, so the two machines are not one measurement.
+
+**Re-measured on the final tree (2026-10-11, `c2ed592`, five runs, the same machine, compiler and flags).** The interpreter, the calls-off case, the template and native-call rows, and every row of the "Benchmarks" table that the float work did not touch, read as they did (below), but **compiled calls are slower than they were**: `fib(15)` compiled 150.5 us (spread 6.5) against 132.3, now 3% *slower* than the interpreted 145.7 us with a fresh engine (the story-10 bar "faster by more than the spread" fails for `fib(15)` fresh), and `fib(22)` compiled 3,319.7 us (146.2) against 2,682.8, 21% faster than interpreted (4,204.1) where it was 36%. The steady-state rows moved the same way (`fib(15)` warm compiled 114.3 us, median, against 103.3; `fib(22)` 3,308 against 2,956; the interpreted warm calls read 148.3 and 4,295 against 168.5 and 4,959, because the earlier run was on a loaded box as its own paragraph says, so only the compiled-over-interpreted ratio is compared: 1.30 and 1.30 now, 1.63 and 1.68 then). The cause is in lang-tang and is bisected in "Integer-only functions are unchanged by the float work" (the commit, `948d91f`; the cause inside it is not identified). Everything above that quotes "10% faster" or "36% faster" is the 2026-10-09 measurement.
 
 **On real arm64 (a Raspberry Pi 4, Cortex-A72, Linux 6.18, GCC 16.2.0 aarch64 `-O2 -g` release in the build image `suite/Containerfile.build.arm64`, through `tools/rpi`; `WITH_DEBUG=no`, because the image has no bison or flex and the generated parser and scanner were carried over; the same commit; 2026-10-09; three runs of the same cases in turn, the minimum and the spread in brackets).** The television's controller, with nothing else of ours running. `fib(15)`: interpreted 949.0 us (76.3), compiled 992.4 (5.8), calls off 1,172.8 (9.4). **Compiled `fib(15)` is not faster on this machine, and the story's own bar fails there.** The bar for this case (compiled faster by more than the larger spread, as for the EVO-X2) is not met: at the minima compiled is 4.6% *slower* (992.4 against 949.0 us), and at the medians (the lowest median of the three runs: 965.1 us interpreted, 995.8 compiled) it is 3.2% slower, so on both measures the sign is against the JIT, and the interpreted case's spread (76.3 us) is larger than the difference (43.4 us) only because one interpreted run was slow. Three runs were taken, not five, so the spread is a poor estimate; the figure was not re-run. Whether the one-time cost inside the compiled figure explains it was not measured in this row, and is measured in "Steady state", below, which says that it does. The calls-off case, milestone 1's behaviour, is 24% slower than interpreted. `fib(22)`, where the compile is a small part: interpreted 27,919 us (153), **compiled 20,496 (260), 27% faster**, calls off 28,060 (44), 0.5% slower than interpreted; 487 ns a call interpreted and 358 ns compiled (73% of an interpreted call). The counters are the EVO-X2's: 1,764 and 57,096 compiled calls, call exits 0, deepest chain 12 and 19. A million library calls: 501.3 ms interpreted (19.2), **360.6 compiled (24.8), 28% faster**, 523.5 with natives off (9.6); story 9 recorded 514, 360 and 512 on the same machine. `run-native-call-1000` 508.8 us (25.7) and `run-template-call-200` 772.3 us (18.5). The success signal ("`fib(22)` faster compiled than interpreted") therefore holds on both machines; the `fib(15)` ratio holds on the EVO-X2 and does not on the Pi.
 
@@ -2291,6 +2342,232 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
  794  call   <pop hook>
 ```
 
+### Floats, measured (spec-runtime-float, CAP-6, AD-26)
+
+This is the one place the figures of the compiled float and division operations are recorded. `runtime-jit`'s "Benchmarks" has the micro-figures of the same operations against C and points here for the engine's; `runtime-core` has no case of its own for a rebuild and points here for what one costs.
+
+**The instrument and the machine.** `bench/bench.c` (the `jit-float-*`, `jit-intdiv-*`, `steady-float-*`, `float-*` families; the cases the harness prints are named below). Built in the build image (`ghoti-build:gcc16`: GCC 16.2.0, `-O2 -g -std=c17 -ffp-contract=off`, release, `JIT=yes`) from lang-tang `ac3194c` (the families) and `c2ed592` (which adds the global-store and call-argument families and nothing else; the shared cases are the same code), runtime-core `08deb9e`, runtime-heap `693a0c4`, runtime-jit `d768c4d` and cutil `d440e43`, the working tree of each otherwise as committed except for documentation. Run on the EVO-X2 (AMD Ryzen AI MAX+ 395, Linux 7.2.9, the cpufreq governor `powersave`) through `tools/evo`, in a job of its own for each group of cases, the box otherwise idle (the load average was 1.0 during every run, which is the harness itself, and 1.8 before the first, which is the job's own build). The engine of every case: unlimited fuel, guest depth 1,024, a 1 MiB native stack, `gltang_heap_options_configure`'s heap (collected mode, auto-collect on); each case prints the heap's collection and allocation counts of its last run beside the JIT's counters, and a compiled float loop reads **0 collections and 4 allocations** where the interpreted one reads 366 and 2,000,003, so no collection ran inside a compiled timed region of the float cases below. Every case checks its answer inside the run (a float by its bits against a C reference of the same loop; an integer by value), in `--smoke` too, and planted defect 65 shows the check can fail. The harness takes the best of 7 repeats inside a run (the `n` of each case is its iterations in a repeat) and the whole set was run **5 times** in turn; every figure below is the **median of the five runs' bests, with the minimum of the five and the spread (maximum less minimum) in brackets as (minimum; spread)**. Date 2026-10-11. To reproduce: `make -C libs/lang-tang build/linux/release/apps/bench/bench PREFIX=<prefix>` and `build/linux/release/apps/bench/bench --only <prefix>` for `jit-float-`, `jit-intdiv-`, `steady-float-` (which includes the families `steady-float-return-`, `-print-`, `-store-`, `-arg-`, `-entry-` and `-exit-`), `float-` and `calibration`; the calibration of these runs is 1.2 ns a xorshift step. The figures are medians of bests and not the harness's own median column; the harness prints both.
+
+**Two methodologies, never merged.** *Fresh engine* (`jit-*`, `float-*` without `steady-`): a group, a context, a heap and an execution are created outside the clock for each timed run, which pays the interpreter's first touches, the counting to the threshold (the compiled side runs at a threshold of one, so the function compiles at its first poll), the compile and the entry, and throws the code away. *Steady state* (`steady-*`): one execution; a script calls the function once (the first call, which includes the compile), more times (the warm-up: 10 calls) and then 40 counted times, and the host native `tick` stamps the clock between the phases; the compiled side is again at a threshold of one. Both are about one function and neither is the other: the ratio quoted for a claim names which. **Story 7's "about 8x" is retired**: it was a three-run `tang` timing of one program on a different machine, process start-up and the compile included, and asserted nowhere; the figures below replace it. Single-call stamps (call 1, call 9) include the return of one `tick` native, about 90 ns, so compare a single-call figure only with another single-call figure; the calls-2-to-8 and calls-10-on figures are divided by their calls.
+
+**Cases 1 to 6: the loops.** One call of `f(n)` (n = 1,000,000 fresh; 100,000 for each call of the steady-state cases), JIT off against a threshold of one. "Ratio" is interpreted over compiled.
+
+| Program | Fresh engine: interpreted | compiled | ratio | Steady, warm call: interpreted | compiled | ratio | Steady, first call: interpreted | compiled |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| case 1: `s = 0.0`, `return s` (one exit, at the return) | 84.66 ms (84.10 ms; 2.87 ms) | 10.66 ms (10.64 ms; 369.65 us) | 7.95 | 8.73 ms (8.41 ms; 371.49 us) | 8.63 ms (8.49 ms; 366.91 us) | 1.01 | 8.60 ms (8.56 ms; 321.67 us) | 1.10 ms (1.10 ms; 38.19 us) |
+| case 1 control: the same loop, `return s as int` (no exit) | 86.22 ms (85.67 ms; 2.65 ms) | 10.70 ms (10.64 ms; 363.71 us) | 8.06 | 9.06 ms (8.62 ms; 518.92 us) | 1.10 ms (1.06 ms; 38.28 us) | 8.26 | 8.99 ms (8.62 ms; 519.88 us) | 1.14 ms (1.10 ms; 38.39 us) |
+| case 2: `s = 0` (the merge rule: no raw slot) | 87.71 ms (86.24 ms; 2.67 ms) | 87.37 ms (87.17 ms; 2.66 ms) | 1.00 | 8.82 ms (8.59 ms; 386.88 us) | 8.82 ms (8.53 ms; 426.36 us) | 1.00 | 9.06 ms (8.82 ms; 303.27 us) | 9.19 ms (9.03 ms; 270.83 us) |
+| case 3: `s = s + (i as float) / 3.0` | 113.90 ms (111.96 ms; 4.49 ms) | 11.49 ms (11.46 ms; 387.09 us) | 9.91 | 11.30 ms (10.88 ms; 873.32 us) | 11.22 ms (10.99 ms; 620.29 us) | 1.01 | 11.97 ms (11.31 ms; 924.87 us) | 1.22 ms (1.18 ms; 53.05 us) |
+| case 3: `s = s * 0.999 + i` | 86.29 ms (84.02 ms; 5.74 ms) | 10.69 ms (10.66 ms; 367.44 us) | 8.07 | 8.61 ms (8.51 ms; 399.58 us) | 8.61 ms (8.50 ms; 370.82 us) | 1.00 | 8.88 ms (8.54 ms; 497.37 us) | 1.14 ms (1.10 ms; 41.70 us) |
+| case 4: `x < y`, `x == y`, `x >= y` over raw operands | 114.63 ms (113.92 ms; 5.56 ms) | 23.08 ms (23.06 ms; 700.86 us) | 4.97 | 11.87 ms (11.30 ms; 691.81 us) | 2.36 ms (2.30 ms; 77.54 us) | 5.02 | 11.91 ms (11.49 ms; 628.58 us) | 2.44 ms (2.37 ms; 74.82 us) |
+| case 5: `s = s + i / 3` | 40.62 ms (39.26 ms; 4.28 ms) | 15.05 ms (14.96 ms; 511.95 us) | 2.70 | 4.22 ms (3.95 ms; 472.23 us) | 1.54 ms (1.49 ms; 47.76 us) | 2.75 | 4.21 ms (4.10 ms; 305.24 us) | 1.58 ms (1.53 ms; 50.18 us) |
+| case 5: `s = s + i % 7` | 39.41 ms (37.22 ms; 4.91 ms) | 14.07 ms (13.99 ms; 466.82 us) | 2.80 | 4.10 ms (3.87 ms; 333.32 us) | 1.44 ms (1.39 ms; 48.70 us) | 2.86 | 4.12 ms (4.02 ms; 247.90 us) | 1.48 ms (1.43 ms; 46.89 us) |
+| case 5: `s = s + i / ((i % 5) + 1)` (steered divisor) | 55.69 ms (54.06 ms; 3.76 ms) | 20.02 ms (19.92 ms; 651.90 us) | 2.78 | 5.76 ms (5.56 ms; 385.93 us) | 2.04 ms (1.98 ms; 63.70 us) | 2.82 | 5.80 ms (5.47 ms; 498.32 us) | 2.09 ms (2.03 ms; 63.31 us) |
+| case 5: `s = s + i % ((i % 5) + 1)` (steered divisor) | 54.30 ms (52.85 ms; 1.86 ms) | 19.36 ms (18.78 ms; 607.96 us) | 2.80 | 5.31 ms (5.10 ms; 457.43 us) | 1.88 ms (1.87 ms; 62.64 us) | 2.83 | 5.47 ms (5.29 ms; 447.66 us) | 1.97 ms (1.92 ms; 63.55 us) |
+| case 6: `s = s + (i * 0.5) as int` | 67.52 ms (65.12 ms; 2.87 ms) | 15.73 ms (15.71 ms; 482.04 us) | 4.29 | 6.79 ms (6.60 ms; 475.73 us) | 1.57 ms (1.56 ms; 50.14 us) | 4.32 | 6.80 ms (6.70 ms; 392.69 us) | 1.61 ms (1.61 ms; 51.61 us) |
+| case 6: `x = x + (i as float)` | 80.79 ms (79.83 ms; 2.88 ms) | 10.41 ms (10.36 ms; 388.85 us) | 7.76 | 7.96 ms (7.93 ms; 268.58 us) | 7.90 ms (7.83 ms; 316.81 us) | 1.01 | 8.20 ms (7.96 ms; 507.99 us) | 1.07 ms (1.07 ms; 42.84 us) |
+
+
+What these show:
+
+- **A float loop that starts from `0.0` is compiled 7.9 times as fast with a fresh engine** (case 1: 84.66 ms (84.10 ms; 2.87 ms) against 10.66 ms (10.64 ms; 369.65 us); the gain is 74.01 ms, against the larger spread of 2.87 ms). The compiled run exits once at the `return` and the whole run's counters are `deopts 2` and `values_boxed 2`: the script's own top level is compiled too and leaves compiled code once, at its first function declaration (story 7's `kMain`), so the function's share is one exit; `values_boxed 2` is that exit's rebuild, which boxes both raw values live at the `return` (the local `s` and the value being returned: one box for each live raw value, never more), where the story's expectation was 1; the heap counters are 4 allocations and 0 collections, independent of n.
+- **The same program in the steady state is no faster after the first call, and the reason is the policy, not the code.** Its first call is 1.10 ms (1.10 ms; 38.19 us) compiled against 8.60 ms (8.56 ms; 321.67 us) interpreted (7.8 times), but the warm calls are 8.63 ms (8.49 ms; 366.91 us) against 8.73 ms (8.41 ms; 371.49 us): 1.01, not told apart. Each call exits at the `return` (a raw float has to become a value word and compiled code cannot allocate), the eighth exit discards the function (`functions_discarded 1`), and the 40 counted calls are the interpreter's. The control, `return s as int` (no exit), keeps the compiled code and is **8.26 times as fast** in the warm state (1.10 ms (1.06 ms; 38.28 us) against 9.06 ms (8.62 ms; 518.92 us)). The claim "compiled float loops are faster in the steady state" therefore holds for the first call and for every loop whose result is not returned as a float, and fails after the discard for a function that returns the float it computed; "Floats and the exits" below puts a price on the second part.
+- **Case 2, the accumulator that starts from the integer `0`, stays at interpreted speed** (87.37 ms (87.17 ms; 2.66 ms) against 87.71 ms (86.24 ms; 2.67 ms), ratio 1.00, inside the spread): the head of the loop merges an integer and a float, the blunt merge rule gives the function no raw slot, and every iteration allocates a float box (2,000,002 allocations and 366 collections in the compiled run, `values_boxed 0`). Starting from `0.0` is the whole difference: 8.20 times as slow compiled. This is the cost of the shape, measured, and not a defect.
+- **Mixed integer and float, comparisons and casts are compiled with the same gain** (3: 9.9 and 8.1 times; 4, three comparisons an iteration over raw operands: 5.0 times; 6: `as float` 7.8 times and `as int` of a raw double 4.3 times). The steady-state rows of these programs show the same shape as case 1: the first call is compiled 7.8 to 9.8 times as fast, and a function that `return`s a float is the interpreter's again in the warm state.
+- **Integer division and modulo are compiled 2.7 to 2.9 times as fast** (case 5, constant and steered divisors; steady state 2.7 to 2.9 too, because these functions return an integer and are never discarded). The guards (the zero test and the range check on the quotient) never fire in the timed loop: `deopts` is 1 (the top level's) in every compiled run.
+
+**Cases 7 to 9, 11 and the controls: a function that ends in a float exit.** `g()` runs `a = 1.5`, a loop of L additions (L = 0, 100, 10,000) and then the consumer: a `return a * 2.0`, a `print(a * 2.0)`, a store to a global, or a call of another function with `a * 2.0` as its argument; every one of them is an exit at that instruction (a float that must become a value word). The two controls do the same float work and exit nowhere: **(ii)** `return (a * 2.0) as int`, which holds a raw float (so it extends the reservation and tops up the pool at every entry) and returns an integer, and **(i)** an integer-only `g` with the same loop (no pool at all). All of them are called from a script loop at a threshold of one and stamped as call 1, calls 2 to 8 (the compiled and exiting calls), call 9 (the first after the discard) and calls 10 on.
+
+| Body (loop iterations before the exit) | JIT | call 1 | calls 2-8 (each) | call 9 | calls 10 on (each) |
+| --- | --- | --- | --- | --- | --- |
+| return, 0 | interpreted | 245 ns (234 ns; 10.8 ns) | 148 ns (144 ns; 5.1 ns) | 235 ns (231 ns; 6.9 ns) | 139 ns (133 ns; 6.3 ns) |
+| return, 0 | compiled | 30.08 us (29.52 us; 951 ns) | 519 ns (511 ns; 14.5 ns) | 335 ns (316 ns; 35.4 ns) | 138 ns (136 ns; 4.0 ns) |
+| return, 100 | interpreted | 5.80 us (5.75 us; 178 ns) | 5.75 us (5.69 us; 206 ns) | 5.83 us (5.76 us; 218 ns) | 5.99 us (5.85 us; 250 ns) |
+| return, 100 | compiled | 31.17 us (30.49 us; 973 ns) | 1.48 us (1.45 us; 52.2 ns) | 5.96 us (5.88 us; 125 ns) | 5.94 us (5.76 us; 221 ns) |
+| return, 10,000 | interpreted | 584.98 us (573.37 us; 19.48 us) | 583.63 us (570.25 us; 23.88 us) | 575.22 us (562.04 us; 23.72 us) | 580.72 us (556.29 us; 35.91 us) |
+| return, 10,000 | compiled | 124.75 us (124.00 us; 1.70 us) | 95.10 us (94.98 us; 588 ns) | 587.75 us (574.48 us; 29.54 us) | 577.44 us (553.70 us; 29.88 us) |
+| print, 0 | interpreted | 422 ns (419 ns; 9.2 ns) | 237 ns (236 ns; 5.5 ns) | 342 ns (338 ns; 5.5 ns) | 222 ns (220 ns; 4.0 ns) |
+| print, 0 | compiled | 30.24 us (30.13 us; 511 ns) | 671 ns (664 ns; 15.1 ns) | 445 ns (434 ns; 19.7 ns) | 223 ns (218 ns; 8.1 ns) |
+| print, 100 | interpreted | 6.11 us (5.99 us; 272 ns) | 6.08 us (5.91 us; 304 ns) | 6.15 us (5.98 us; 304 ns) | 6.35 us (6.17 us; 300 ns) |
+| print, 100 | compiled | 31.62 us (31.20 us; 656 ns) | 1.71 us (1.67 us; 65.1 ns) | 6.21 us (6.06 us; 170 ns) | 6.20 us (6.02 us; 221 ns) |
+| print, 10,000 | interpreted | 580.66 us (579.11 us; 14.86 us) | 579.18 us (578.17 us; 13.53 us) | 585.90 us (580.98 us; 13.72 us) | 578.66 us (561.55 us; 22.48 us) |
+| print, 10,000 | compiled | 124.73 us (124.28 us; 1.91 us) | 95.48 us (95.09 us; 541 ns) | 581.04 us (576.58 us; 14.71 us) | 578.39 us (563.90 us; 20.17 us) |
+| global store, 0 | interpreted | 346 ns (248 ns; 104 ns) | 153 ns (145 ns; 73.4 ns) | 226 ns (220 ns; 18.7 ns) | 138 ns (133 ns; 7.9 ns) |
+| global store, 0 | compiled | 30.94 us (30.87 us; 461 ns) | 547 ns (530 ns; 28.2 ns) | 340 ns (329 ns; 13.4 ns) | 140 ns (139 ns; 4.2 ns) |
+| global store, 100 | interpreted | 5.77 us (5.59 us; 356 ns) | 5.70 us (5.50 us; 370 ns) | 5.76 us (5.73 us; 240 ns) | 5.91 us (5.79 us; 351 ns) |
+| global store, 100 | compiled | 32.03 us (31.57 us; 836 ns) | 1.48 us (1.46 us; 53.5 ns) | 5.84 us (5.80 us; 329 ns) | 5.70 us (5.69 us; 219 ns) |
+| call argument, 0 | interpreted | 309 ns (298 ns; 22.7 ns) | 207 ns (194 ns; 15.8 ns) | 295 ns (285 ns; 13.4 ns) | 199 ns (190 ns; 9.1 ns) |
+| call argument, 0 | compiled | 39.69 us (39.44 us; 929 ns) | 710 ns (707 ns; 12.0 ns) | 437 ns (426 ns; 35.6 ns) | 240 ns (233 ns; 11.6 ns) |
+| call argument, 100 | interpreted | 5.78 us (5.67 us; 167 ns) | 5.73 us (5.56 us; 184 ns) | 5.84 us (5.66 us; 272 ns) | 6.03 us (5.88 us; 279 ns) |
+| call argument, 100 | compiled | 40.15 us (39.91 us; 729 ns) | 1.64 us (1.63 us; 34.2 ns) | 5.93 us (5.84 us; 234 ns) | 5.90 us (5.72 us; 320 ns) |
+| control (ii) cast, 0 | interpreted | 262 ns (259 ns; 5.0 ns) | 158 ns (156 ns; 4.2 ns) | 248 ns (246 ns; 5.6 ns) | 147 ns (145 ns; 2.6 ns) |
+| control (ii) cast, 0 | compiled | 32.09 us (31.74 us; 522 ns) | 160 ns (159 ns; 3.9 ns) | 252 ns (238 ns; 15.4 ns) | 135 ns (132 ns; 6.4 ns) |
+| control (ii) cast, 100 | interpreted | 5.80 us (5.78 us; 67.4 ns) | 5.79 us (5.72 us; 105 ns) | 5.87 us (5.80 us; 99.7 ns) | 6.07 us (6.03 us; 79.6 ns) |
+| control (ii) cast, 100 | compiled | 33.14 us (32.12 us; 1.09 us) | 1.11 us (1.09 us; 24.3 ns) | 1.20 us (1.17 us; 37.0 ns) | 1.11 us (1.07 us; 37.8 ns) |
+| control (ii) cast, 10,000 | interpreted | 576.73 us (573.26 us; 10.22 us) | 576.26 us (570.42 us; 12.41 us) | 578.73 us (572.84 us; 13.32 us) | 573.56 us (542.35 us; 40.57 us) |
+| control (ii) cast, 10,000 | compiled | 126.28 us (123.86 us; 2.52 us) | 94.57 us (91.78 us; 2.89 us) | 94.79 us (91.70 us; 3.42 us) | 95.09 us (91.84 us; 3.44 us) |
+| control (i) integer, 0 | interpreted | 213 ns (203 ns; 21.9 ns) | 138 ns (137 ns; 11.3 ns) | 229 ns (222 ns; 9.8 ns) | 126 ns (121 ns; 5.9 ns) |
+| control (i) integer, 0 | compiled | 36.77 us (36.16 us; 1.06 us) | 155 ns (150 ns; 8.3 ns) | 248 ns (231 ns; 20.2 ns) | 132 ns (127 ns; 7.3 ns) |
+| control (i) integer, 100 | interpreted | 3.21 us (3.18 us; 162 ns) | 3.21 us (3.12 us; 197 ns) | 3.30 us (3.22 us; 205 ns) | 3.18 us (3.12 us; 207 ns) |
+| control (i) integer, 100 | compiled | 38.03 us (37.17 us; 1.20 us) | 1.30 us (1.28 us; 30.1 ns) | 1.39 us (1.36 us; 38.6 ns) | 1.30 us (1.26 us; 40.5 ns) |
+| control (i) integer, 10,000 | interpreted | 303.89 us (296.61 us; 19.26 us) | 304.27 us (298.14 us; 20.03 us) | 304.16 us (298.17 us; 14.53 us) | 303.80 us (297.11 us; 14.32 us) |
+| control (i) integer, 10,000 | compiled | 151.10 us (147.92 us; 3.62 us) | 114.55 us (111.27 us; 3.90 us) | 114.63 us (111.13 us; 4.10 us) | 114.90 us (111.25 us; 4.21 us) |
+
+
+The same functions with a fresh engine, one call in a run (the compile, the entry and the exit are all in it):
+
+| Body | Fresh engine, one call: interpreted | compiled | ratio |
+| --- | --- | --- | --- |
+| return, 0 | 316 ns (311 ns; 142 ns) | 38.62 us (37.77 us; 1.34 us) | 0.01 |
+| return, 100 | 5.88 us (5.73 us; 268 ns) | 40.08 us (39.53 us; 668 ns) | 0.15 |
+| return, 10,000 | 569.25 us (558.91 us; 16.38 us) | 134.32 us (131.37 us; 3.39 us) | 4.24 |
+| print, 0 | 507 ns (502 ns; 11.8 ns) | 39.55 us (39.10 us; 894 ns) | 0.01 |
+| print, 100 | 6.12 us (6.07 us; 196 ns) | 40.71 us (40.55 us; 650 ns) | 0.15 |
+| print, 10,000 | 568.99 us (563.02 us; 21.82 us) | 134.63 us (133.10 us; 2.43 us) | 4.23 |
+| global store, 0 | 325 ns (322 ns; 36.4 ns) | 39.98 us (39.82 us; 359 ns) | 0.01 |
+| global store, 100 | 5.74 us (5.63 us; 132 ns) | 40.88 us (40.76 us; 483 ns) | 0.14 |
+| call argument, 0 | 391 ns (385 ns; 57.5 ns) | 48.24 us (48.07 us; 598 ns) | 0.01 |
+| call argument, 100 | 5.84 us (5.67 us; 388 ns) | 49.49 us (49.36 us; 694 ns) | 0.12 |
+| control (ii) cast, 0 | 351 ns (349 ns; 6.5 ns) | 41.08 us (40.73 us; 872 ns) | 0.01 |
+| control (ii) cast, 100 | 5.92 us (5.85 us; 137 ns) | 42.09 us (41.64 us; 1.08 us) | 0.14 |
+| control (ii) cast, 10,000 | 571.81 us (561.40 us; 14.43 us) | 136.52 us (135.66 us; 1.61 us) | 4.19 |
+| control (i) integer, 0 | 300 ns (295 ns; 10.4 ns) | 46.22 us (45.95 us; 931 ns) | 0.01 |
+| control (i) integer, 100 | 3.29 us (3.20 us; 169 ns) | 47.49 us (47.12 us; 812 ns) | 0.07 |
+| control (i) integer, 10,000 | 301.00 us (285.23 us; 21.77 us) | 161.37 us (159.08 us; 4.08 us) | 1.87 |
+
+
+What these show, as the answers to the five questions of the measurement:
+
+- **(a) The entry cost of a float-carrying function that does not exit is not told apart from zero.** Control (ii) against control (i), calls 2 to 8: 160 ns against 155 ns each, a difference of 5.3 ns with spreads of 3.9 ns and 8.3 ns; calls 10 on, 135 ns against 132 ns (3.7 ns). Within one execution the pool is topped up once: `box_pool_made` is 2 for the whole run of nine calls, and the entry that follows finds it full and pays one comparison (a retract keeps the boxes). Control (ii) is not slower than the interpreter either (160 ns against 158 ns for a body of no loop at all, and 1.11 us against 5.79 us at L = 100).
+- **The pool dropped at every host return is paid again at the next entry, and it is small.** A fuel-sliced run of 4,000 calls of control (ii) returns to the host 4,000 times with a slice of 30 units of fuel (about one call), 444 with 300 and 45 with 3,000; each host return releases the pool and the next compiled entry makes it again: `box_pool_made` is 8,000, 890 and 92 for the three runs, **2.0 boxes for each host return** at the first two slices (the reservation's capacity for this function) and 2.0 again at the third. The figure per host return (the elapsed time divided by the returns, so it includes a call and the polls in between): slice 30, 240 ns interpreted against 281 ns compiled (41.5 ns more, 1.17 times); slice 300, 1.49 us against 1.55 us (54.2 ns more); slice 3,000, 13.93 us against 14.34 us (the compile, 30 to 40 us, is in this run once, and the call gain of a body of no loop is nil). So the per-request re-allocation of the pool costs about 40 ns of a host return that does one call, 41.5 ns, and its share falls away as a request does more work.
+- **(b) The whole price of the policy for a function that always exits at a float exit is a bounded one-time amount: the compile plus eight entries, exits and rebuilds.** For a body with no loop (L = 0): call 1 costs 29.83 us more than the interpreter's (the compile of the function and its first entry), calls 2 to 8 cost 371 ns more each (entry, exit, rebuild and the interpreter finishing the instruction; two boxes rebuilt each, the local `a` and the returned value: `values_boxed 16` over the eight exits), and after the eighth exit the function is the interpreter's and costs the same (138 ns against 139 ns). In all, **32.43 us more than the interpreter for one execution that makes the nine calls**, against the interpreter's 1.33 us for the work. The print costs 32.86 us more, a global store 33.35 us, a call argument 42.90 us; none of them is cheaper than the others by more than a call's worth, because the cost is the compile plus the exit and not the consumer.
+- **(c) The break-even body is about 87 loop iterations.** Per iteration the interpreter costs 56.0 ns and the compiled code 9.6 ns, so the compile and eight exits (32.43 us) are repaid by about 87 iterations of body in each of eight calls. At L = 100 the compiled function is already ahead over its first eight calls (call 1 costs 25.37 us more, the next seven 4.27 us less each: a net gain of 4.53 us), and at L = 10,000 call 1 is 4.69 times as fast and calls 2 to 8 are 6.14 times as fast, after which the discarded function is the interpreter's: the gain is bounded by the same eight calls. The function that returns a float therefore loses 32.43 us where its body is a handful of operations, and gains where its body is a loop of a hundred iterations or more.
+- **(d) A per-request shape pays the price again for every request.** The counter is per execution, so each fresh execution compiles the function and exits eight times again; with a fresh engine and one call the compiled run is 38.62 us (37.77 us; 1.34 us) against 316 ns (311 ns; 142 ns) interpreted (L = 0), 40.08 us (39.53 us; 668 ns) against 5.88 us (5.73 us; 268 ns) (L = 100) and 134.32 us (131.37 us; 3.39 us) against 569.25 us (558.91 us; 16.38 us) (L = 10,000, 4.24 times as fast). A request that calls such a function enough times to reach the threshold (200 polls by default; the figures are at a threshold of one) pays 32.43 us for it and never recovers it, however many requests there are; a per-execution limit cannot change that, and neither can a rate-based limit that lives in the execution. Only a decision made before the first execution (a static decline) or a counter that outlives the execution (shared code and the rate policy `planning/template-architecture.md` requires before code is shared) does.
+- **(e) The print, the global store and the call argument are the same shape** (the table above): 434 ns, 394 ns and 503 ns more for each of calls 2 to 8 at L = 0, the same one-time compile, the same discard, and the same gain at L = 100 for the print and the store (5.10 us and 3.22 us net over the first eight calls); the call argument compiles two functions, the caller and its callee, so its one-time cost is larger (39.38 us at call 1) and at L = 100 it is still 5.76 us behind, which puts its break-even a little higher. After the discard a function that passes its float as a call argument is 40.9 ns a call slower than the interpreter in calls 10 on, where the others are level; the cause was not examined (the callee `h` is the other compiled function in that run).
+
+**Case 11: the error exits and NaN arithmetic.**
+
+| Function (`g(x)`) | JIT | call 1 | calls 2-8 (each) | call 9 | calls 10 on (each) |
+| --- | --- | --- | --- | --- | --- |
+| `x / 0.0` | interpreted | 184 ns (182 ns; 4.9 ns) | 126 ns (122 ns; 7.4 ns) | 217 ns (212 ns; 7.6 ns) | 115 ns (112 ns; 5.8 ns) |
+| `x / 0.0` | compiled | 13.10 us (12.74 us; 435 ns) | 519 ns (512 ns; 13.7 ns) | 262 ns (249 ns; 26.7 ns) | 117 ns (113 ns; 5.6 ns) |
+| `x as int`, x = NaN | interpreted | 169 ns (165 ns; 9.0 ns) | 124 ns (121 ns; 7.3 ns) | 210 ns (209 ns; 11.1 ns) | 116 ns (112 ns; 5.8 ns) |
+| `x as int`, x = NaN | compiled | 13.58 us (13.31 us; 521 ns) | 430 ns (426 ns; 16.5 ns) | 238 ns (233 ns; 13.9 ns) | 117 ns (114 ns; 5.4 ns) |
+| `x % 2.0` | interpreted | 179 ns (174 ns; 7.3 ns) | 123 ns (119 ns; 5.1 ns) | 211 ns (207 ns; 7.1 ns) | 110 ns (108 ns; 4.7 ns) |
+| `x % 2.0` | compiled | 9.02 us (8.85 us; 231 ns) | 502 ns (491 ns; 13.9 ns) | 259 ns (241 ns; 29.9 ns) | 112 ns (109 ns; 5.3 ns) |
+| `x * "a"` | interpreted | 924 ns (892 ns; 43.4 ns) | 130 ns (125 ns; 6.3 ns) | 210 ns (206 ns; 12.1 ns) | 114 ns (110 ns; 5.0 ns) |
+| `x * "a"` | compiled | 9.92 us (9.77 us; 234 ns) | 427 ns (424 ns; 9.2 ns) | 243 ns (237 ns; 9.4 ns) | 114 ns (111 ns; 5.0 ns) |
+| control: NaN arithmetic, `y = x * 1.0; z = y - y`, x = inf | interpreted | 275 ns (265 ns; 17.7 ns) | 186 ns (181 ns; 12.5 ns) | 280 ns (266 ns; 27.2 ns) | 177 ns (171 ns; 13.6 ns) |
+| control: NaN arithmetic, `y = x * 1.0; z = y - y`, x = inf | compiled | 21.15 us (20.42 us; 924 ns) | 162 ns (160 ns; 6.1 ns) | 253 ns (239 ns; 17.5 ns) | 137 ns (135 ns; 5.5 ns) |
+| control: `(0.0 / x) as int`, x = 2.0 | interpreted | 204 ns (195 ns; 14.4 ns) | 140 ns (139 ns; 4.4 ns) | 229 ns (217 ns; 14.5 ns) | 126 ns (125 ns; 3.3 ns) |
+| control: `(0.0 / x) as int`, x = 2.0 | compiled | 16.97 us (16.61 us; 478 ns) | 159 ns (154 ns; 7.9 ns) | 247 ns (245 ns; 12.4 ns) | 133 ns (131 ns; 7.4 ns) |
+
+
+- **An error exit costs the same as a float exit**, 392 ns (`x / 0.0`) to 306 ns (`as int` of a NaN) more than the interpreter for each of the eight calls, and a one-time compile of 9.02 us to 13.58 us (smaller functions than the float return); after the discard the calls cost what the interpreter's do. A function that errors on most calls is the pathology the discard limit exists for, and its price is the one above.
+- **NaN arithmetic that does not exit is not an exit**: the control (`y = x * 1.0; z = y - y` with x = infinity, `z != z`) has `deopts 1` (the top level's) and `functions_discarded 0`, and its calls stay compiled (137 ns against 177 ns interpreted), and so has the zero-result control (`(0.0 / x) as int`).
+
+### Floats and the exits: the recommendation (for Corey, at the done checkpoint)
+
+The question: should a function whose every path ends in a float exit be compiled at all, and what does it cost to enter one that always exits? The numbers above are the evidence; the choice is Corey's, and **nothing here is implemented** (no `src/` change, no new limit, the discard limit stays 8).
+
+- **What the policy costs as it stands.** A bounded 32.43 us of one-time loss per execution (the compile and eight exits) for a function whose body is a handful of operations; no loss and a gain for a body of about 87 loop iterations or more; no entry cost for a float-carrying function that does not exit; about 40 ns per host return for the pool dropped and made again.
+- **Option A, compile it as it is.** The loss is bounded, one-time for a long-lived execution and small beside any request that runs for milliseconds. It recurs for every request of a per-request shape that calls such a function often enough to tier it up, and nothing in the engine can know that. Cost to implement: none.
+- **Option B, do not compile a function whose every path ends in a float exit and none of whose loops is long (a static decline at build time).** The numbers support one criterion exactly: a function with **no loop at all** whose every return, and every path that does not return, ends at an exit of a float (a `return`, a `print`, a store or an argument of a computed float, or an operation that always errors) never repays the compile (32.43 us lost, nothing gained at any call count, because the calls after the eighth are the interpreter's). A function with a loop is compiled: its break-even is about 87 iterations and the build does not know the trip count. That removes the loss, in every execution of a per-request shape, for exactly the functions that cannot gain. What it would change: `src/jit/build.c`, a decline in `gltang_jit_build` (returning no code handle, which `gltang_jit_compile_function` in `jit.c` already marks never-compile), reading the function's code for a loop (a backward jump) and for the consumer of the last value on each exit path; the test that would prove it: a function of the loop-free shape is never compiled (`compile_failures` 0, `functions_compiled` without it, `entries` 0) while the same function with a loop of 200 iterations is, and a planted defect that compiles it again fails the first.
+- **Option C, compile it with a rate-based limit.** Exits per entry over a window, or a counter that decays on successful runs, as `planning/template-architecture.md` requires before code is shared across executions. It does nothing for the per-request shape today, because the counter is per execution and starts at zero in every request; its value begins when compiled code outlives the execution, which is the shared-code spec's. It is required then regardless of the choice here.
+- **The reading of the numbers:** B for the loop-free shape removes the only loss the measurement found and is a small change in one place; A is acceptable if the per-request shape is not yet a real workload; C is not a substitute for B and is owed in any case. This is the implementer's reading; the choice is Corey's.
+
+### Integer-only functions are unchanged by the float work: a claim with a figure, and it is false for calls
+
+Story 7 added the `need_tmp_f` temporaries and inline `/` and `%` to every function and stated that integer-only functions are emitted as before. Re-run on the final tree, the same machine, compiler and flags as the figures above (5 runs):
+
+Run as a job of its own (a build of this tree and of the story-10 tree's lang-tang, `209c8fd`, against the same current libraries, `runtime-core 08deb9e`, `runtime-jit d768c4d`; 2026-10-11; five runs; the second column is the story-10 lang-tang with the current runtime-core, runtime-heap, runtime-jit and runtime-debug, so any difference between it and the first is the libraries' and any between it and the third is lang-tang's):
+
+| Case (minimum of five runs, spread in brackets) | Recorded 2026-10-09 (`209c8fd`, "Calls, measured") | `209c8fd`'s lang-tang on this tree's libraries | this tree's lang-tang (`c2ed592`) |
+| --- | --- | --- | --- |
+| `fib(15)` interpreted | 147.0 us (10.9) | 145.38 us (11.92 us) | 145.71 us (11.06 us) |
+| `fib(15)` compiled | 132.3 us (9.8) | 130.63 us (5.82 us) | 150.51 us (6.48 us) |
+| `fib(15)`, calls off | 171.9 us (10.0) | 170.13 us (9.93 us) | 169.41 us (10.33 us) |
+| `fib(22)` interpreted | 4,178.9 us (402.1) | 4.24 ms (311.21 us) | 4.20 ms (104.98 us) |
+| `fib(22)` compiled | 2,682.8 us (248.3) | 2.69 ms (199.28 us) | 3.32 ms (146.20 us) |
+| `fib(22)`, calls off | 4,240.6 us (379.9) | 4.32 ms (187.62 us) | 4.22 ms (186.52 us) |
+| 10-million-iteration integer loop, interpreted | not recorded on this machine | 238.94 ms (11.78 ms) | 225.02 ms (19.96 ms) |
+| the same, compiled | not recorded on this machine | 81.36 ms (2.79 ms) | 81.39 ms (3.70 ms) |
+| four statements an iteration, interpreted | not recorded on this machine | 97.52 ms (5.86 ms) | 100.30 ms (4.15 ms) |
+| the same, compiled | not recorded on this machine | 43.06 ms (1.44 ms) | 43.06 ms (1.40 ms) |
+
+- **Integer loops, and the interpreter, are unchanged.** The integer loop, the four-statement loop, and every interpreted `fib` read the same in the second and third columns (the largest difference, the interpreted loop, is smaller than its spread), and the recorded 2026-10-09 figures for the interpreter and for calls-off are inside their spreads. "Integer-only functions are unchanged by the float work" holds for a function with no calls.
+- **Compiled calls are slower than they were, and the cause is in lang-tang.** `fib(22)` compiled is 3.32 ms against 2.69 (+23%; the gain is larger than either spread) and `fib(15)` compiled 150.5 us against 130.6 (+15%); the same lang-tang of 2026-10-09 on today's libraries reproduces the recorded 2.69 ms, so the libraries are acquitted and the commits are not. The two-job agreement (an independent job `a2` of the same tree read 3.31 ms and 150.6 us at the minima) shows it is not the machine. Bisected over lang-tang's own history with the same libraries:
+
+| lang-tang commit (on this tree's libraries) | `fib(15)` compiled | `fib(22)` compiled |
+| --- | --- | --- |
+| `f79b9f8` (the first commit of the float work: the compile flags) | 129.05 us (8.56 us) | 2.71 ms (63.01 us) |
+| `2faad56` (floats held raw, story 6) | 136.92 us (8.74 us) | 2.91 ms (195.26 us) |
+| `948d91f` (the float kinds made fail safe, the pool's life tested, story 6 review) | 150.97 us (6.81 us) | 3.36 ms (151.54 us) |
+| `e90c1df` (float and division operations compiled, story 7) | 153.22 us (12.58 us) | 3.31 ms (110.01 us) |
+| `c2ed592` (this tree, the `base` job above) | 150.51 us (6.48 us) | 3.32 ms (146.20 us) |
+
+  The step is `948d91f` (2faad56's +6.6% is inside the spread of the run it is compared with, 195 us, and is "not told apart"). That commit changes `src/jit/hooks.c` (the push and pop hooks record the callee frame's word and retract by it), `boxes.c` (the extension and the retract take it) and `jit.c`; a call between compiled functions goes through those hooks, which is why the loops are unchanged and the calls are not. **The cause inside the commit is not identified**, and nothing in `src/` was changed here. It is recorded in `deferred-work.md` with what would settle it (a profile of `fib(22)` compiled at `2faad56` and at `948d91f`, and a revert of the `hooks.c` hunk alone). The success signal of the calls spec ("compiled `fib` faster than interpreted, no exit at any call") still holds: `fib(22)` compiled is 21% faster than interpreted (3.32 against 4.20 ms), against 36% before.
+
+
+**The Raspberry Pi 4 (real arm64).** *Instrument:* the same cases of `bench/bench.c`, lang-tang `c2ed592` (the shared code is `ac3194c`'s), runtime-core `08deb9e`, runtime-heap `693a0c4`, runtime-jit `d768c4d`, cutil `d440e43`, built in the arm64 build image (`suite/Containerfile.build.arm64`: GCC 16.2.0 aarch64, `-O2 -g -std=c17 -ffp-contract=off`, release, `JIT=yes`) through `tools/evo --box pi4`; `SKIP_DEP_CHECK=1 WITH_DEBUG=no` because the image has neither bison nor flex, with the generated parser and scanner carried in a tar placed in the tree for the shipping and removed again; the Raspberry Pi 4 Model B Rev 1.4 (Cortex-A72), Linux 6.18.50, cpufreq governor `ondemand`, the television's controller with nothing else of ours running and `mpv` not running, capped at 3 GiB and 3 CPUs, load 2.1 before the run (the job's own build). The calibration reads 3.34 ns a step. The cases are the `jit-float-`, `jit-intdiv-` and `steady-float-` families (the programs and the function families; the fresh-engine `float-` families and the pool-per-host-return cases were not run on the Pi), **3 runs** of the whole set in turn, the same statistic as above ("(minimum; spread)" after the median of the runs' bests), 2026-10-11. Heap settings and counters as above. A Pi timing is a real one; no qemu figure is recorded anywhere.
+
+| Program | Fresh engine: interpreted | compiled | ratio | Steady, warm call: interpreted | compiled | ratio | Steady, first call: interpreted | compiled |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| case 1: `s = 0.0`, `return s` (one exit, at the return) | 679.79 ms (657.86 ms; 29.36 ms) | 134.76 ms (134.72 ms; 83.57 us) | 5.04 | 64.99 ms (64.66 ms; 1.61 ms) | 65.27 ms (65.05 ms; 697.36 us) | 1.00 | 67.75 ms (66.96 ms; 857.01 us) | 13.75 ms (13.73 ms; 25.41 us) |
+| case 1 control: the same loop, `return s as int` (no exit) | 660.41 ms (659.95 ms; 1.62 ms) | 134.86 ms (134.85 ms; 91.99 us) | 4.90 | 66.14 ms (65.75 ms; 489.62 us) | 13.37 ms (13.31 ms; 83.63 us) | 4.95 | 65.94 ms (65.94 ms; 304.09 us) | 13.76 ms (13.75 ms; 15.14 us) |
+| case 2: `s = 0` (the merge rule: no raw slot) | 662.02 ms (657.82 ms; 5.52 ms) | 683.61 ms (683.59 ms; 3.28 ms) | 0.97 | 64.79 ms (64.46 ms; 1.83 ms) | 65.15 ms (64.79 ms; 1.71 ms) | 0.99 | 65.94 ms (65.53 ms; 904.21 us) | 69.03 ms (68.87 ms; 736.22 us) |
+| case 3: `s = s + (i as float) / 3.0` | 848.90 ms (848.63 ms; 17.02 ms) | 146.16 ms (146.07 ms; 108.05 us) | 5.81 | 82.47 ms (82.47 ms; 1.15 ms) | 82.39 ms (82.22 ms; 575.26 us) | 1.00 | 84.66 ms (84.64 ms; 217.99 us) | 14.85 ms (14.85 ms; 13.16 us) |
+| case 3: `s = s * 0.999 + i` | 702.82 ms (699.84 ms; 22.79 ms) | 131.65 ms (131.36 ms; 1.59 ms) | 5.34 | 68.90 ms (68.55 ms; 391.67 us) | 69.11 ms (69.10 ms; 203.29 us) | 1.00 | 70.07 ms (69.73 ms; 621.65 us) | 13.36 ms (13.29 ms; 83.00 us) |
+| case 4: `x < y`, `x == y`, `x >= y` over raw operands | 889.46 ms (886.67 ms; 23.53 ms) | 280.25 ms (277.51 ms; 2.89 ms) | 3.17 | 88.85 ms (88.16 ms; 1.56 ms) | 27.94 ms (27.89 ms; 1.00 ms) | 3.18 | 88.61 ms (88.31 ms; 922.79 us) | 28.54 ms (28.53 ms; 1.52 ms) |
+| case 5: `s = s + i / 3` | 320.58 ms (309.89 ms; 47.91 ms) | 183.32 ms (183.27 ms; 650.29 us) | 1.75 | 32.26 ms (31.73 ms; 1.07 ms) | 18.29 ms (18.27 ms; 108.36 us) | 1.76 | 32.54 ms (31.58 ms; 1.08 ms) | 18.59 ms (18.59 ms; 17.09 us) |
+| case 5: `s = s + i % 7` | 308.42 ms (302.32 ms; 6.81 ms) | 177.29 ms (177.02 ms; 284.03 us) | 1.74 | 30.92 ms (30.41 ms; 1.38 ms) | 17.68 ms (17.68 ms; 25.34 us) | 1.75 | 31.77 ms (31.71 ms; 400.19 us) | 17.97 ms (17.96 ms; 8.41 us) |
+| case 5: `s = s + i / ((i % 5) + 1)` (steered divisor) | 450.09 ms (449.23 ms; 6.69 ms) | 259.64 ms (259.39 ms; 390.42 us) | 1.73 | 44.38 ms (44.17 ms; 1.02 ms) | 25.89 ms (25.74 ms; 169.69 us) | 1.71 | 45.04 ms (44.64 ms; 538.48 us) | 26.26 ms (26.11 ms; 174.28 us) |
+| case 5: `s = s + i % ((i % 5) + 1)` (steered divisor) | 415.70 ms (407.41 ms; 21.49 ms) | 260.13 ms (259.64 ms; 739.12 us) | 1.60 | 42.02 ms (40.95 ms; 1.85 ms) | 25.92 ms (25.91 ms; 7.38 us) | 1.62 | 41.36 ms (41.21 ms; 1.31 ms) | 26.33 ms (26.33 ms; 5.20 us) |
+| case 6: `s = s + (i * 0.5) as int` | 560.16 ms (553.89 ms; 15.06 ms) | 186.10 ms (185.97 ms; 259.70 us) | 3.01 | 55.07 ms (54.93 ms; 422.65 us) | 18.56 ms (18.51 ms; 52.90 us) | 2.97 | 54.73 ms (54.68 ms; 186.76 us) | 18.88 ms (18.88 ms; 2.81 us) |
+| case 6: `x = x + (i as float)` | 637.85 ms (636.17 ms; 7.73 ms) | 131.25 ms (130.91 ms; 380.67 us) | 4.86 | 61.78 ms (61.12 ms; 1.96 ms) | 62.44 ms (61.87 ms; 975.81 us) | 0.99 | 62.77 ms (62.60 ms; 278.47 us) | 13.23 ms (13.10 ms; 146.91 us) |
+
+- **A float loop is compiled 5.04 times as fast on the Pi with a fresh engine** (case 1; 5.04 against 7.95 on the EVO-X2), 4.95 times in the steady state of the `as int` form, and its first call 4.93 times; the warm calls of `return s` are 1.00 (the discard, as on the EVO-X2). The accumulator that starts from `0` is 0.97 (interpreted over compiled; 1.00 on the EVO-X2): on the Pi the compiled run is about 3% *slower* than the interpreter (683.6 against 657.8 ms at the minima, more than either spread); the cause was not examined.
+- **Integer division and modulo are 1.60 to 1.75 times as fast** (2.7 to 2.9 on the EVO-X2), and 3.0 and 4.9 times for the casts of case 6 (`as int` of a raw double and `as float`).
+
+| Body (loop iterations before the exit) | JIT | call 1 | calls 2-8 (each) | call 9 | calls 10 on (each) |
+| --- | --- | --- | --- | --- | --- |
+| return, 0 | interpreted | 2.22 us (2.22 us; 18.8 ns) | 1.17 us (1.16 us; 10.6 ns) | 1.75 us (1.73 us; 56.4 ns) | 1.12 us (1.10 us; 39.1 ns) |
+| return, 0 | compiled | 242.87 us (241.84 us; 3.75 us) | 4.97 us (4.90 us; 140 ns) | 3.47 us (3.46 us; 10.8 ns) | 1.18 us (1.17 us; 9.1 ns) |
+| return, 100 | interpreted | 47.57 us (47.55 us; 120 ns) | 45.39 us (45.32 us; 286 ns) | 45.89 us (45.87 us; 544 ns) | 46.87 us (46.77 us; 224 ns) |
+| return, 100 | compiled | 252.94 us (252.18 us; 1.22 us) | 16.44 us (16.43 us; 70.1 ns) | 51.27 us (51.21 us; 198 ns) | 46.66 us (46.52 us; 174 ns) |
+| return, 10,000 | interpreted | 4.46 ms (4.43 ms; 50.72 us) | 4.40 ms (4.39 ms; 21.15 us) | 4.31 ms (4.30 ms; 6.93 us) | 4.40 ms (4.38 ms; 12.04 us) |
+| return, 10,000 | compiled | 1.39 ms (1.38 ms; 6.85 us) | 1.15 ms (1.15 ms; 1.05 us) | 4.60 ms (4.56 ms; 48.16 us) | 4.43 ms (4.43 ms; 28.58 us) |
+| print, 0 | interpreted | 4.71 us (4.67 us; 74.6 ns) | 2.11 us (2.04 us; 78.8 ns) | 2.80 us (2.80 us; 12.1 ns) | 2.02 us (1.98 us; 59.6 ns) |
+| print, 0 | compiled | 248.17 us (247.42 us; 2.24 us) | 6.96 us (6.86 us; 158 ns) | 4.57 us (4.55 us; 48.3 ns) | 2.09 us (2.08 us; 13.7 ns) |
+| print, 100 | interpreted | 51.12 us (51.02 us; 182 ns) | 48.00 us (47.99 us; 339 ns) | 48.63 us (48.58 us; 652 ns) | 50.27 us (50.11 us; 243 ns) |
+| print, 100 | compiled | 259.81 us (258.40 us; 3.45 us) | 19.10 us (19.00 us; 184 ns) | 53.63 us (53.13 us; 616 ns) | 50.09 us (49.69 us; 467 ns) |
+| print, 10,000 | interpreted | 4.46 ms (4.45 ms; 18.53 us) | 4.43 ms (4.42 ms; 27.34 us) | 4.44 ms (4.43 ms; 55.72 us) | 4.43 ms (4.43 ms; 37.01 us) |
+| print, 10,000 | compiled | 1.39 ms (1.39 ms; 881 ns) | 1.15 ms (1.15 ms; 1.05 us) | 4.61 ms (4.56 ms; 120.38 us) | 4.47 ms (4.47 ms; 20.84 us) |
+| global store, 0 | interpreted | 2.43 us (2.41 us; 42.3 ns) | 1.27 us (1.27 us; 5.8 ns) | 1.91 us (1.89 us; 32.1 ns) | 1.21 us (1.20 us; 7.1 ns) |
+| global store, 0 | compiled | 253.19 us (251.37 us; 3.88 us) | 5.07 us (5.03 us; 49.9 ns) | 3.56 us (3.51 us; 45.6 ns) | 1.25 us (1.24 us; 7.5 ns) |
+| global store, 100 | interpreted | 47.63 us (47.52 us; 218 ns) | 45.67 us (45.42 us; 273 ns) | 46.39 us (45.98 us; 452 ns) | 47.00 us (46.84 us; 379 ns) |
+| global store, 100 | compiled | 262.66 us (261.91 us; 3.89 us) | 16.57 us (16.52 us; 68.1 ns) | 51.34 us (51.32 us; 441 ns) | 46.70 us (46.68 us; 295 ns) |
+| call argument, 0 | interpreted | 2.78 us (2.75 us; 87.8 ns) | 1.65 us (1.65 us; 14.3 ns) | 2.23 us (2.18 us; 59.2 ns) | 1.56 us (1.55 us; 34.3 ns) |
+| call argument, 0 | compiled | 350.85 us (348.50 us; 2.36 us) | 6.42 us (6.39 us; 93.7 ns) | 4.13 us (4.12 us; 13.2 ns) | 1.90 us (1.87 us; 42.9 ns) |
+| call argument, 100 | interpreted | 48.46 us (48.43 us; 327 ns) | 46.23 us (45.85 us; 910 ns) | 46.35 us (46.27 us; 1.51 us) | 48.79 us (47.87 us; 996 ns) |
+| call argument, 100 | compiled | 362.38 us (361.57 us; 1.70 us) | 17.89 us (17.85 us; 95.8 ns) | 52.31 us (52.29 us; 44.5 ns) | 48.92 us (48.91 us; 310 ns) |
+| control (ii) cast, 0 | interpreted | 2.43 us (2.39 us; 108 ns) | 1.23 us (1.22 us; 10.6 ns) | 1.82 us (1.81 us; 19.3 ns) | 1.16 us (1.16 us; 0.7 ns) |
+| control (ii) cast, 0 | compiled | 259.31 us (258.31 us; 2.31 us) | 1.42 us (1.38 us; 50.3 ns) | 1.94 us (1.81 us; 168 ns) | 1.08 us (1.04 us; 44.6 ns) |
+| control (ii) cast, 100 | interpreted | 47.83 us (47.82 us; 23.2 ns) | 45.32 us (45.31 us; 79.7 ns) | 45.84 us (45.84 us; 109 ns) | 47.40 us (47.29 us; 129 ns) |
+| control (ii) cast, 100 | compiled | 268.93 us (268.47 us; 5.68 us) | 12.92 us (12.80 us; 146 ns) | 13.42 us (13.26 us; 216 ns) | 12.60 us (12.49 us; 117 ns) |
+| control (ii) cast, 10,000 | interpreted | 4.45 ms (4.43 ms; 34.59 us) | 4.41 ms (4.40 ms; 19.26 us) | 4.42 ms (4.42 ms; 18.41 us) | 4.45 ms (4.43 ms; 45.11 us) |
+| control (ii) cast, 10,000 | compiled | 1.40 ms (1.40 ms; 4.52 us) | 1.14 ms (1.14 ms; 849 ns) | 1.14 ms (1.14 ms; 2.71 us) | 1.13 ms (1.13 ms; 4.61 us) |
+| control (i) integer, 0 | interpreted | 1.97 us (1.91 us; 64.1 ns) | 1.05 us (1.05 us; 10.4 ns) | 1.63 us (1.63 us; 13.5 ns) | 927 ns (927 ns; 11.9 ns) |
+| control (i) integer, 0 | compiled | 277.35 us (277.07 us; 3.50 us) | 1.38 us (1.36 us; 21.8 ns) | 1.89 us (1.78 us; 117 ns) | 1.05 us (1.04 us; 7.6 ns) |
+| control (i) integer, 100 | interpreted | 27.04 us (26.91 us; 157 ns) | 25.83 us (25.80 us; 170 ns) | 26.39 us (26.37 us; 155 ns) | 25.78 us (25.77 us; 349 ns) |
+| control (i) integer, 100 | compiled | 291.12 us (291.03 us; 1.61 us) | 15.39 us (15.31 us; 118 ns) | 15.92 us (15.77 us; 158 ns) | 15.13 us (15.05 us; 84.0 ns) |
+| control (i) integer, 10,000 | interpreted | 2.51 ms (2.49 ms; 30.86 us) | 2.49 ms (2.47 ms; 40.38 us) | 2.51 ms (2.49 ms; 41.10 us) | 2.55 ms (2.54 ms; 16.75 us) |
+| control (i) integer, 10,000 | compiled | 1.68 ms (1.68 ms; 2.74 us) | 1.40 ms (1.40 ms; 1.45 us) | 1.40 ms (1.40 ms; 4.73 us) | 1.40 ms (1.40 ms; 7.86 us) |
+
+- **The shape of the float-return price is the EVO-X2's on a slower machine.** For a body of no loop, call 1 costs 240.65 us more than the interpreter's (the compile), calls 2 to 8 3.80 us more each, and the nine calls 267.28 us more in all; at L = 100 call 1 costs 205.37 us more and each of the next seven 28.94 us less, so the first eight calls end 2.78 us *behind* (the break-even is just above 100 iterations here), and at L = 10,000 they end 25.86 ms ahead. The break-even body is about 102 loop iterations (about 87 on the EVO-X2). Control (ii) against control (i) for the entry of a float-carrying function that does not exit, calls 2 to 8: 41.9 ns a call with spreads of 50.3 ns and 21.8 ns, so not told apart (about 4% of a call).
+- **The recommendation does not change with the machine**: the loss for a loop-free body is 267.28 us once per execution on the Pi against 32 us on the EVO-X2 (the compile alone is 240.65 us, eight times the EVO-X2's), and the gain begins at a body of about 102 iterations against 87.
+
+
 ### What is not done
 
 - **Calls inside compiled code** were a defect of milestone 1 (Corey,
@@ -2306,8 +2583,8 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   yield a host function or a library, and any call with the wrong number of
   arguments. Tang has no tail call and none is added. Float arithmetic, comparison
   and casts, and integer `/` and `%`, were the same kind of defect until story 7; they
-  are compiled now (above), and what is left as an exit is a float that must become a
-  value word (a store, a call, a return, a print) and a float's truthiness.
+  are compiled now (above). What is left as an exit is listed, with the reason and
+  whether it is structural, in "The exits that remain, and why".
 - **On-stack replacement into a running loop.** Compiled code is entered at a
   function's entry only; a loop that gets hot in a function called once runs in
   the interpreter for that call, and after a pause at a compiled poll the rest of
@@ -2327,9 +2604,12 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
   `GLTANG_ERR_UNSUPPORTED`, counted as a failure. `JIT=no` is the arm for every
   other target.
 - **Inline caches**, **inlining of heap operations** (arrays, maps, strings; a
-  native is called, not inlined), float arithmetic, comparison and casts, boxed integers and
-  `DIV`/`MOD`: all of them are exits, and the interpreter does them. (A float constant is
-  carried raw; whatever reads it leaves compiled code.)
+  native is called, not inlined) and boxed-integer arithmetic: exits, and the interpreter does
+  them. Float arithmetic, comparison and casts and integer `DIV`/`MOD` over raw or small-integer
+  operands are compiled (above); a float that must become a value word, a float's truthiness and
+  the error cases are the exits of "The exits that remain, and why". **No static decline** of a
+  function whose every path ends in a float exit, and **no rate-based discard policy**: "Floats,
+  measured" ends in a recommendation for Corey about both, and nothing is implemented.
 - **Hardening** of the generated code (guard pages, randomised layout, constant
   blinding): the pages are never writable and executable at once, and that is all.
 - **Compile-time limits tuned to a benchmark.** The supported set, the threshold
@@ -2633,23 +2913,25 @@ neither is true of this one, and the call-heavy cases are in "Calls, measured".
 | calibration | 1.17 ns per xorshift step |
 | parse of the small script | about 3.4 us |
 | parse of a 1 MiB template (about 11,000 rows) | about 41.6 ms |
-| destroy of that tree | about 19.4 ms |
+| destroy of that tree | about 20.4 ms (19.4 ms on 2026-10-09; re-measured 2026-10-11 on `c2ed592`: moved by 5%, more than the spread of 0.4 ms, cause not identified) |
 | compile of the small script | about 0.79 us |
-| compile of the 1 MiB template | about 10.6 ms |
+| compile of the 1 MiB template | about 12.0 ms (10.6 ms on 2026-10-09; moved by 13%, more than the spread of 0.7 ms; cause not identified) |
 | run: 1,000-iteration integer loop | about 40.7 us (41 ns per iteration, about a dozen instructions) |
-| run: `fib(15)` (1,973 calls), the default configuration | about 131.4 us (about 67 ns per call). The JIT is built and the threshold is the default, so `fib` tiers up after 200 polls and most of the run is compiled; the interpreted figure, 147.0 us, is in "Calls, measured" |
+| run: `fib(15)` (1,973 calls), the default configuration | about 151.0 us (about 77 ns per call; 131.4 us on 2026-10-09: the compiled-call regression of "Floats, measured"). The JIT is built and the threshold is the default, so `fib` tiers up after 200 polls and most of the run is compiled; the interpreted figure, 147.0 us, is in "Calls, measured" |
 | run: 200 string appends | about 26.2 us |
 | run: 1,000 array element stores | about 58.3 us |
-| run: the loop paused and resumed every 500 fuel | about 47.3 us (the pauses add about 16%; the first measurement said 6%, and the spread of the loop beside it is 4.3 us, so this is the less certain of the two) |
+| run: the loop paused and resumed every 500 fuel | about 43.5 us (47.3 us on 2026-10-09; the pauses add about 11% to the loop beside it; the first measurement said 6%; the spread is 1.4 us) |
 | run: `use math; s += math.pi` 200 times | about 24.8 us (about 124 ns for a `use`, a member access and an add) |
 | run: a native function called 1,000 times | about 60.9 us (about 61 ns a call, the loop included) |
 | run: a template call, 200 times (three prints each) | about 88.4 us (about 442 ns a call: the activation, the scope's open and close, the prints and the output string) |
 | run: 2,000 swallowed errors, the list full after 1,024 | about 151.0 us (about 76 ns an error; the 976 past the cap are only counted) |
 | run: `random.global.next_int % 7` 1,000 times | about 91.0 us (about 91 ns an iteration, a boxed integer or two included) |
-| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 44.3 us (the `LINE` instruction is executed and does nothing) |
+| run: four statements to a loop iteration, 1,000 iterations, statement polls off | about 41.2 us (44.3 us on 2026-10-09; moved, cause not identified) (the `LINE` instruction is executed and does nothing) |
 | run: the same, statement polls on with nothing pending | about 92.9 us (about 12 ns a poll on the unarmed fast path) |
 | start from scratch: a context made and run until it pauses right after a heavy prologue | about 2.17 ms |
 | start from a snapshot: a context made and the snapshot of that pause restored into it | about 0.154 ms (see below) |
+
+Re-measured on 2026-10-11 on `c2ed592` (the same machine, compiler and method; the minimum of five runs of the whole harness): every other row of this table, not named above, is **not told apart** from its figure of 2026-10-09 (the loop 39.0 us against 40.7, the string appends 25.7 against 26.2, the array stores 58.2 against 58.3, `use math` 24.7 against 24.8, the native call 60.1 against 60.9, the template call 86.1 against 88.4, the swallowed errors 147.8 against 151.0, the random loop 89.2 against 91.0, the statement polls on 86.5 against 92.9, the starts 2.10 ms and 0.150 ms against 2.17 and 0.154, the parse rows 3.4 us and 41.7 ms), each inside or within a few spreads of the earlier figure and in neither direction by more than 7%.
 
 The host API adds nothing to a run that does not use it: the loop and `fib` cases
 are where they were, within the noise of the machine. With the JIT built, the
