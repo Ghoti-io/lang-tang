@@ -561,7 +561,7 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
         "calls %llu, call exits %llu, compiled at call %llu, deepest chain %llu, rebuild failures %llu, hook argument errors %llu, code bytes mapped %llu, "
         "library functions called %llu, member loads %llu, library guard exits %llu, library stack exits %llu, "
         "library status deopts %llu, library status unwinds %llu, library enters refused %llu, library sites unsupported %llu, "
-        "floats boxed %llu, pool boxes made %llu, reservation refusals %llu, pool refusals %llu, conversion errors %llu, reservation peak %llu\n",
+        "floats boxed %llu, pool boxes made %llu, reservation refusals %llu, pool refusals %llu, conversion errors %llu, reservation peak %llu, extension lookups %llu, extension records %llu, extension mismatches %llu\n",
         (unsigned long long)stats.functions_compiled, (unsigned long long)stats.compile_failures, (unsigned long long)stats.functions_discarded,
         (unsigned long long)stats.entries, (unsigned long long)stats.returns, (unsigned long long)stats.deopts,
         (unsigned long long)stats.refused_pauses, (unsigned long long)stats.refused_unwinds, (unsigned long long)stats.slow_polls,
@@ -574,7 +574,8 @@ static int run_tree(const GLTANG_Tree * tree, const char * name, const Options *
         (unsigned long long)stats.native_status_deopts, (unsigned long long)stats.native_status_unwinds,
         (unsigned long long)stats.native_enters_refused, (unsigned long long)stats.native_sites_unsupported,
         (unsigned long long)stats.values_boxed, (unsigned long long)stats.box_pool_made, (unsigned long long)stats.reservation_refusals,
-        (unsigned long long)stats.box_pool_refusals, (unsigned long long)stats.conversion_errors, (unsigned long long)stats.reservation_peak);
+        (unsigned long long)stats.box_pool_refusals, (unsigned long long)stats.conversion_errors, (unsigned long long)stats.reservation_peak,
+        (unsigned long long)stats.extension_lookups, (unsigned long long)stats.extension_records, (unsigned long long)stats.extension_mismatches);
     }
   }
 #ifdef GLTANG_WITH_DEBUG

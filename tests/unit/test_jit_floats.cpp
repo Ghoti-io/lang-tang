@@ -1337,6 +1337,156 @@ TEST(JitFloats, AFunctionWhoseBeginningIsAFloatAndWhoseMergeConflictsIsCompiledE
   EXPECT_EQ(d.stats().values_boxed, 0u) << "so nothing in compiled code held a float";
 }
 
+// ---------------------------------------------------------------------------
+// The push and pop hooks, taken one at a time
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A finished run whose function `f` (token program 0, function 1) holds a raw float, so its record says so.
+struct HookRig {
+  Driver d;
+  uint64_t token = uint64_t{1};
+  uint64_t args[2] = {(uint64_t{3} << 4) | 1u, 0};
+  HookRig() : d("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } return i; }\nprint(f(3));\n", 1, false) {
+    EXPECT_TRUE(d.ok());
+    EXPECT_TRUE(d.run());
+    EXPECT_GE(d.stats().functions_compiled, 1u);
+  }
+  GLTANG_Execution * exec() { return d.ctx->execution; }
+  int push() { return gltang_vm_jit_test_hook(exec(), 0, token, args, 2); }
+  void pop() { EXPECT_EQ(gltang_vm_jit_test_hook(exec(), 1, 0, nullptr, 0), 0); }
+};
+
+}  // namespace
+
+TEST(JitFloats, ARecordThatBelongsToAnotherFunctionIsNotGivenBackByAPopAndIsCounted) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  HookRig r;
+  ASSERT_EQ(r.push(), 0);
+  EXPECT_EQ(r.d.boxes().extensions, 1u) << "the callee holds a raw float: its push made a record";
+  // The frame the pop will take off is another function's (the top level's): the record at this
+  // depth is not its own.
+  GRCORE_Stack * stack = grcore_context_stack(r.d.ctx->context);
+  grcore_stack_slots(stack, grcore_stack_top(stack))[0] = 0;
+  r.pop();
+  EXPECT_EQ(r.d.stats().extension_mismatches, 1u);
+  EXPECT_EQ(r.d.boxes().extensions, 1u) << "so the record stays, to be given back with the entry's";
+  gltang_vm_jit_test_retract_all(r.exec());
+  EXPECT_EQ(r.d.boxes().capacity + r.d.boxes().extensions, 0u);
+  // The control: the same push and pop with its own frame gives back and counts nothing.
+  ASSERT_EQ(r.push(), 0);
+  r.pop();
+  EXPECT_EQ(r.d.stats().extension_mismatches, 1u);
+  EXPECT_EQ(r.d.boxes().capacity + r.d.boxes().extensions, 0u);
+}
+
+TEST(JitFloats, AFunctionMarkedNeverOrDiscardedMakesNoExtensionWhenPushedAgain) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  HookRig r;
+  ASSERT_EQ(r.push(), 0);
+  EXPECT_EQ(r.d.boxes().extensions, 1u) << "the control: while it is compiled, a push extends";
+  r.pop();
+  const uint64_t lookups = r.d.stats().extension_lookups;
+  ASSERT_EQ(gltang_vm_jit_test_mark_never(r.exec(), r.token), 1);
+  ASSERT_EQ(r.push(), 0);
+  EXPECT_EQ(r.d.stats().extension_lookups, lookups + 1u) << "the push looked the record up...";
+  EXPECT_EQ(r.d.boxes().extensions, 0u) << "...and found no raw floats in it";
+  EXPECT_EQ(r.d.boxes().capacity, 0u);
+  r.pop();
+  // And the real discard: a float function that leaves compiled code eight times is let go.
+  Driver d(
+      "function f(n) { x = 1.5; print(x); return n; }\n"
+      "for (k = 0; k < 12; k += 1) { f(k); }\n",
+      1, false);
+  ASSERT_TRUE(d.ok());
+  ASSERT_TRUE(d.run());
+  ASSERT_GE(d.stats().functions_discarded, 1u);
+  const uint64_t args[2] = {(uint64_t{3} << 4) | 1u, 0};
+  ASSERT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, 0, uint64_t{1}, args, 2), 0);
+  EXPECT_EQ(d.boxes().extensions, 0u) << "a discarded function's record holds no count";
+  EXPECT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, 1, 0, nullptr, 0), 0);
+}
+
+// ---------------------------------------------------------------------------
+// The flag that starts the bookkeeping turns on while calls are open
+// ---------------------------------------------------------------------------
+
+TEST(JitFloats, TheFirstFloatFunctionCompiledMidChainLeavesTheEarlierPushesWithNoRecordAndEveryPopGivesBackOnlyItsOwn) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // outer and mid hold no float; deep does, and is compiled at its first call, from compiled
+  // code, while outer's entry and mid's push are open: the first nonzero extension is
+  // deep's, made after two calls that looked nothing up.
+  const std::string source =
+      "function deep(n) { y = 2.5; i = 0; while (i < 3) { i = i + 1; } return n + 1; }\n"
+      "function mid(n) { i = 0; while (i < 2) { i = i + 1; } return deep(n) + 1; }\n"
+      "function outer(n) { s = 0; i = 0; while (i < n) { s = s + mid(i); i = i + 1; } return s; }\n"
+      "print(outer(5));\n";
+  Scenario sc;
+  sc.source = source;
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  Driver d(source, 1, true);
+  ASSERT_TRUE(d.ok());
+  std::vector<Seen> seen;
+  d.script.on_poll = recorder(&d, &seen);
+  ASSERT_TRUE(d.run());
+  EXPECT_EQ(d.ctx->raw(), plain.raw);
+  GLTANG_JitStats st = d.stats();
+  EXPECT_GE(st.calls, 10u);
+  EXPECT_GT(st.extension_lookups, 0u) << "the flag turned on";
+  EXPECT_LT(st.extension_lookups, st.calls) << "after at least one call that looked nothing up";
+  EXPECT_EQ(st.extension_mismatches, 0u);
+  EXPECT_EQ(st.extension_records, 5u) << "one for each of deep's five calls, and none for outer's entry or mid's pushes";
+  std::set<uint64_t> in_outer, in_mid, in_deep;
+  for (const Seen & x : seen) {
+    if (x.function == 0) {
+      continue;  // the top level's own poll
+    }
+    (x.function == 3 ? in_outer : x.function == 2 ? in_mid : in_deep).insert(x.capacity);
+  }
+  EXPECT_EQ(in_outer, std::set<uint64_t>{0}) << "every pop gave back only its own: the float-free ones had nothing to give";
+  EXPECT_EQ(in_mid, std::set<uint64_t>{0});
+  EXPECT_EQ(in_deep, std::set<uint64_t>{1}) << "deep's own extension, and no one else's";
+  EXPECT_EQ(d.boxes().capacity + d.boxes().extensions + d.boxes().pool, 0u);
+}
+
+TEST(JitFloats, AnEntryExtensionIsNotTakenByThePopOfAFloatFreeCallAtTheSameDepth) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // outer holds a float, so its entry records an extension at level 0; mid holds none, and its
+  // push, at level 1, is below deep's, at level 2. Each pop sees the entry's record at the top of
+  // the records (before deep's, after it is given back) and must leave it alone.
+  const std::string source =
+      "function deep(n) { y = 2.5; i = 0; while (i < 3) { i = i + 1; } return n + 1; }\n"
+      "function mid(n) { i = 0; while (i < 2) { i = i + 1; } return deep(n) + 1; }\n"
+      "function outer(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + mid(i); i = i + 1; } return s; }\n"
+      "print(outer(5));\n";
+  Scenario sc;
+  sc.source = source;
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  Driver d(source, 1, true);
+  ASSERT_TRUE(d.ok());
+  std::vector<Seen> seen;
+  d.script.on_poll = recorder(&d, &seen);
+  ASSERT_TRUE(d.run());
+  EXPECT_EQ(d.ctx->raw(), plain.raw);
+  EXPECT_EQ(d.stats().extension_mismatches, 0u);
+  std::set<uint64_t> in_outer, in_mid, in_deep;
+  for (const Seen & x : seen) {
+    if (x.function == 0) {
+      continue;  // the top level's own poll
+    }
+    (x.function == 3 ? in_outer : x.function == 2 ? in_mid : in_deep).insert(x.capacity);
+  }
+  EXPECT_EQ(in_outer, (std::set<uint64_t>{0, 1})) << "(0 is the interpreter's entry poll) the entry's own extension stays through every call and pop below it";
+  EXPECT_EQ(in_mid, (std::set<uint64_t>{1})) << "a float-free push added nothing and its pop took nothing";
+  EXPECT_EQ(in_deep, std::set<uint64_t>{2}) << "the entry's and deep's";
+  EXPECT_EQ(d.boxes().capacity + d.boxes().extensions + d.boxes().pool, 0u);
+}
+
 #else  // JIT=no
 
 TEST(JitFloats, WithoutTheJitNothingIsBoxedAheadAndTheStatisticsAreZero) {

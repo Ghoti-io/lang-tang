@@ -635,6 +635,21 @@ void gltang_vm_jit_test_failed_push(GLTANG_Execution * execution, uint64_t * cap
   *count = jit ? jit->test_failed_count : 0;
 }
 
+/*
+ * For the tests only: marks a function never-compile as a failed compile or a decline does (the
+ * record's count of raw floats must go to zero with it). Returns 1 if the function has a record.
+ * Declared in vm/test_hooks.h.
+ */
+int gltang_vm_jit_test_mark_never(GLTANG_Execution * execution, uint64_t fword) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  GLTANG_JitFn * f = jit ? gltang_jit_find_fn(execution, jit, fword, false) : NULL;
+  if (!f) {
+    return 0;
+  }
+  gltang_jit_mark_never(execution, jit, f);
+  return 1;
+}
+
 /* For the tests only: the stray words (raw words where a value belongs) the failed rebuild left in the guest frames. Declared in vm/test_hooks.h. */
 uint64_t gltang_vm_jit_test_stray_words(GLTANG_Execution * execution) {
   return execution && execution->jit ? execution->jit->test_stray_words : 0;

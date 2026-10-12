@@ -76,6 +76,8 @@ int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint
 
 /** Refuses the stack push of the Nth push hook that extended the reservation, and what the reservation held after the refusal was undone. */
 void gltang_vm_set_stack_push_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at);
+/** Marks a function never-compile (its record's raw-float count goes to zero). */
+int gltang_vm_jit_test_mark_never(GLTANG_Execution * execution, uint64_t fword);
 uint64_t gltang_vm_jit_test_stray_words(GLTANG_Execution * execution);
 void gltang_vm_jit_test_failed_push(GLTANG_Execution * execution, uint64_t * capacity, uint64_t * extensions, uint64_t * count);
 

@@ -188,11 +188,18 @@ static void hook_pop(void * context) {
   // (at most one call is open at a depth, so a record at this depth is this call's, and a
   // call that extended by zero left none). The test is on the records alone: a call with no
   // raw float pays one compare here, and the stack is read only when there is a record to
-  // give back, to check that it is this callee's.
+  // give back, to check that it is this callee's. A record of another function at this
+  // depth is not given back and is counted: giving it back would leave a later call
+  // without its share, and leaving it makes the entry's exit (which gives back all) the
+  // one to clean up. The guard on the frame count is only here, where a frame is read.
   if (jit && jit->ext_count > jit->ext_floor && jit->ext[jit->ext_count - 1u].level == jit->chain) {
-    const uint64_t callee = grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION];
-    assert(jit->ext[jit->ext_count - 1u].fword == callee);
-    gltang_jit_retract_level(exec, jit->chain, callee);
+    const uint64_t callee = grcore_stack_frame_count(stack) ? grcore_stack_slots(stack, grcore_stack_top(stack))[GLTANG_F_FUNCTION] : 0;
+    if (jit->ext[jit->ext_count - 1u].fword == callee) {
+      gltang_jit_retract_level(exec, jit->chain, callee);
+    }
+    else {
+      ++exec->jit_stats.extension_mismatches;
+    }
   }
   (void)grcore_stack_pop(stack);
   if (jit && jit->chain) {
