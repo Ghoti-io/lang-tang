@@ -1059,6 +1059,8 @@ typedef enum {
   FK_PRINT,     /* ...; print(a * 2.0); return 0;                       ends in a print of a raw float (an exit) */
   FK_CAST,      /* ...; return (a * 2.0) as int;                        the same float work, no float exit */
   FK_INT,       /* a = 1; loop L times; return a * 2;                   integer only: no pool */
+  FK_GLOBAL,    /* ...; gv = a * 2.0; return 0;                          a store of a raw float to a global (an exit) */
+  FK_ARG,       /* ...; h(a * 2.0); return 0;                            a raw float as a call argument (an exit) */
   FK_E_DIV0,    /* return x / 0.0;                                      an error at every call */
   FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call */
   FK_E_MOD,     /* return x % 2.0;                                      an error at every call */
@@ -1081,6 +1083,12 @@ static void family_function(FamilyKind k, unsigned loop, char * out, size_t size
     case FK_INT:
       snprintf(out, size, "function g() { a = 1; i = 0; while (i < %u) { a = a + 1; i = i + 1; } return a * 2; }", loop);
       return;
+    case FK_GLOBAL:
+      snprintf(out, size, "function g() { global gv; a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } gv = a * 2.0; return 0; }", loop);
+      return;
+    case FK_ARG:
+      snprintf(out, size, "function h(x) { return 0; } function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } h(a * 2.0); return 0; }", loop);
+      return;
     case FK_E_DIV0: snprintf(out, size, "function g(x) { return x / 0.0; }"); return;
     case FK_E_NANINT: snprintf(out, size, "function g(x) { return x as int; }"); return;
     case FK_E_MOD: snprintf(out, size, "function g(x) { return x %% 2.0; }"); return;
@@ -1100,6 +1108,7 @@ static const char * family_prelude(FamilyKind k) {
     case FK_E_NANINT: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y - y;";
     case FK_N_INFSUB: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y;";
     case FK_N_ZERODIV: return "av = 2.0;";
+    case FK_GLOBAL: return "gv = 0;";
     default: return "av = 1.5;";
   }
 }
@@ -1205,6 +1214,10 @@ FAMILY_FUNCTIONS(f_cast10k, FK_CAST, 10000u)
 FAMILY_FUNCTIONS(f_int0, FK_INT, 0u)
 FAMILY_FUNCTIONS(f_int100, FK_INT, 100u)
 FAMILY_FUNCTIONS(f_int10k, FK_INT, 10000u)
+FAMILY_FUNCTIONS(f_global0, FK_GLOBAL, 0u)
+FAMILY_FUNCTIONS(f_global100, FK_GLOBAL, 100u)
+FAMILY_FUNCTIONS(f_arg0, FK_ARG, 0u)
+FAMILY_FUNCTIONS(f_arg100, FK_ARG, 100u)
 FAMILY_FUNCTIONS(f_div0, FK_E_DIV0, 0u)
 FAMILY_FUNCTIONS(f_nanint, FK_E_NANINT, 0u)
 FAMILY_FUNCTIONS(f_mod, FK_E_MOD, 0u)
@@ -1446,6 +1459,10 @@ static const Case cases[] = {
     FAMILY_ROWS("float-entry-int-L0", f_int0, 500u)
     FAMILY_ROWS("float-entry-int-L100", f_int100, 200u)
     FAMILY_ROWS("float-entry-int-L10000", f_int10k, 8u)
+    FAMILY_ROWS("float-store-L0", f_global0, 500u)
+    FAMILY_ROWS("float-store-L100", f_global100, 200u)
+    FAMILY_ROWS("float-arg-L0", f_arg0, 500u)
+    FAMILY_ROWS("float-arg-L100", f_arg100, 200u)
     STEADY_FAMILY_ROWS("float-exit-div0", f_div0, 500u)
     STEADY_FAMILY_ROWS("float-exit-nanint", f_nanint, 500u)
     STEADY_FAMILY_ROWS("float-exit-mod", f_mod, 500u)
