@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -1196,7 +1196,7 @@
+@@ -1227,7 +1227,7 @@
  /* Which rule a family function follows (see Policy). */
  static Policy family_policy(FamilyKind k, unsigned loop) {
    switch (k) {
@@ -12,4 +12,4 @@
 +    case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: (void)loop; return POL_EXPECTED;
      case FK_E_DIV0: case FK_E_MOD: return POL_DECLINED; /* a loop-free function that ends at the exit that boxes a raw operand */
      case FK_E_NANINT: case FK_E_STR: return POL_COUNTED;
-     default: return POL_NORMAL;
+     case FK_CALLER: return POL_REMEMBERED;

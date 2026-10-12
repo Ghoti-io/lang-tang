@@ -1,0 +1,15 @@
+# 82 a declined function's callee is expected never to be entered
+# defect: a declined function's callee is expected never to be entered; the benchmark harness's own check (check_jit_expectation: a declined function is not entered, its callee may be (exactly))
+# caught by: bench --smoke --only float-arg-L0
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -394,7 +394,7 @@
+   if (want.compiled == 1 && (st->compile_failures != 0 || st->functions_compiled == 0 || st->entries == 0 || st->functions_declined_expected != (uint64_t)want.declined)) {
+     setup_failed("a compiled case that did not compile and enter, failed to compile or declined another number of functions than it must");
+   }
+-  if (want.compiled == 2 && (st->compile_failures != 0 || st->functions_declined_expected != 1 || st->entries != 1 + (uint64_t)want.callee_entries)) {
++  if (want.compiled == 2 && (st->compile_failures != 0 || st->functions_declined_expected != 1 || st->entries != 1)) {
+     setup_failed("a case that must decline its function and did not, or entered it (only the top level, and a callee the interpreter calls, may be entered), or failed to compile");
+   }
+   if (want.compiled != 0 && st->rebuild_failures == 0

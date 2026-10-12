@@ -1,0 +1,15 @@
+# 81 the exit-kinds invariant leaves out the remembered call exits
+# defect: the exit-kinds invariant leaves out the remembered call exits; the benchmark harness's own check (check_jit_expectation: deopts is exactly the sum of the classified exits)
+# caught by: bench --smoke --only float-caller-declined
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -398,7 +398,7 @@
+     setup_failed("a case that must decline its function and did not, or entered it (only the top level, and a callee the interpreter calls, may be entered), or failed to compile");
+   }
+   if (want.compiled != 0 && st->rebuild_failures == 0
+-      && st->deopts != st->exits_expected + st->exits_counted + st->call_exits_native_stack + st->call_exits_push_refused + st->call_exits_remembered + st->native_exits_stack) {
++      && st->deopts != st->exits_expected + st->exits_counted + st->call_exits_native_stack + st->call_exits_push_refused + st->native_exits_stack) {
+     setup_failed("a case whose exits are not of exactly one kind (deopts differ from the sum of the classified exits)");
+   }
+   if (st->functions_discarded != (uint64_t)want.discarded) {

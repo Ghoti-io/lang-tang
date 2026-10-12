@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -1094,7 +1094,7 @@
+@@ -1121,7 +1121,7 @@
        "i = 0; while (i < %llu) { r = f(%llu); i = i + 1; } tick(); r;",
        p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
        (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);

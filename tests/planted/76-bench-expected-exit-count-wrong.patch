@@ -4,9 +4,9 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -355,7 +355,7 @@
-   }
+@@ -371,7 +371,7 @@
    want.compiled = p == POL_DECLINED ? 2 : 1;
+   want.declined = (p == POL_DECLINED || p == POL_REMEMBERED) ? 1 : 0;
    want.discarded = 0;
 -  want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
 +  want.expected = p == POL_EXPECTED ? (int64_t)calls + 1 : 0;

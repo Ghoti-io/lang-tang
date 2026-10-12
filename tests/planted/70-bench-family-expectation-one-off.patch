@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -1233,7 +1233,7 @@
+@@ -1266,7 +1266,7 @@
          a = a + 1.0;
        }
        have_expected_integer = 1;

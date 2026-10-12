@@ -4,7 +4,7 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -358,7 +358,7 @@
+@@ -374,7 +374,7 @@
    want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
    want.counted = 1; /* the top level leaves once, at its first function declaration */
    if (p == POL_COUNTED) {
