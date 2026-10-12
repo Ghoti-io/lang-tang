@@ -242,6 +242,10 @@ static bool call_site_at(const GLTANG_JitCode * jc, uint64_t offset) {
   return jc && offset < jc->code_count && jc->call_sites && (jc->call_sites[offset >> 3] & (1u << (offset & 7u))) != 0;
 }
 
+static bool expected_site_at(const GLTANG_JitCode * jc, uint64_t offset) {
+  return jc && offset < jc->code_count && jc->expected_sites && (jc->expected_sites[offset >> 3] & (1u << (offset & 7u))) != 0;
+}
+
 static bool native_site_at(const GLTANG_JitCode * jc, uint64_t offset) {
   return jc && offset < jc->code_count && jc->native_sites && (jc->native_sites[offset >> 3] & (1u << (offset & 7u))) != 0;
 }
@@ -304,7 +308,13 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
         if (cause == 0u) {
           GLTANG_JitFn * jf = gltang_jit_find_fn(exec, jit, fr.identity.function, false);
           const GLTANG_JitCode * jc = jf && jf->code ? grcore_code_payload(jf->code) : NULL;
-          if (native_site_at(jc, fr.identity.offset)) {
+          if (expected_site_at(jc, fr.identity.offset)) {
+            // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
+            // code, so it does not count toward the discard limit.
+            ++exec->jit_stats.exits_expected;
+            counts = false;
+          }
+          else if (native_site_at(jc, fr.identity.offset)) {
             // An exit at a library call or member load: the callee value was not the
             // native the site names (counts, like the guest call's), or the native
             // stack would have run out before the call (does not).

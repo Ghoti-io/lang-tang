@@ -540,6 +540,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
     // eighth it is let go: its slot is refused, its range unregistered and the
     // cache's reference dropped, and core frees the code when no record is open.
     GLTANG_JitFn * g = gltang_jit_find_fn(exec, jit, jit->exit_fword, false);
+    ++exec->jit_stats.exits_counted;
     if (g && g->state == GLTANG_JITFN_COMPILED && ++g->deopts >= GLTANG_JIT_DEOPT_LIMIT) {
       discard(exec, g);
       ++exec->jit_stats.functions_discarded;

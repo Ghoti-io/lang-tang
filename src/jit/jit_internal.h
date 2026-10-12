@@ -113,6 +113,7 @@ typedef struct GLTANG_JitCode {
   uint32_t parameter_count;
   uint32_t code_count;        ///< Bytecode words of the function (the size of `call_sites`' index space).
   uint8_t * call_sites;       ///< One bit per bytecode index: a compiled call is emitted there. Owned.
+  uint8_t * expected_sites;   ///< One bit per bytecode index: the unconditional exit there boxes a raw float for its consumer (designed; it does not count toward the discard limit). Owned.
   uint8_t * native_sites;     ///< One bit per bytecode index: a native call (a library call or a member load) is emitted there. Owned.
   uint32_t max_converting;    ///< The most converting (raw `F64`) locations at any one site: the cells a frame of this function adds to the reservation (AD-27).
 } GLTANG_JitCode;

@@ -155,9 +155,12 @@ typedef struct Ctx {
   const GLTANG_LibraryMember ** call_member;  ///< Per index of a CALL: the library native it calls, or NULL.
   uint32_t * attr_src;            ///< Per index of an ATTR: the instruction that produced the operand it reads.
   bool * load_ok;                 ///< Per index of a USE or ATTR: compiled as a member load.
+  uint8_t * end_kind;             ///< Per index reached by the walk: how the walk ended there, if it did (END_*).
+  bool back_branch;               ///< A reachable jump goes to its own index or an earlier one: the code may loop.
   bool * declined;                ///< Per index: a library call or member load that natives being unavailable left as an exit.
   uint32_t * global_use;          ///< Per global: the path constant its `use` stores, DECL_NONE or DECL_MANY.
   uint32_t * local_use;           ///< The same for this function's locals.
+  uint8_t * expected_sites;       ///< One bit per index where the unconditional exit is the designed one: a raw float boxed for its consumer.
   uint8_t * native_sites;         ///< One bit per index where a native call (a library call or a member load) is emitted.
   bool natives_on;
   bool * flowed;                  ///< Per index of a CALL: the walk went on past it as a call.
@@ -181,6 +184,9 @@ typedef struct Ctx {
 } Ctx;
 
 enum { KIND_REF = 0, KIND_F64 = 1 };
+
+/** How the walk of the analysis ended at an instruction (`end_kind`). */
+enum { END_NONE = 0, END_EXPECTED, END_REAL, END_RETURN };
 
 #define B(call) \
   do { \
@@ -757,6 +763,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
       bool branch = false;       // a conditional or unconditional jump to `a`
       int32_t branch_depth = d;
       if (reads_raw(c, op, a, d)) {
+        c->end_kind[i] = END_EXPECTED;  // designed: the float is boxed for its consumer (see emit_op_kinds)
         break;                   // an unconditional exit with the raw operand in its frame state: nothing flows from it
       }
       if (op == GLTANG_OP_CALL) {
@@ -774,6 +781,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
         c->call_k[i] = k;
         c->call_member[i] = native;
         if (k < 0 && !native) {
+          c->end_kind[i] = END_REAL;
           break;                 // an unconditional exit: nothing flows from it
         }
         c->flowed[i] = true;
@@ -794,6 +802,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
           c->declined[i] = true;
         }
         if (!c->load_ok[i]) {
+          c->end_kind[i] = END_REAL;
           break;                 // an unconditional exit: nothing flows from it
         }
         c->flowed[i] = true;
@@ -803,6 +812,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
         if (op == GLTANG_OP_USE && !c->natives_on && use_load_ok(c, a)) {
           c->declined[i] = true;
         }
+        c->end_kind[i] = END_REAL;
         break;                   // an unconditional exit: nothing flows from it
       }
       else switch (op) {
@@ -878,6 +888,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
           break;
         case GLTANG_OP_RET:
           if (d < 1) { return GLTANG_ERR_INTERNAL; }
+          c->end_kind[i] = END_RETURN;
           falls = false;
           break;
         default:
@@ -892,6 +903,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
       if (branch) {
         if (a >= c->fn->code_count) { return GLTANG_ERR_INTERNAL; }
         c->leader[a] = true;
+        c->back_branch = c->back_branch || a <= i;
         if (!reach(c, a, branch_depth, c->cur, &wn)) { return c->oom ? GLTANG_ERR_OOM : GLTANG_ERR_INTERNAL; }
       }
       if (!falls) {
@@ -952,7 +964,9 @@ static GLTANG_Result analyse(Ctx * c) {
       c->load_ok[i] = false;
       c->declined[i] = false;
       c->attr_src[i] = PROD_NONE;
+      c->end_kind[i] = END_NONE;
     }
+    c->back_branch = false;
     free_prod(c);
     GLTANG_Result r = analyse_once(c);
     if (r != GLTANG_OK) {
@@ -1359,7 +1373,11 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
   int64_t k = 0;
 
   if (reads_raw(c, op, a, (int32_t)d)) {
-    emit_exit(c, i, d);  // the raw operand is in the frame state; the interpreter re-executes the instruction
+    // The raw operand is in the frame state and the interpreter re-executes the instruction. This
+    // exit is the design (the float is boxed for its consumer, once, by the rebuild), not a failure
+    // of compiled code: the site is flagged so that it does not count toward the discard limit.
+    c->expected_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+    emit_exit(c, i, d);
     return false;
   }
   if (op == GLTANG_OP_CALL) {
@@ -1698,6 +1716,7 @@ static void release_code(void * payload) {
   grjit_code_destroy(jc->code);
   gcu_allocator_free(allocator, jc->call_sites);
   gcu_allocator_free(allocator, jc->native_sites);
+  gcu_allocator_free(allocator, jc->expected_sites);
   gcu_allocator_free(allocator, jc);
 }
 
@@ -1768,6 +1787,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   GLTANG_JitCode * payload = NULL;
   uint8_t * call_sites = NULL;
   uint8_t * native_sites = NULL;
+  uint8_t * expected_sites = NULL;
   c->exec = exec;
   c->program = program;
   c->fn = fn;
@@ -1803,6 +1823,9 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->call_sites = call_sites;
   native_sites = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (n >> 3) + 1u, 1);
   c->native_sites = native_sites;
+  expected_sites = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (n >> 3) + 1u, 1);
+  c->expected_sites = expected_sites;
+  c->end_kind = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t));
   c->call_member = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(const GLTANG_LibraryMember *));
   c->attr_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
   c->load_ok = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
@@ -1810,7 +1833,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
   c->local_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
   if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at || !c->kind_at
-      || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !c->call_member
+      || !c->cur || !c->call_k || !c->call_entry || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !expected_sites || !c->end_kind || !c->call_member
       || !c->attr_src || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
     goto done;
   }
@@ -1854,6 +1877,26 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     *out = NULL;
     result = GLTANG_OK;
     goto done;
+  }
+  // The static decline. A function with no backward jump, no normal return and no real exit, whose
+  // every path therefore ends at an exit made only to box a raw float for its consumer, cannot
+  // repay its compile: each call runs a few instructions in compiled code, then leaves for the
+  // interpreter. Only when every path is provably so; any other function is compiled.
+  {
+    bool expected_end = false, other_end = false;
+    for (size_t i = 0; i < n; ++i) {
+      if (c->depth[i] < 0) {
+        continue;
+      }
+      expected_end = expected_end || c->end_kind[i] == END_EXPECTED;
+      other_end = other_end || c->end_kind[i] == END_REAL || c->end_kind[i] == END_RETURN;
+    }
+    if (expected_end && !other_end && !c->back_branch) {
+      ++exec->jit_stats.functions_declined_expected;
+      *out = NULL;
+      result = GLTANG_OK;
+      goto done;
+    }
   }
   // The F64 temporaries are declared only where the function has a float operation (a slot that is
   // ever raw) or a cast to int of a value word; any other function is emitted as it was.
@@ -2022,6 +2065,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   payload->code_count = fn->code_count;
   payload->call_sites = call_sites;
   payload->native_sites = native_sites;
+  payload->expected_sites = expected_sites;
   payload->max_converting = max_converting;
   {
     GRCORE_Code * handle = NULL;
@@ -2034,6 +2078,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     payload = NULL;
     call_sites = NULL;
     native_sites = NULL;
+    expected_sites = NULL;
     result = GLTANG_OK;
   }
 
@@ -2048,6 +2093,8 @@ done:
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), payload);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), call_sites);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), native_sites);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), expected_sites);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->end_kind);
   free_prod(c);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_member);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->attr_src);

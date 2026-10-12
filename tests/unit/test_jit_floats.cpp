@@ -246,19 +246,33 @@ TEST(JitFloats, TheSlopeIsStillZeroUnderTortureAndVerify) {
   EXPECT_EQ(allocations[0], allocations[1]);
 }
 
-TEST(JitFloats, AFloatConstantIsCompiledAndAFunctionThatBeginsWithOneIsNotDeclined) {
+TEST(JitFloats, AFloatConstantIsCompiledInAFunctionWithALoopAndALoopFreeOneThatOnlyBoxesItIsDeclined) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // The first operation after the entry poll is `LINE` then `CONST 1.5`: the
-  // function compiles, is entered, and the constant is an immediate.
-  Driver d("function f() { return 1.5; }\nprint(f()); print(f()); print(f());\n", 1, false);
-  ASSERT_TRUE(d.ok());
-  ASSERT_TRUE(d.run());
-  EXPECT_EQ(d.ctx->raw(), "1.51.51.5");
-  GLTANG_JitStats st = d.stats();
-  EXPECT_GE(st.functions_compiled, 1u);
-  EXPECT_EQ(st.compile_failures, 0u);
-  EXPECT_GE(st.entries, 1u);
-  EXPECT_GE(st.values_boxed, 1u) << "the RET with a raw operand is an exit, with the operand boxed by the rebuild";
+  // With a loop the function compiles, is entered, and the constant is an immediate that its return boxes.
+  {
+    Driver d("function f() { k = 0; while (k < 1) { k = k + 1; } return 1.5; }\nprint(f()); print(f()); print(f());\n", 1, false);
+    ASSERT_TRUE(d.ok());
+    ASSERT_TRUE(d.run());
+    EXPECT_EQ(d.ctx->raw(), "1.51.51.5");
+    GLTANG_JitStats st = d.stats();
+    EXPECT_GE(st.functions_compiled, 1u);
+    EXPECT_EQ(st.compile_failures, 0u);
+    EXPECT_GE(st.entries, 1u);
+    EXPECT_GE(st.values_boxed, 1u) << "the RET with a raw operand is an exit, with the operand boxed by the rebuild";
+    EXPECT_GE(st.exits_expected, 3u) << "and a designed one";
+    EXPECT_EQ(st.functions_declined_expected, 0u);
+  }
+  // Without one every path ends at that return: nothing could repay the compile.
+  {
+    Driver d("function f() { return 1.5; }\nprint(f()); print(f()); print(f());\n", 1, false);
+    ASSERT_TRUE(d.ok());
+    ASSERT_TRUE(d.run());
+    EXPECT_EQ(d.ctx->raw(), "1.51.51.5");
+    GLTANG_JitStats st = d.stats();
+    EXPECT_EQ(st.functions_declined_expected, 1u);
+    EXPECT_EQ(st.compile_failures, 0u);
+    EXPECT_EQ(st.values_boxed, 0u) << "it was never entered";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +353,7 @@ TEST(JitFloats, ARawValueInAnOperandSlotIsBoxedByTheRebuildToo) {
   // callee polls, and a pause there rebuilds both frames.
   Driver d(
       "function h(n) { i = 0; while (i < n) { i = i + 1; } return i; }\n"
-      "function g(n) { r = 1.5 + h(n); return r; }\n"
+      "function g(n) { k = 0; while (k < 2) { k = k + 1; } r = 1.5 + h(n); return r; }\n"
       "print(g(500));\n",
       1, true);
   ASSERT_TRUE(d.ok());
@@ -362,7 +376,7 @@ TEST(JitFloats, ARawOperandSlotIsReportedAsRawBitsLikeARawLocalAndItsInspectText
   GLTANG_REQUIRE_JIT_BACKEND();
   Driver d(
       "function h(n) { i = 0; while (i < n) { i = i + 1; } return i; }\n"
-      "function g(n) { r = 1.5 + h(n); return r; }\n"
+      "function g(n) { k = 0; while (k < 2) { k = k + 1; } r = 1.5 + h(n); return r; }\n"
       "print(g(40));\n",
       1, true);
   ASSERT_TRUE(d.ok());
@@ -384,8 +398,8 @@ TEST(JitFloats, ARawOperandSlotIsReportedAsRawBitsLikeARawLocalAndItsInspectText
           continue;
         }
         ++found;
-        // g has two locals after the four header words, so a slot from index 6 is an operand slot.
-        EXPECT_GE(i, 6u) << "the raw 1.5 is in an operand slot";
+        // g has three locals after the four header words, so a slot from index 7 is an operand slot.
+        EXPECT_GE(i, 7u) << "the raw 1.5 is in an operand slot";
         EXPECT_EQ(kind, GRCORE_SLOT_RAW) << "never a value";
         EXPECT_EQ(value, bits_of(1.5));
         char text[64];
@@ -545,7 +559,7 @@ TEST(JitFloats, AMergeOfUnequalKindsIsCompiledWithNoRawSlotAndAMergeOfEqualKinds
       {"a float before the loop and a float in it",
        "function f(n) { acc = 0.0; i = 0; while (i < n) { acc = 1.5; i = i + 1; } print(acc); return i; }\nprint(f(3)); print(f(0));\n", true},
       {"a float kept across both arms",
-       "function f(c, n) { x = 2.5; if (c) { i = 1; } else { i = 2; } print(x); return i + n; }\nprint(f(true, 1)); print(f(false, 1));\n", true},
+       "function f(c, n) { x = 2.5; if (c) { i = 1; } else { i = 2; } j = 0; while (j < 1) { j = j + 1; } print(x); return i + n; }\nprint(f(true, 1)); print(f(false, 1));\n", true},
   };
   for (const Case & c : cases) {
     Scenario sc;
@@ -1394,10 +1408,10 @@ TEST(JitFloats, AFunctionMarkedNeverOrDiscardedMakesNoExtensionWhenPushedAgain) 
   EXPECT_EQ(r.d.boxes().extensions, 0u) << "...and found no raw floats in it";
   EXPECT_EQ(r.d.boxes().capacity, 0u);
   r.pop();
-  // And the real discard: a float function that leaves compiled code eight times is let go.
+  // And the real discard: a float function whose integer add fails its guard on every call (a real failure, counted) is let go at the eighth.
   Driver d(
-      "function f(n) { x = 1.5; print(x); return n; }\n"
-      "for (k = 0; k < 12; k += 1) { f(k); }\n",
+      "M = 576460752303423487;\nfunction f(n) { x = 1.5; return n + 1; }\n"
+      "for (k = 0; k < 12; k += 1) { f(M); }\n",
       1, false);
   ASSERT_TRUE(d.ok());
   ASSERT_TRUE(d.run());
