@@ -1,0 +1,15 @@
+# 68 the integer reference of the division loop is 1 off
+# defect: the integer reference of the division loop is 1 off; the benchmark harness's own check (the integer path of result_ok: ref_div3 is the only reference of jit-intdiv-div3 and steady-float-intdiv-div3)
+# caught by: bench --smoke --only jit-intdiv-div3 (the integer-reference path)
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -929,7 +929,7 @@
+   for (int64_t i = 0; i < (int64_t)n; i++) {
+     s += i / 3;
+   }
+-  return s;
++  return s + 1;
+ }
+ static int64_t ref_mod7(uint64_t n) {
+   int64_t s = 0;

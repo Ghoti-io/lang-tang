@@ -325,6 +325,23 @@ static void engine_close(Engine * e) {
  * (a call-heavy case prints them: the figure is only the compiled calls' if
  * calls were made, and no call between compiled functions left compiled code). */
 static GLTANG_JitStats last_jit_stats;
+/* What a case says its JIT did: -1 not checked, else for want_compiled 0 (the JIT must not have
+ * compiled or entered anything) or 1 (something was compiled and entered, and nothing failed to
+ * compile); want_discard is the exact number of functions discarded. A row labelled "compiled"
+ * that silently ran in the interpreter would read as a ratio of 1.0; this makes it abort. */
+static int want_compiled = -1;
+static int want_discard = -1;
+static void check_jit_expectation(const GLTANG_JitStats * st) {
+  if (want_compiled == 0 && (st->functions_compiled != 0 || st->entries != 0)) {
+    setup_failed("an interpreted case that compiled or entered compiled code");
+  }
+  if (want_compiled == 1 && (st->compile_failures != 0 || st->functions_compiled == 0 || st->entries == 0)) {
+    setup_failed("a compiled case that did not compile and enter, or whose compile failed");
+  }
+  if (want_discard >= 0 && st->functions_discarded != (uint64_t)want_discard) {
+    setup_failed("a case that discarded another number of functions than it must");
+  }
+}
 #endif
 /* When set, the integer a run must give: a figure for a program that computed
  * something else is a figure of something else. */
@@ -332,13 +349,14 @@ static int have_expected_integer;
 static int64_t expected_integer;
 /* The same for a float result, compared by its bits (a case that computes a float is
  * checked against a C reference built with the project's -ffp-contract=off, so the
- * bits are the interpreter's too); expected_float_nan accepts any NaN. */
+ * bits are the interpreter's too). */
 static int have_expected_float;
 static uint64_t expected_float_bits;
-static int expected_float_nan;
 /* What the last run of the last case that asked left behind: the host returns it
  * made (pauses), and the heap's counters. */
 static uint64_t last_pauses;
+/* The pauses of every run of the last case (a per-host-return figure divides by this, not by one run's). */
+static uint64_t total_pauses;
 static uint64_t last_heap_collections;
 static uint64_t last_heap_allocations;
 
@@ -358,7 +376,7 @@ static int result_ok(const GLTANG_Execution * execution, GLTANG_ValueKind expect
   }
   if (have_expected_float) {
     double d = gltang_execution_result_float(execution);
-    if (expected_float_nan ? !(d != d) : bits_of(d) != expected_float_bits) {
+    if (bits_of(d) != expected_float_bits) {
       return 0;
     }
   }
@@ -369,6 +387,7 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
   GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
   uint64_t sink = 0;
   double total = 0.0;
+  total_pauses = 0;
   for (uint64_t i = 0; i < iterations; i++) {
     Engine e;
     engine_open(&e, program, fuel_slice ? fuel_slice : GRCORE_UNLIMITED);
@@ -393,6 +412,7 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
       setup_failed("a result other than the one the case computes");
     }
     last_pauses = pauses;
+    total_pauses += pauses;
     {
       GRHEAP_Stats heap_stats;
       memset(&heap_stats, 0, sizeof heap_stats);
@@ -403,9 +423,12 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
     }
 #ifdef GLTANG_WITH_JIT
     (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
+    check_jit_expectation(&last_jit_stats);
 #endif
-    sink += (uint64_t)gltang_execution_result_integer(e.execution) + gltang_execution_result_size(e.execution);
-    if (expect == GLTANG_KIND_FLOAT) {
+    if (expect == GLTANG_KIND_INTEGER) {
+      sink += (uint64_t)gltang_execution_result_integer(e.execution) + gltang_execution_result_size(e.execution);
+    }
+    else if (expect == GLTANG_KIND_FLOAT) {
       sink += bits_of(gltang_execution_result_float(e.execution));
     }
     engine_close(&e);
@@ -772,6 +795,7 @@ static uint64_t steady_run_x(const char * source, GLTANG_ValueKind kind, int wit
     }
     total += (steady_ticks[which + 1] - steady_ticks[which]) / divisor;
     (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
+    check_jit_expectation(&last_jit_stats);
     {
       GRHEAP_Stats heap_stats;
       memset(&heap_stats, 0, sizeof heap_stats);
@@ -781,8 +805,10 @@ static uint64_t steady_run_x(const char * source, GLTANG_ValueKind kind, int wit
       }
     }
     last_pauses = 0;
-    sink += (uint64_t)gltang_execution_result_integer(e.execution);
-    if (kind == GLTANG_KIND_FLOAT) {
+    if (kind == GLTANG_KIND_INTEGER) {
+      sink += (uint64_t)gltang_execution_result_integer(e.execution);
+    }
+    else if (kind == GLTANG_KIND_FLOAT) {
       sink += bits_of(gltang_execution_result_float(e.execution));
     }
     engine_close(&e);
@@ -977,7 +1003,6 @@ static void set_expectations(const FloatProgram * p, uint64_t n) {
   if (p->is_float) {
     have_expected_float = 1;
     expected_float_bits = bits_of(p->ref_float(n));
-    expected_float_nan = 0;
   }
   else {
     have_expected_integer = 1;
@@ -988,7 +1013,6 @@ static void set_expectations(const FloatProgram * p, uint64_t n) {
 static void clear_expectations(void) {
   have_expected_integer = 0;
   have_expected_float = 0;
-  expected_float_nan = 0;
 }
 
 static uint64_t program_fresh(int idx, int jit_on, uint64_t iterations, double * elapsed) {
@@ -997,8 +1021,11 @@ static uint64_t program_fresh(int idx, int jit_on, uint64_t iterations, double *
   char source[1024];
   snprintf(source, sizeof(source), "%s f(%llu);", p->source, (unsigned long long)n);
   set_expectations(p, n);
+  want_compiled = jit_on;
+  want_discard = 0; /* one call: no discard */
   uint64_t sink = run_source_with(source, iterations, elapsed, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0,
       jit_on ? setup_jit_on : setup_jit_off);
+  want_compiled = want_discard = -1;
   clear_expectations();
   return sink;
 }
@@ -1014,8 +1041,14 @@ static uint64_t program_steady(int idx, int jit_on, int which, uint64_t iteratio
       p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
       (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);
   set_expectations(p, n);
+  /* A function that returns a float exits at every return, and the eighth exit discards it; the
+   * integer-returning programs exit nowhere. */
+  const uint64_t calls = which == 0 ? 1u : 1u + float_warm() + float_timed();
+  want_compiled = jit_on;
+  want_discard = (jit_on && p->is_float && calls >= 8u) ? 1 : 0;
   uint64_t sink = steady_run_x(source, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0, jit_on ? 2 : 0, 4,
       which == 0 ? 0 : 2, which == 0 ? 1.0 : (double)float_timed(), iterations, elapsed);
+  want_compiled = want_discard = -1;
   clear_expectations();
   return sink;
 }
@@ -1099,7 +1132,8 @@ static void family_function(FamilyKind k, unsigned loop, char * out, size_t size
 }
 
 static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0; }
-static int family_ends_in_error(FamilyKind k) { return k >= FK_E_DIV0 && k <= FK_E_STR; }
+/* Whether every call of the function leaves compiled code at its consumer or its error. */
+static int family_exits_every_call(FamilyKind k) { return k == FK_RET || k == FK_PRINT || k == FK_GLOBAL || k == FK_ARG || (k >= FK_E_DIV0 && k <= FK_E_STR); }
 
 /* The statements that make the argument `av` before the first tick. 1000.0 times ten four
  * hundred times is an infinity. */
@@ -1140,7 +1174,14 @@ static GLTANG_ValueKind family_expectation(FamilyKind k, unsigned loop) {
       have_expected_integer = 1;
       expected_integer = 1;
       return GLTANG_KIND_INTEGER;
-    default: /* PRINT returns 0, the zero divisor gives 0, an error case's script ends in 0 */
+    case FK_E_DIV0:
+    case FK_E_NANINT:
+    case FK_E_MOD:
+    case FK_E_STR:
+      /* No C reference exists for an error value: the check is its kind, and the exit counters of
+       * the case say the error came from compiled code's guard. */
+      return GLTANG_KIND_ERROR;
+    default: /* the print, the global store and the call argument return 0; (0.0 / x) as int is 0 */
       have_expected_integer = 1;
       expected_integer = 0;
       return GLTANG_KIND_INTEGER;
@@ -1155,7 +1196,7 @@ static void family_script(FamilyKind k, unsigned loop, uint64_t middle, uint64_t
   char function[256];
   family_function(k, loop, function, sizeof function);
   const char * arg = family_has_argument(k) ? "av" : "";
-  const char * last = family_ends_in_error(k) ? "0;" : "r;";
+  const char * last = "r;";
   /* The loops after call 1 are cut short for the interval being measured (the stamps stay: five). */
   snprintf(out, size,
       "%s %s use tick; tick(); r = g(%s); tick(); i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
@@ -1173,7 +1214,11 @@ static uint64_t family_steady(FamilyKind k, unsigned loop, int jit_on, int which
   family_script(k, loop, which >= 1 ? 7u : 0u, which >= 2 ? 1u : 0u, which >= 3 ? family_after() : 0u, source, sizeof source);
   GLTANG_ValueKind kind = family_expectation(k, loop);
   static const double divisor[4] = {1.0, 7.0, 1.0, 0.0};
+  const uint64_t calls = which == 0 ? 1u : which == 1 ? 8u : which == 2 ? 9u : 9u + family_after();
+  want_compiled = jit_on;
+  want_discard = (jit_on && family_exits_every_call(k) && calls >= 8u) ? 1 : 0;
   uint64_t sink = steady_run_x(source, kind, 0, jit_on ? 2 : 0, 5, which, which == 3 ? (double)family_after() : divisor[which], iterations, elapsed);
+  want_compiled = want_discard = -1;
   clear_expectations();
   return sink;
 }
@@ -1185,7 +1230,10 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
   family_function(k, loop, function, sizeof function);
   snprintf(source, sizeof source, "%s g();", function);
   GLTANG_ValueKind kind = family_expectation(k, loop);
+  want_compiled = jit_on;
+  want_discard = 0;
   uint64_t sink = run_source_with(source, iterations, elapsed, kind, 0, jit_on ? setup_jit_on : setup_jit_off);
+  want_compiled = want_discard = -1;
   clear_expectations();
   return sink;
 }
@@ -1259,19 +1307,29 @@ FAMILY_FUNCTIONS(f_zerodiv, FK_N_ZERODIV, 0u)
  * took), and the counters give boxes made per host return. The check of the answer is the
  * sum of the calls' results. */
 static uint64_t request_pattern(uint64_t slice, int jit_on, uint64_t iterations, double * elapsed) {
+  /* A smoke run uses a slice of 30 whatever is asked, so that 200 calls (about 30 units of fuel each)
+   * pause many times; the full run uses the slice it names. */
   uint64_t calls = smoke_mode ? 200u : 4000u;
+  if (smoke_mode) {
+    slice = 30u;
+  }
   char function[256];
   char source[512];
   family_function(FK_CAST, 0u, function, sizeof function);
   snprintf(source, sizeof source, "%s s = 0; i = 0; while (i < %llu) { s = s + g(); i = i + 1; } s;", function, (unsigned long long)calls);
   have_expected_integer = 1;
   expected_integer = (int64_t)(3u * calls);
+  want_compiled = jit_on;
+  want_discard = 0;
   uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, slice, jit_on ? setup_jit_on : setup_jit_off);
+  want_compiled = want_discard = -1;
   have_expected_integer = 0;
-  if (last_pauses == 0) {
-    setup_failed("a sliced run that never paused");
+  if (total_pauses < iterations) {
+    setup_failed("a sliced run that did not pause at least once in every run");
   }
-  *elapsed /= (double)last_pauses;
+  /* The harness divides by the iterations; the figure is one host return, so scale the elapsed time by
+   * iterations over the pauses of every run (and not by one run's). */
+  *elapsed = *elapsed * (double)iterations / (double)total_pauses;
   return sink;
 }
 
@@ -1560,7 +1618,7 @@ int main(int argc, char ** argv) {
   }
 #ifndef GLTANG_WITH_JIT
   /* Named, not left out: the cases of the compiled float and division operations need the JIT. */
-  printf("jit-float-*, jit-intdiv-*, steady-float-*, float-return-*, float-print-*, float-entry-*, float-exit-*, float-request-*, "
+  printf("jit-float-*, jit-intdiv-*, steady-float-*, float-return-*, float-print-*, float-store-*, float-arg-*, float-entry-*, float-exit-*, float-request-*, "
          "steady-fib-*, fib-*, jit-loop-*: skipped, this build has no JIT (JIT=no)\n");
 #endif
   return 0;

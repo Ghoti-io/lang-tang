@@ -1,0 +1,15 @@
+# 71 a threshold of zero where the compiled rows ask for one: the rows run in the interpreter
+# defect: a threshold of zero where the compiled rows ask for one: the rows run in the interpreter; the benchmark harness's own check (check_jit_expectation: a compiled row must have compiled and entered)
+# caught by: bench --smoke --only jit-float-cmp
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -570,7 +570,7 @@
+ }
+ 
+ static void setup_jit_on(GLTANG_Execution * execution) {
+-  if (gltang_execution_set_jit_threshold(execution, 1) != GLTANG_OK) {
++  if (gltang_execution_set_jit_threshold(execution, 0) != GLTANG_OK) {
+     setup_failed("the JIT threshold");
+   }
+ }

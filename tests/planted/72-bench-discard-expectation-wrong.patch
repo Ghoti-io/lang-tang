@@ -1,0 +1,15 @@
+# 72 the family cases expect no discard where the eighth exit discards
+# defect: the family cases expect no discard where the eighth exit discards; the benchmark harness's own check (check_jit_expectation: the exact number of functions discarded)
+# caught by: bench --smoke --only steady-float-return-L0
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -1216,7 +1216,7 @@
+   static const double divisor[4] = {1.0, 7.0, 1.0, 0.0};
+   const uint64_t calls = which == 0 ? 1u : which == 1 ? 8u : which == 2 ? 9u : 9u + family_after();
+   want_compiled = jit_on;
+-  want_discard = (jit_on && family_exits_every_call(k) && calls >= 8u) ? 1 : 0;
++  want_discard = 0; (void)calls;
+   uint64_t sink = steady_run_x(source, kind, 0, jit_on ? 2 : 0, 5, which, which == 3 ? (double)family_after() : divisor[which], iterations, elapsed);
+   want_compiled = want_discard = -1;
+   clear_expectations();
