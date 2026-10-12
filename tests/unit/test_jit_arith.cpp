@@ -564,23 +564,165 @@ TEST(JitArith, AFunctionWithNoLoopWhoseEveryPathEndsInAComputedFloatIsDeclinedAt
   }
 }
 
-TEST(JitArith, AFunctionWithARealExitOnOnePathBesideAFloatReturnOnTheOtherIsCompiledNotDeclined) {
+TEST(JitArith, AFunctionWithARealExitOnOnePathBesideAFloatReturnOnTheOtherIsCompiledNotDeclinedAndItsRealExitsStillReachTheLimit) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // No loop, and one path ends at the designed exit (the return of a raw float); the other ends at an instruction
   // compiled code does not do (an array), which is a real exit. Only a function whose every path is the designed one
-  // is declined, so this one is compiled and entered.
+  // is declined, so this one is compiled and entered; its real exits count, and the eighth lets it go, while its
+  // designed exits before that did not count.
   Scenario sc = scenario(
       "function f(c, a) { x = a * 1.5; if (c) { return x; } y = [1, 2]; return y[0]; }\n"
-      "k = 0; while (k < 6) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
+      "k = 0; while (k < 12) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
   EXPECT_GE(jit.stats.entries, 2u) << "f was entered";
-  EXPECT_EQ(jit.stats.exits_expected, 6u) << "the six returns of a float were designed exits";
+  EXPECT_EQ(jit.stats.functions_discarded, 1u) << "the eighth real exit let it go";
+  EXPECT_EQ(jit.stats.exits_counted, kMain + 8u) << "eight real exits counted, and none of the designed ones";
+  EXPECT_EQ(jit.stats.exits_expected, 8u) << "the eight returns of a float before the discard were designed exits";
+  EXPECT_EQ(jit.stats.deopts, kMain + 16u);
+  EXPECT_EQ(jit.errors, plain.errors);
   EXPECT_EQ(jit.fuel, plain.fuel);
   EXPECT_EQ(jit.raw, plain.raw);
+}
+
+TEST(JitArith, AFunctionWithAFloatPathAndANormalIntegerReturnIsCompiledNotDeclined) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The END_RETURN term of the decline: no loop, one path ends at the designed exit and the other returns an
+  // integer normally. It is compiled and entered (planted 79 ignores the normal return and declines it).
+  Scenario sc = scenario(
+      "function f(c, a) { x = a * 1.5; if (c) { return x * 2.0; } return 1; }\n"
+      "k = 0; while (k < 10) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
+  EXPECT_GE(jit.stats.entries, 1u);
+  EXPECT_EQ(jit.stats.exits_expected, 10u) << "the float returns were designed exits";
+  EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  EXPECT_EQ(jit.errors, plain.errors);
+  EXPECT_EQ(jit.fuel, plain.fuel);
+  EXPECT_EQ(jit.raw, plain.raw);
+}
+
+TEST(JitArith, ALoopFreeFunctionWhoseTwoArmsBothEndAtADesignedExitIsDeclined) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc = scenario(
+      "function f(c, a) { x = a * 1.5; if (c) { return x * 2.0; } print(x); return 0; }\n"
+      "k = 0; while (k < 10) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.functions_declined_expected, 1u);
+  EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_EQ(jit.stats.exits_expected, 0u) << "never entered";
+  EXPECT_EQ(jit.errors, plain.errors);
+  EXPECT_EQ(jit.fuel, plain.fuel);
+  EXPECT_EQ(jit.raw, plain.raw);
+}
+
+TEST(JitArith, EveryConsumerOfARawFloatThatTheRuleTreatsAsDesignedIsFlaggedNotCountedAndTheInterpretersAnswer) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  struct Consumer {
+    const char * name;
+    const char * code;
+  };
+  const Consumer consumers[] = {
+      {"a return", "return x;"},
+      {"a print", "print(x); return 0;"},
+      {"a store to a global", "g = x; return 0;"},
+      {"a call argument", "h(x); return 0;"},
+      {"as string", "y = x as string; return 0;"},
+      {"as bool", "y = x as bool; return 0;"},
+      {"truthiness in an if", "if (x) { y = 1; } return 0;"},
+      {"not", "y = !x; return 0;"},
+      {"and", "y = x && 1; return 0;"},
+      {"or", "y = x || 1; return 0;"},
+      {"a library call", "y = inc(x); return 0;"},
+      {"a member load", "y = x.name; return 0;"},
+      {"modulo of a raw operand", "y = x % 2; return 0;"},
+  };
+  for (const Consumer & k : consumers) {
+    Scenario sc = scenario(std::string("g = 0;\nuse inc;\nfunction h(a) { return 1; }\nfunction f(n) { global g; global inc; x = n * 0.5; j = 0; while (j < 1) { j = j + 1; } ") + k.code + " }\n" +
+        "for (q = 0; q < 12; q += 1) { f(q); }\n");
+    sc.before = [](Context & c) { c.add_native_library(); };
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << k.name;
+    EXPECT_EQ(jit.stats.exits_expected, 12u) << k.name << ": every call ends at the designed exit";
+    EXPECT_EQ(jit.stats.exits_counted, kMain) << k.name << ": the main program's own exit is the only counted one";
+    EXPECT_EQ(jit.stats.functions_discarded, 0u) << k.name;
+    EXPECT_EQ(jit.errors, plain.errors) << k.name;
+    EXPECT_EQ(jit.fuel, plain.fuel) << k.name;
+    EXPECT_EQ(jit.raw, plain.raw) << k.name;
+  }
+}
+
+TEST(JitArith, ACompiledCallerOfACalleeTheDeclineMarkedNeverExitsAtTheCallAsARememberedExitAndIsNotDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc = scenario(
+      "function h(a) { x = a * 0.5; return x; }\n"
+      "function g(n) { s = 0.0; i = 0; while (i < n) { i = i + 1; } s = s + h(n); return s; }\n"
+      "for (q = 0; q < 20; q += 1) { print(g(q)); print(\",\"); }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.functions_declined_expected, 1u) << "h is declined";
+  EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_EQ(jit.stats.functions_discarded, 0u) << "and g, the caller, is not let go however often it exits at the call";
+  EXPECT_GE(jit.stats.call_exits_remembered, 19u) << "the exits at the call of h are the remembered ones, which count nowhere";
+  EXPECT_EQ(jit.stats.call_exits_callee_guard, 0u);
+  EXPECT_EQ(jit.stats.exits_counted, kMain);
+  EXPECT_EQ(jit.errors, plain.errors);
+  EXPECT_EQ(jit.fuel, plain.fuel);
+  EXPECT_EQ(jit.raw, plain.raw);
+}
+
+TEST(JitArith, AnInstructionReachedWithDifferentKindsOnDifferentWaysInIsAnExitThatCountsAndNotADesignedOne) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `print(y)` is reached from two arms that disagree on y's kind (a float constant, an integer): the merge turns every
+  // raw source of the function into an exit, so y is a value word and the print is a real exit, counted. The analysis
+  // reached the same index with both kinds; what it decided there (not the designed exit) is what the emission sees.
+  Scenario sc = scenario(
+      "function f(c, n) { if (c) { y = 1.5; } else { y = 2; } print(y); return n; }\n"
+      "k = 0; while (k < 6) { f(true, k); f(false, k); k += 1; }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.functions_declined_expected, 0u);
+  EXPECT_EQ(jit.stats.exits_expected, 0u);
+  EXPECT_GE(jit.stats.exits_counted, kMain + 6u);
+  EXPECT_EQ(jit.stats.compile_failures, 0u);
+  EXPECT_EQ(jit.raw, plain.raw);
+}
+
+TEST(JitArith, TheExitsOfAMixedProgramAreEachOfExactlyOneKind) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Designed exits (a looped function returning a float), exits of a kind that counts (an integer add whose sum leaves
+  // the range, a divide by zero) and exits that count nowhere (a call of a declined callee): with no rebuild failure every
+  // exit from compiled code is one of the kinds, and the sum of the statistics is the count of exits.
+  Scenario sc = scenario(
+      "M = 576460752303423487;\n"
+      "function hf(a) { x = a * 0.5; return x; }\n"
+      "function fl(n) { j = 0; while (j < 1) { j = j + 1; } x = n * 0.5; return x; }\n"
+      "function ov(a) { return a + 1; }\n"
+      "function dz(a) { return a / 0; }\n"
+      "function ca(n) { i = 0; while (i < n) { i = i + 1; } return hf(n); }\n"
+      "for (q = 0; q < 6; q += 1) { fl(q); ov(M); dz(q); ca(q); }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  const GLTANG_JitStats & s = jit.stats;
+  EXPECT_EQ(s.rebuild_failures, 0u);
+  EXPECT_GT(s.exits_expected, 0u);
+  EXPECT_GT(s.exits_counted, 0u);
+  EXPECT_GT(s.call_exits_remembered, 0u);
+  EXPECT_EQ(s.deopts, s.exits_expected + s.exits_counted + s.call_exits_native_stack + s.call_exits_push_refused + s.call_exits_remembered + s.native_exits_stack)
+      << "every exit is of exactly one kind";
+  // And per call: a designed exit is made by an entry or a compiled call, so there are never more than there were of those.
+  EXPECT_LE(s.exits_expected, s.entries + s.calls);
 }
 
 TEST(JitArith, AFunctionWithARealFailurePathIsStillDiscardedAtTheEighthCountedExit) {

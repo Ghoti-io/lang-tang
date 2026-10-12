@@ -496,6 +496,21 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
       exec->jit_stats.last_exit_cause = cause;
       if (cause == 0) {
         ++exec->jit_stats.deopts;
+        // Where every exit is classified, once, after its rebuild succeeded (`exit_valid`). An
+        // exit is of one of three kinds: designed (`exits_expected`), of a kind that counts
+        // toward a discard limit (`exits_counted`, whether or not its function is still there to
+        // be charged), or one that counts nowhere by design (`call_exits_native_stack`,
+        // `call_exits_push_refused`, `call_exits_remembered`, `native_exits_stack`, which the
+        // hook counts where it knows why). So, with no rebuild failure,
+        //   deopts == exits_expected + exits_counted + those four.
+        if (jit->exit_valid) {
+          if (jit->exit_expected) {
+            ++exec->jit_stats.exits_expected;
+          }
+          else if (jit->exit_counted) {
+            ++exec->jit_stats.exits_counted;
+          }
+        }
         result = GLTANG_JIT_DEOPTED;
       }
       else if (cause == 1u) {
@@ -534,13 +549,13 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
       break;
   }
   jit->exit_valid = false;
+  jit->exit_expected = false;
   grcore_code_release(handle);
   if (counted) {
     // The function whose frame was innermost at the exit is charged for it. At the
     // eighth it is let go: its slot is refused, its range unregistered and the
     // cache's reference dropped, and core frees the code when no record is open.
     GLTANG_JitFn * g = gltang_jit_find_fn(exec, jit, jit->exit_fword, false);
-    ++exec->jit_stats.exits_counted;
     if (g && g->state == GLTANG_JITFN_COMPILED && ++g->deopts >= GLTANG_JIT_DEOPT_LIMIT) {
       discard(exec, g);
       ++exec->jit_stats.functions_discarded;
@@ -648,6 +663,22 @@ int gltang_vm_jit_test_mark_never(GLTANG_Execution * execution, uint64_t fword) 
     return 0;
   }
   gltang_jit_mark_never(execution, jit, f);
+  return 1;
+}
+
+/*
+ * For the tests only: lets a compiled function go as the eighth counted exit does (its slot is refused, its range
+ * unregistered, the cache's reference dropped), whenever the test chooses, so that an exit can be taken from code
+ * whose function was discarded while its record was open. Returns 1 if the function was compiled. Declared in
+ * vm/test_hooks.h.
+ */
+int gltang_vm_jit_test_discard(GLTANG_Execution * execution, uint64_t fword) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  GLTANG_JitFn * f = jit ? gltang_jit_find_fn(execution, jit, fword, false) : NULL;
+  if (!f || f->state != GLTANG_JITFN_COMPILED) {
+    return 0;
+  }
+  discard(execution, f);
   return 1;
 }
 

@@ -1501,6 +1501,34 @@ TEST(JitFloats, AnEntryExtensionIsNotTakenByThePopOfAFloatFreeCallAtTheSameDepth
   EXPECT_EQ(d.boxes().capacity + d.boxes().extensions + d.boxes().pool, 0u);
 }
 
+TEST(JitFloats, AFunctionDiscardedWhileItsRecordIsOpenStillTakesItsDesignedExitAsDesigned) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The function is let go (as a nested run's eighth exit would) at a poll inside its loop, while the run that entered it
+  // is still open; its exit at the print is then taken from code whose function has no code any more. The exit is
+  // classified from the code that ran: it is designed, and counts toward nothing.
+  const char * source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\nf(3);\n";
+  Scenario ref;
+  ref.source = source;
+  Outcome plain = run(ref, 0);
+  Driver d(source, 1, true);
+  ASSERT_TRUE(d.ok());
+  int in_f = 0, discarded = 0;
+  d.script.on_poll = [&](Script &, GRCORE_Context * context, uint64_t) {
+    GRCORE_PollIdentity id = {0, 0};
+    (void)grcore_context_poll_identity(context, &id);
+    if ((id.function & 0xFFFFFFFFu) == 1u && ++in_f == 5) {
+      discarded += gltang_vm_jit_test_discard(d.ctx->execution, 1u);
+    }
+  };
+  ASSERT_TRUE(d.run());
+  EXPECT_EQ(discarded, 1) << "the function was discarded while its record was open";
+  EXPECT_EQ(d.ctx->raw(), plain.raw);
+  GLTANG_JitStats st = d.stats();
+  EXPECT_EQ(st.exits_expected, 1u) << "the exit at the print was found designed in the code that ran";
+  EXPECT_EQ(st.exits_counted, 1u) << "and only the main program's own exit counted";
+  EXPECT_EQ(st.rebuild_failures, 0u);
+}
+
 #else  // JIT=no
 
 TEST(JitFloats, WithoutTheJitNothingIsBoxedAheadAndTheStatisticsAreZero) {

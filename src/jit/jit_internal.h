@@ -180,7 +180,8 @@ typedef struct GLTANG_Jit {
   uint64_t chain;                ///< Compiled calls open now (the push hook counts, the pop hook and a deopt take away).
   uint8_t refusal;               ///< A ::GLTANG_JitRefusal the deopt hook consumes.
   uint64_t exit_fword;           ///< The function whose frame was innermost at the last exit, for the discard limit.
-  bool exit_counted;             ///< Whether that exit counts toward its discard limit.
+  bool exit_counted;             ///< Whether that exit is of a kind that counts toward its function's discard limit.
+  bool exit_expected;            ///< Whether that exit is a designed one: a raw float boxed for its consumer. Neither it nor an exit that counts nowhere is `exit_counted`.
   bool exit_valid;               ///< `exit_fword` was set by the deopt hook of this entry.
   bool test_calls_off;           ///< Test seam: compile no call sites.
   bool test_natives_off;         ///< Test seam: compile no library call or member load (as a backend that refuses natives would).

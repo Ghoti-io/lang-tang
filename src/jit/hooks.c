@@ -263,6 +263,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   // discard limit; a poll's deopt (a pause, cause 1, or an unwind, cause 2) does
   // not: a debugger step or a fuel pause must not throw away hot code.
   bool counts = cause == 0u;
+  bool expected = false;  // the exit is a designed one (a raw float boxed for its consumer)
   // A native's status leaves compiled code with `GRJIT_CAUSE_NATIVE | status`: the
   // unwind status is a poll's unwind (every compiled frame of the run is inside
   // the scope that is unwinding), any other is a leave, with the state after the call.
@@ -306,12 +307,17 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
           keep = fr.base_frames - 1u;
         }
         if (cause == 0u) {
-          GLTANG_JitFn * jf = gltang_jit_find_fn(exec, jit, fr.identity.function, false);
-          const GLTANG_JitCode * jc = jf && jf->code ? grcore_code_payload(jf->code) : NULL;
+          // The sites are those of the code that ran, found by the address the frame stopped
+          // at (the registry keeps a retired range's handle for as long as a frame can return
+          // into it), not the function's record, whose code is gone if the function was
+          // discarded while this record was open (a nested run's eighth exit).
+          GRCORE_CodeRange ran;
+          const GLTANG_JitCode * jc = grcore_code_lookup(context, (uintptr_t)fr.return_address, &ran) && ran.code ? grcore_code_payload(ran.code) : NULL;
           if (expected_site_at(jc, fr.identity.offset)) {
             // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
-            // code, so it does not count toward the discard limit.
-            ++exec->jit_stats.exits_expected;
+            // code, so it does not count toward the discard limit (and is counted, with the
+            // others, by the entry once the rebuild has succeeded).
+            expected = true;
             counts = false;
           }
           else if (native_site_at(jc, fr.identity.offset)) {
@@ -395,6 +401,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   if (rc == 0u && any) {
     jit->exit_fword = innermost_fword;
     jit->exit_counted = counts;
+    jit->exit_expected = expected;
     jit->exit_valid = true;
   }
   // The compiled calls are gone, so are their extensions of the reservation. The

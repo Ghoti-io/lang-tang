@@ -334,11 +334,12 @@ typedef struct GLTANG_JitStats {
   uint64_t conversion_errors;   ///< Conversions asked of a representation the engine does not convert, or with an empty pool. Zero in any correct run.
   uint64_t reservation_peak;    ///< The most cells the reservation has held at once.
   uint64_t extension_lookups;   ///< Compiled calls whose push looked the callee's raw floats up (only once some compiled function holds any). Zero across a program with no float in compiled code.
-  uint64_t exits_expected;      ///< Exits from compiled code that only box a raw float for its consumer (a return, a print, a global store, a call argument, a cast to string, an instruction compiled code does not do). Designed, so not counted toward the discard limit.
-  uint64_t exits_counted;       ///< Exits that did count toward a function's discard limit (a failed guard, an unconditional exit that is not the boxing of a raw float, a callee-value guard).
-  uint64_t functions_declined_expected; ///< Functions declined at compile time because every path ends at an exit that only boxes a raw float and they have no loop: they cannot repay the compile.
   uint64_t extension_mismatches; ///< Pops that found a record at their depth made for another function and gave nothing back (zero in any correct run).
   uint64_t extension_records;   ///< Extensions of the reservation recorded (each entry or call whose callee holds raw floats). Zero across a program with no float in compiled code.
+  // Appended after the fields above, which keep their offsets (the exit rule of 2026-10-12).
+  uint64_t exits_expected;      ///< Exits from compiled code that only box a raw float for its consumer (a return, a print, a global store, a call argument, a cast to string, an instruction compiled code does not do). Designed, so not counted toward the discard limit.
+  uint64_t exits_counted;       ///< Exits of a kind that counts toward a function's discard limit (a failed guard, an unconditional exit that is not the boxing of a raw float, a callee-value guard), whether or not the function was still compiled to be charged. With no rebuild failure, `deopts` is `exits_expected` + `exits_counted` + `call_exits_native_stack` + `call_exits_push_refused` + `call_exits_remembered` + `native_exits_stack`.
+  uint64_t functions_declined_expected; ///< Functions declined at compile time because every path ends at an exit that only boxes a raw float and they have no loop: they cannot repay the compile.
 } GLTANG_JitStats;
 
 /**

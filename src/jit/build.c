@@ -762,6 +762,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
       bool falls = true;
       bool branch = false;       // a conditional or unconditional jump to `a`
       int32_t branch_depth = d;
+      c->end_kind[i] = END_NONE;  // this walk decides how the instruction ends: a walk of it with other kinds is not remembered
       if (reads_raw(c, op, a, d)) {
         c->end_kind[i] = END_EXPECTED;  // designed: the float is boxed for its consumer (see emit_op_kinds)
         break;                   // an unconditional exit with the raw operand in its frame state: nothing flows from it
@@ -1372,6 +1373,12 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
   GRJIT_VReg * t = c->tmp;
   int64_t k = 0;
 
+  // What the analysis decided for this instruction and what the emission now sees must be the
+  // same: it ends at the designed exit exactly when it reads a raw operand.
+  if (reads_raw(c, op, a, (int32_t)d) != (c->end_kind[i] == END_EXPECTED)) {
+    c->err = GRJIT_ERR_INTERNAL;
+    return false;
+  }
   if (reads_raw(c, op, a, (int32_t)d)) {
     // The raw operand is in the frame state and the interpreter re-executes the instruction. This
     // exit is the design (the float is boxed for its consumer, once, by the rebuild), not a failure
