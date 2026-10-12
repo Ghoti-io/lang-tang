@@ -1,0 +1,18 @@
+# 65 the C reference of the float loop is 1.0 off
+# defect: the reference the benchmark harness checks a float program's answer against (the accumulator
+# loop of cases 1 and 2) is wrong by 1.0, so the compiled loop's and the interpreter's right answer
+# disagrees with it and the case must abort, in a --smoke run too (an answer check never seen to fail
+# may check nothing)
+# caught by: bench --smoke (setup_failed: a result other than the one the case computes)
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -870,7 +870,7 @@
+   for (uint64_t i = 0; i < n; i++) {
+     s = s + (double)(int64_t)i * 0.5;
+   }
+-  return s;
++  return s + 1.0;
+ }
+ static int64_t ref_loop_cast(uint64_t n) { return (int64_t)ref_loop(n); }
+ static double ref_mixed_div(uint64_t n) {

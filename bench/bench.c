@@ -76,6 +76,9 @@
 #include <string.h>
 #include <time.h>
 
+/* A row of a macro-generated table that some build leaves out. */
+#define BENCH_UNUSED __attribute__((unused))
+
 typedef struct {
   const char * name;
   /** Performs @p iterations units of work; returns a value derived from all
@@ -327,6 +330,40 @@ static GLTANG_JitStats last_jit_stats;
  * something else is a figure of something else. */
 static int have_expected_integer;
 static int64_t expected_integer;
+/* The same for a float result, compared by its bits (a case that computes a float is
+ * checked against a C reference built with the project's -ffp-contract=off, so the
+ * bits are the interpreter's too); expected_float_nan accepts any NaN. */
+static int have_expected_float;
+static uint64_t expected_float_bits;
+static int expected_float_nan;
+/* What the last run of the last case that asked left behind: the host returns it
+ * made (pauses), and the heap's counters. */
+static uint64_t last_pauses;
+static uint64_t last_heap_collections;
+static uint64_t last_heap_allocations;
+
+static uint64_t bits_of(double d) {
+  uint64_t bits;
+  memcpy(&bits, &d, sizeof bits);
+  return bits;
+}
+
+/* Whether the execution's result is of the kind and value the case computes. */
+static int result_ok(const GLTANG_Execution * execution, GLTANG_ValueKind expect) {
+  if (gltang_execution_result_kind(execution) != expect) {
+    return 0;
+  }
+  if (have_expected_integer && gltang_execution_result_integer(execution) != expected_integer) {
+    return 0;
+  }
+  if (have_expected_float) {
+    double d = gltang_execution_result_float(execution);
+    if (expected_float_nan ? !(d != d) : bits_of(d) != expected_float_bits) {
+      return 0;
+    }
+  }
+  return 1;
+}
 
 static uint64_t run_source_with(const char * source, uint64_t iterations, double * elapsed, GLTANG_ValueKind expect, uint64_t fuel_slice, Setup setup) {
   GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
@@ -340,9 +377,11 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
       setup(e.execution);
     }
     GRCORE_Outcome outcome;
+    uint64_t pauses = 0;
     double start = now_ns();
     GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
     while (r == GRCORE_OK && outcome == GRCORE_OUTCOME_PAUSED) {
+      ++pauses;
       grcore_context_set_fuel(e.context, grcore_context_fuel_used(e.context) + fuel_slice);
       r = grcore_resume(e.context, &outcome);
     }
@@ -350,13 +389,25 @@ static uint64_t run_source_with(const char * source, uint64_t iterations, double
     if (r != GRCORE_OK || gltang_execution_result_kind(e.execution) != expect) {
       setup_failed(source);
     }
-    if (have_expected_integer && gltang_execution_result_integer(e.execution) != expected_integer) {
+    if (!result_ok(e.execution, expect)) {
       setup_failed("a result other than the one the case computes");
+    }
+    last_pauses = pauses;
+    {
+      GRHEAP_Stats heap_stats;
+      memset(&heap_stats, 0, sizeof heap_stats);
+      if (grheap_stats(e.heap, &heap_stats) == GRHEAP_OK) {
+        last_heap_collections = heap_stats.collections;
+        last_heap_allocations = heap_stats.allocations;
+      }
     }
 #ifdef GLTANG_WITH_JIT
     (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
 #endif
     sink += (uint64_t)gltang_execution_result_integer(e.execution) + gltang_execution_result_size(e.execution);
+    if (expect == GLTANG_KIND_FLOAT) {
+      sink += bits_of(gltang_execution_result_float(e.execution));
+    }
     engine_close(&e);
   }
   *elapsed = total;
@@ -670,12 +721,13 @@ static uint64_t jit_native_off_run(uint64_t iterations, double * elapsed) {
  * from the interpreter's top level, as a host's call of it would. The first-call cases
  * report the first call, in a script that stops after it; the warm-call cases report the
  * cost of one call in the timed phase. The tier-up and compile are the difference between the two. */
-static double steady_ticks[4];
+#define STEADY_TICKS 16
+static double steady_ticks[STEADY_TICKS];
 static int steady_tick_count;
 
 static bool bench_tick(GLTANG_NativeCall * call, void * user) {
   (void)user;
-  if (steady_tick_count < 4) {
+  if (steady_tick_count < STEADY_TICKS) {
     steady_ticks[steady_tick_count++] = now_ns();
   }
   gltang_call_return_integer(call, 0);
@@ -693,8 +745,12 @@ static void setup_tick(GLTANG_Execution * execution, int with_template) {
   gltang_library_release(library);
 }
 
-/* which: 0 the first call, 1 one call of the timed phase. */
-static uint64_t steady_run(const char * source, int64_t expected, int with_template, int jit_on, int which, uint64_t timed, uint64_t iterations, double * elapsed) {
+/* The general form: @p stamps ticks are expected, and the figure of a run is the
+ * interval @p which (ticks[which + 1] less ticks[which]) divided by @p divisor. The
+ * result is checked against the expectation globals. @p jit_mode: 0 the JIT off,
+ * 1 its default threshold, 2 a threshold of one (the function is compiled at its
+ * first entry). */
+static uint64_t steady_run_x(const char * source, GLTANG_ValueKind kind, int with_template, int jit_mode, int stamps, int which, double divisor, uint64_t iterations, double * elapsed) {
   GLTANG_Program * program = compile_source(source, GLTANG_PARSE_SCRIPT);
   uint64_t sink = 0;
   double total = 0.0;
@@ -702,23 +758,46 @@ static uint64_t steady_run(const char * source, int64_t expected, int with_templ
     Engine e;
     engine_open(&e, program, GRCORE_UNLIMITED);
     setup_tick(e.execution, with_template);
-    if (!jit_on) {
+    if (jit_mode == 0) {
       setup_jit_off(e.execution);
+    }
+    else if (jit_mode == 2) {
+      setup_jit_on(e.execution);
     }
     steady_tick_count = 0;
     GRCORE_Outcome outcome;
     GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
-    if (r != GRCORE_OK || steady_tick_count != 4 || gltang_execution_result_kind(e.execution) != GLTANG_KIND_INTEGER
-        || gltang_execution_result_integer(e.execution) != expected) {
+    if (r != GRCORE_OK || steady_tick_count != stamps || !result_ok(e.execution, kind)) {
       setup_failed("a steady-state case that did not compute its answer");
     }
-    total += which == 0 ? steady_ticks[1] - steady_ticks[0] : (steady_ticks[3] - steady_ticks[2]) / (double)timed;
+    total += (steady_ticks[which + 1] - steady_ticks[which]) / divisor;
     (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
-    sink += (uint64_t)expected;
+    {
+      GRHEAP_Stats heap_stats;
+      memset(&heap_stats, 0, sizeof heap_stats);
+      if (grheap_stats(e.heap, &heap_stats) == GRHEAP_OK) {
+        last_heap_collections = heap_stats.collections;
+        last_heap_allocations = heap_stats.allocations;
+      }
+    }
+    last_pauses = 0;
+    sink += (uint64_t)gltang_execution_result_integer(e.execution);
+    if (kind == GLTANG_KIND_FLOAT) {
+      sink += bits_of(gltang_execution_result_float(e.execution));
+    }
     engine_close(&e);
   }
   *elapsed = total;
   gltang_program_release(program);
+  return sink;
+}
+
+/* which: 0 the first call, 1 one call of the timed phase. */
+static uint64_t steady_run(const char * source, int64_t expected, int with_template, int jit_on, int which, uint64_t timed, uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = expected;
+  uint64_t sink = steady_run_x(source, GLTANG_KIND_INTEGER, with_template, jit_on ? 1 : 0, 4, which == 0 ? 0 : 2, which == 0 ? 1.0 : (double)timed, iterations, elapsed);
+  have_expected_integer = 0;
   return sink;
 }
 
@@ -757,6 +836,438 @@ static uint64_t steady_template_interpreted_first(uint64_t it, double * el) { re
 static uint64_t steady_template_compiled_first(uint64_t it, double * el) { return steady_template(1, 0, 0, 0, it, el); }
 static uint64_t steady_template_interpreted_warm(uint64_t it, double * el) { return steady_template(0, 1, 400, 2000, it, el); }
 static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return steady_template(1, 1, 400, 2000, it, el); }
+
+/* ---- Floats and division (spec-runtime-float story 8, CAP-6) ----------------------------
+ *
+ * Each program is a Tang function `f(n)` with a C reference of the same loop (built with
+ * the project's -ffp-contract=off, so a float result must agree bit for bit; an integer
+ * one by value). The answer is checked inside the case, in --smoke too: a figure for a
+ * program that computed something else is a figure of something else.
+ *
+ * Two methodologies, never merged. "jit-*" cases are a fresh engine for each timed run
+ * (the run pays the interpreter's first touches, the counting to the threshold, the
+ * compile and the entry, and throws the code away; the compiled side runs at a threshold
+ * of one). "steady-*" cases use one execution for each timed run: a script calls the
+ * function once (the first call), W more times (the warm-up) and T times (the counted
+ * phase), and the host native `tick` stamps the clock between them; the compiled side runs
+ * at a threshold of one, so the first call includes the compile.
+ *
+ * A function that returns a float exits compiled code once at the return (compiled code
+ * cannot allocate, AD-27), and the eighth exit discards the compiled function; so the
+ * warm calls of a `return s;` program are the interpreter's after the discard. That is
+ * the finding of the "ret" variants, and the "cast" variants (`return s as int;`, no
+ * exit) are the steady state of the same loop that stays compiled. */
+
+typedef struct {
+  const char * source; /* function f(n) { ... } */
+  int is_float;
+  int64_t (*ref_int)(uint64_t n);
+  double (*ref_float)(uint64_t n);
+} FloatProgram;
+
+static double ref_loop(uint64_t n) {
+  double s = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    s = s + (double)(int64_t)i * 0.5;
+  }
+  return s;
+}
+static int64_t ref_loop_cast(uint64_t n) { return (int64_t)ref_loop(n); }
+static double ref_mixed_div(uint64_t n) {
+  double s = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    s = s + (double)(int64_t)i / 3.0;
+  }
+  return s;
+}
+static double ref_mixed_mul(uint64_t n) {
+  double s = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    s = s * 0.999 + (double)(int64_t)i;
+  }
+  return s;
+}
+static int64_t ref_cmp(uint64_t n) {
+  int64_t c = 0;
+  const double y = 100.0;
+  for (uint64_t i = 0; i < n; i++) {
+    double x = (double)(int64_t)i * 0.5;
+    c += x < y;
+    c += x == y;
+    c += x >= y;
+  }
+  return c;
+}
+static int64_t ref_div3(uint64_t n) {
+  int64_t s = 0;
+  for (int64_t i = 0; i < (int64_t)n; i++) {
+    s += i / 3;
+  }
+  return s;
+}
+static int64_t ref_mod7(uint64_t n) {
+  int64_t s = 0;
+  for (int64_t i = 0; i < (int64_t)n; i++) {
+    s += i % 7;
+  }
+  return s;
+}
+static int64_t ref_div_var(uint64_t n) {
+  int64_t s = 0;
+  for (int64_t i = 0; i < (int64_t)n; i++) {
+    s += i / ((i % 5) + 1);
+  }
+  return s;
+}
+static int64_t ref_mod_var(uint64_t n) {
+  int64_t s = 0;
+  for (int64_t i = 0; i < (int64_t)n; i++) {
+    s += i % ((i % 5) + 1);
+  }
+  return s;
+}
+static int64_t ref_cast_int(uint64_t n) {
+  int64_t s = 0;
+  for (uint64_t i = 0; i < n; i++) {
+    s += (int64_t)((double)(int64_t)i * 0.5);
+  }
+  return s;
+}
+static double ref_cast_float(uint64_t n) {
+  double x = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    x = x + (double)(int64_t)i;
+  }
+  return x;
+}
+
+#define LOOP_HEAD(init) "function f(n) { " init " i = 0; while (i < n) { "
+#define LOOP_TAIL " i = i + 1; } return s; }"
+
+static const FloatProgram programs[] = {
+  /* 0: case 1, the accumulator from 0.0, returned (one exit, at the return) */
+  {LOOP_HEAD("s = 0.0;") "s = s + i * 0.5;" LOOP_TAIL, 1, NULL, ref_loop},
+  /* 1: the same loop returned through `as int` (no exit: the steady state that stays compiled) */
+  {"function f(n) { s = 0.0; i = 0; while (i < n) { s = s + i * 0.5; i = i + 1; } return s as int; }", 0, ref_loop_cast, NULL},
+  /* 2: case 2, the accumulator from the integer 0 (the merge rule: no raw slot) */
+  {LOOP_HEAD("s = 0;") "s = s + i * 0.5;" LOOP_TAIL, 1, NULL, ref_loop},
+  /* 3, 4: case 3, mixed integer and float */
+  {LOOP_HEAD("s = 0.0;") "s = s + (i as float) / 3.0;" LOOP_TAIL, 1, NULL, ref_mixed_div},
+  {LOOP_HEAD("s = 0.0;") "s = s * 0.999 + i;" LOOP_TAIL, 1, NULL, ref_mixed_mul},
+  /* 5: case 4, float comparisons over raw operands */
+  {"function f(n) { x = 0.0; y = 100.0; c = 0; i = 0; while (i < n) { x = i * 0.5; if (x < y) { c = c + 1; } "
+   "if (x == y) { c = c + 1; } if (x >= y) { c = c + 1; } i = i + 1; } return c; }", 0, ref_cmp, NULL},
+  /* 6 to 9: case 5, integer division and modulo (constant and steered divisors; no guard fails) */
+  {LOOP_HEAD("s = 0;") "s = s + i / 3;" LOOP_TAIL, 0, ref_div3, NULL},
+  {LOOP_HEAD("s = 0;") "s = s + i % 7;" LOOP_TAIL, 0, ref_mod7, NULL},
+  {LOOP_HEAD("s = 0;") "s = s + i / ((i % 5) + 1);" LOOP_TAIL, 0, ref_div_var, NULL},
+  {LOOP_HEAD("s = 0;") "s = s + i % ((i % 5) + 1);" LOOP_TAIL, 0, ref_mod_var, NULL},
+  /* 10, 11: case 6, the casts */
+  {LOOP_HEAD("s = 0;") "s = s + (i * 0.5) as int;" LOOP_TAIL, 0, ref_cast_int, NULL},
+  {"function f(n) { s = 0.0; i = 0; while (i < n) { s = s + (i as float); i = i + 1; } return s; }", 1, NULL, ref_cast_float},
+};
+
+static uint64_t float_n(void) { return smoke_mode ? 20000u : 1000000u; }
+static uint64_t float_steady_n(void) { return smoke_mode ? 1000u : 100000u; }
+static uint64_t float_warm(void) { return smoke_mode ? 2u : 10u; }
+static uint64_t float_timed(void) { return smoke_mode ? 3u : 40u; }
+
+/* Sets the expectation globals for program @p p at @p n; clear_expectations undoes it. */
+static void set_expectations(const FloatProgram * p, uint64_t n) {
+  if (p->is_float) {
+    have_expected_float = 1;
+    expected_float_bits = bits_of(p->ref_float(n));
+    expected_float_nan = 0;
+  }
+  else {
+    have_expected_integer = 1;
+    expected_integer = p->ref_int(n);
+  }
+}
+
+static void clear_expectations(void) {
+  have_expected_integer = 0;
+  have_expected_float = 0;
+  expected_float_nan = 0;
+}
+
+static uint64_t program_fresh(int idx, int jit_on, uint64_t iterations, double * elapsed) {
+  const FloatProgram * p = &programs[idx];
+  uint64_t n = float_n();
+  char source[1024];
+  snprintf(source, sizeof(source), "%s f(%llu);", p->source, (unsigned long long)n);
+  set_expectations(p, n);
+  uint64_t sink = run_source_with(source, iterations, elapsed, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0,
+      jit_on ? setup_jit_on : setup_jit_off);
+  clear_expectations();
+  return sink;
+}
+
+/* which: 0 the first call; 1 one call of the counted phase (after the warm-up). */
+static uint64_t program_steady(int idx, int jit_on, int which, uint64_t iterations, double * elapsed) {
+  const FloatProgram * p = &programs[idx];
+  uint64_t n = float_steady_n();
+  char source[1280];
+  snprintf(source, sizeof(source),
+      "%s use tick; tick(); r = f(%llu); tick(); w = 0; while (w < %llu) { f(%llu); w = w + 1; } tick(); "
+      "i = 0; while (i < %llu) { r = f(%llu); i = i + 1; } tick(); r;",
+      p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
+      (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);
+  set_expectations(p, n);
+  uint64_t sink = steady_run_x(source, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0, jit_on ? 2 : 0, 4,
+      which == 0 ? 0 : 2, which == 0 ? 1.0 : (double)float_timed(), iterations, elapsed);
+  clear_expectations();
+  return sink;
+}
+
+#define PROGRAM_FUNCTIONS(tag, idx) \
+  static uint64_t tag##_fresh_i(uint64_t it, double * el) { return program_fresh(idx, 0, it, el); } \
+  static uint64_t tag##_fresh_c(uint64_t it, double * el) { return program_fresh(idx, 1, it, el); } \
+  static uint64_t tag##_first_i(uint64_t it, double * el) { return program_steady(idx, 0, 0, it, el); } \
+  static uint64_t tag##_first_c(uint64_t it, double * el) { return program_steady(idx, 1, 0, it, el); } \
+  static uint64_t tag##_warm_i(uint64_t it, double * el) { return program_steady(idx, 0, 1, it, el); } \
+  static uint64_t tag##_warm_c(uint64_t it, double * el) { return program_steady(idx, 1, 1, it, el); }
+
+PROGRAM_FUNCTIONS(p_loop_ret, 0)
+PROGRAM_FUNCTIONS(p_loop_cast, 1)
+PROGRAM_FUNCTIONS(p_merge_int0, 2)
+PROGRAM_FUNCTIONS(p_mixed_div, 3)
+PROGRAM_FUNCTIONS(p_mixed_mul, 4)
+PROGRAM_FUNCTIONS(p_cmp, 5)
+PROGRAM_FUNCTIONS(p_div3, 6)
+PROGRAM_FUNCTIONS(p_mod7, 7)
+PROGRAM_FUNCTIONS(p_div_var, 8)
+PROGRAM_FUNCTIONS(p_mod_var, 9)
+PROGRAM_FUNCTIONS(p_cast_int, 10)
+PROGRAM_FUNCTIONS(p_cast_float, 11)
+
+/* The case rows of one program: the fresh-engine pair, then the steady-state first-call and
+ * warm-call pairs. @p fi and @p fc are the iteration counts of the interpreted and compiled
+ * fresh cases, @p si and @p sc of the steady ones. */
+#define PROGRAM_ROWS(fresh, steady, tag, fi, fc, si, sc) \
+  {fresh "-interpreted", tag##_fresh_i, fi, 1u}, \
+  {fresh "-compiled", tag##_fresh_c, fc, 1u}, \
+  {steady "-interpreted-first-call", tag##_first_i, si * 10u, 1u}, \
+  {steady "-compiled-first-call", tag##_first_c, sc * 10u, 1u}, \
+  {steady "-interpreted-warm-call", tag##_warm_i, si, 1u}, \
+  {steady "-compiled-warm-call", tag##_warm_c, sc, 1u},
+
+/* ---- The function that ends in a float exit, and its controls (cases 7 to 11) ---- */
+
+typedef enum {
+  FK_RET,       /* a = 1.5; loop L times; return a * 2.0;               ends in a float return (an exit) */
+  FK_PRINT,     /* ...; print(a * 2.0); return 0;                       ends in a print of a raw float (an exit) */
+  FK_CAST,      /* ...; return (a * 2.0) as int;                        the same float work, no float exit */
+  FK_INT,       /* a = 1; loop L times; return a * 2;                   integer only: no pool */
+  FK_E_DIV0,    /* return x / 0.0;                                      an error at every call */
+  FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call */
+  FK_E_MOD,     /* return x % 2.0;                                      an error at every call */
+  FK_E_STR,     /* return x * "a";                                      an error at every call */
+  FK_N_INFSUB,  /* y = x * 1.0; z = y - y; z != z ? 1 : 0; x = inf      NaN arithmetic over raw operands: not an exit */
+  FK_N_ZERODIV  /* z = 0.0; (z / x) as int; x = 2.0                     a zero result: not an exit */
+} FamilyKind;
+
+static void family_function(FamilyKind k, unsigned loop, char * out, size_t size) {
+  switch (k) {
+    case FK_RET:
+      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } return a * 2.0; }", loop);
+      return;
+    case FK_PRINT:
+      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } print(a * 2.0); return 0; }", loop);
+      return;
+    case FK_CAST:
+      snprintf(out, size, "function g() { a = 1.5; i = 0; while (i < %u) { a = a + 1.0; i = i + 1; } return (a * 2.0) as int; }", loop);
+      return;
+    case FK_INT:
+      snprintf(out, size, "function g() { a = 1; i = 0; while (i < %u) { a = a + 1; i = i + 1; } return a * 2; }", loop);
+      return;
+    case FK_E_DIV0: snprintf(out, size, "function g(x) { return x / 0.0; }"); return;
+    case FK_E_NANINT: snprintf(out, size, "function g(x) { return x as int; }"); return;
+    case FK_E_MOD: snprintf(out, size, "function g(x) { return x %% 2.0; }"); return;
+    case FK_E_STR: snprintf(out, size, "function g(x) { return x * \"a\"; }"); return;
+    case FK_N_INFSUB: snprintf(out, size, "function g(x) { y = x * 1.0; z = y - y; return z != z ? 1 : 0; }"); return;
+    case FK_N_ZERODIV: snprintf(out, size, "function g(x) { z = 0.0; return (z / x) as int; }"); return;
+  }
+}
+
+static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0; }
+static int family_ends_in_error(FamilyKind k) { return k >= FK_E_DIV0 && k <= FK_E_STR; }
+
+/* The statements that make the argument `av` before the first tick. 1000.0 times ten four
+ * hundred times is an infinity. */
+static const char * family_prelude(FamilyKind k) {
+  switch (k) {
+    case FK_E_NANINT: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y - y;";
+    case FK_N_INFSUB: return "y = 1000.0; k = 0; while (k < 400) { y = y * 10.0; k = k + 1; } av = y;";
+    case FK_N_ZERODIV: return "av = 2.0;";
+    default: return "av = 1.5;";
+  }
+}
+
+/* The expectation of a family program's last result. Returns the kind. */
+static GLTANG_ValueKind family_expectation(FamilyKind k, unsigned loop) {
+  clear_expectations();
+  double a = 1.5;
+  switch (k) {
+    case FK_RET:
+      for (unsigned i = 0; i < loop; i++) {
+        a = a + 1.0;
+      }
+      have_expected_float = 1;
+      expected_float_bits = bits_of(a * 2.0);
+      return GLTANG_KIND_FLOAT;
+    case FK_CAST:
+      for (unsigned i = 0; i < loop; i++) {
+        a = a + 1.0;
+      }
+      have_expected_integer = 1;
+      expected_integer = (int64_t)(a * 2.0);
+      return GLTANG_KIND_INTEGER;
+    case FK_INT:
+      have_expected_integer = 1;
+      expected_integer = 2 + 2 * (int64_t)loop;
+      return GLTANG_KIND_INTEGER;
+    case FK_N_INFSUB:
+      have_expected_integer = 1;
+      expected_integer = 1;
+      return GLTANG_KIND_INTEGER;
+    default: /* PRINT returns 0, the zero divisor gives 0, an error case's script ends in 0 */
+      have_expected_integer = 1;
+      expected_integer = 0;
+      return GLTANG_KIND_INTEGER;
+  }
+}
+
+/* The script of a steady family case: call 1 (stamp 0 to 1), calls 2 to 8 (1 to 2), call 9
+ * (2 to 3) and the calls after it, K of them (3 to 4). With a threshold of one the first
+ * eight calls are compiled; a function that exits at every call is discarded at the eighth
+ * exit, and the calls after run in the interpreter. */
+static void family_script(FamilyKind k, unsigned loop, uint64_t middle, uint64_t ninth, uint64_t after, char * out, size_t size) {
+  char function[256];
+  family_function(k, loop, function, sizeof function);
+  const char * arg = family_has_argument(k) ? "av" : "";
+  const char * last = family_ends_in_error(k) ? "0;" : "r;";
+  /* The loops after call 1 are cut short for the interval being measured (the stamps stay: five). */
+  snprintf(out, size,
+      "%s %s use tick; tick(); r = g(%s); tick(); i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
+      "i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
+      "i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); %s",
+      function, family_prelude(k), arg, (unsigned long long)middle, arg, (unsigned long long)ninth, arg,
+      (unsigned long long)after, arg, last);
+}
+
+static uint64_t family_after(void) { return smoke_mode ? 3u : 100u; }
+
+/* which: 0 call 1, 1 calls 2 to 8 (per call), 2 call 9, 3 the calls after (per call). */
+static uint64_t family_steady(FamilyKind k, unsigned loop, int jit_on, int which, uint64_t iterations, double * elapsed) {
+  char source[1024];
+  family_script(k, loop, which >= 1 ? 7u : 0u, which >= 2 ? 1u : 0u, which >= 3 ? family_after() : 0u, source, sizeof source);
+  GLTANG_ValueKind kind = family_expectation(k, loop);
+  static const double divisor[4] = {1.0, 7.0, 1.0, 0.0};
+  uint64_t sink = steady_run_x(source, kind, 0, jit_on ? 2 : 0, 5, which, which == 3 ? (double)family_after() : divisor[which], iterations, elapsed);
+  clear_expectations();
+  return sink;
+}
+
+/* A fresh engine, and the run is one call (the compile, the entry and the exit are in it). */
+static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t iterations, double * elapsed) {
+  char function[256];
+  char source[512];
+  family_function(k, loop, function, sizeof function);
+  snprintf(source, sizeof source, "%s g();", function);
+  GLTANG_ValueKind kind = family_expectation(k, loop);
+  uint64_t sink = run_source_with(source, iterations, elapsed, kind, 0, jit_on ? setup_jit_on : setup_jit_off);
+  clear_expectations();
+  return sink;
+}
+
+#define FAMILY_FUNCTIONS(tag, kind, loop) \
+  BENCH_UNUSED static uint64_t tag##_fresh_i(uint64_t it, double * el) { return family_fresh(kind, loop, 0, it, el); } \
+  BENCH_UNUSED static uint64_t tag##_fresh_c(uint64_t it, double * el) { return family_fresh(kind, loop, 1, it, el); } \
+  static uint64_t tag##_s0_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 0, it, el); } \
+  static uint64_t tag##_s1_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 1, it, el); } \
+  static uint64_t tag##_s2_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 2, it, el); } \
+  static uint64_t tag##_s3_i(uint64_t it, double * el) { return family_steady(kind, loop, 0, 3, it, el); } \
+  static uint64_t tag##_s0_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 0, it, el); } \
+  static uint64_t tag##_s1_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 1, it, el); } \
+  static uint64_t tag##_s2_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 2, it, el); } \
+  static uint64_t tag##_s3_c(uint64_t it, double * el) { return family_steady(kind, loop, 1, 3, it, el); }
+
+FAMILY_FUNCTIONS(f_ret0, FK_RET, 0u)
+FAMILY_FUNCTIONS(f_ret100, FK_RET, 100u)
+FAMILY_FUNCTIONS(f_ret10k, FK_RET, 10000u)
+FAMILY_FUNCTIONS(f_print0, FK_PRINT, 0u)
+FAMILY_FUNCTIONS(f_print100, FK_PRINT, 100u)
+FAMILY_FUNCTIONS(f_print10k, FK_PRINT, 10000u)
+FAMILY_FUNCTIONS(f_cast0, FK_CAST, 0u)
+FAMILY_FUNCTIONS(f_cast100, FK_CAST, 100u)
+FAMILY_FUNCTIONS(f_cast10k, FK_CAST, 10000u)
+FAMILY_FUNCTIONS(f_int0, FK_INT, 0u)
+FAMILY_FUNCTIONS(f_int100, FK_INT, 100u)
+FAMILY_FUNCTIONS(f_int10k, FK_INT, 10000u)
+FAMILY_FUNCTIONS(f_div0, FK_E_DIV0, 0u)
+FAMILY_FUNCTIONS(f_nanint, FK_E_NANINT, 0u)
+FAMILY_FUNCTIONS(f_mod, FK_E_MOD, 0u)
+FAMILY_FUNCTIONS(f_str, FK_E_STR, 0u)
+FAMILY_FUNCTIONS(f_infsub, FK_N_INFSUB, 0u)
+FAMILY_FUNCTIONS(f_zerodiv, FK_N_ZERODIV, 0u)
+
+/* All the rows of one family program: the fresh pair and the four steady intervals, interpreted
+ * and compiled. */
+#define FAMILY_ROWS(name, tag, it) \
+  {name "-interpreted", tag##_fresh_i, it, 1u}, \
+  {name "-compiled", tag##_fresh_c, it, 1u}, \
+  {"steady-" name "-interpreted-call1", tag##_s0_i, it, 1u}, \
+  {"steady-" name "-interpreted-calls2to8", tag##_s1_i, it, 1u}, \
+  {"steady-" name "-interpreted-call9", tag##_s2_i, it, 1u}, \
+  {"steady-" name "-interpreted-calls10on", tag##_s3_i, it, 1u}, \
+  {"steady-" name "-compiled-call1", tag##_s0_c, it, 1u}, \
+  {"steady-" name "-compiled-calls2to8", tag##_s1_c, it, 1u}, \
+  {"steady-" name "-compiled-call9", tag##_s2_c, it, 1u}, \
+  {"steady-" name "-compiled-calls10on", tag##_s3_c, it, 1u},
+
+/* The rows of a program that has only the steady forms (an error or a NaN control). */
+#define STEADY_FAMILY_ROWS(name, tag, it) \
+  {"steady-" name "-interpreted-call1", tag##_s0_i, it, 1u}, \
+  {"steady-" name "-interpreted-calls2to8", tag##_s1_i, it, 1u}, \
+  {"steady-" name "-interpreted-call9", tag##_s2_i, it, 1u}, \
+  {"steady-" name "-interpreted-calls10on", tag##_s3_i, it, 1u}, \
+  {"steady-" name "-compiled-call1", tag##_s0_c, it, 1u}, \
+  {"steady-" name "-compiled-calls2to8", tag##_s1_c, it, 1u}, \
+  {"steady-" name "-compiled-call9", tag##_s2_c, it, 1u}, \
+  {"steady-" name "-compiled-calls10on", tag##_s3_c, it, 1u},
+
+/* ---- The pool dropped at every host return (case 10) ----
+ *
+ * `g()` of the cast family (float work, no float exit) is called in a loop with the run
+ * sliced by fuel: each pause returns control to the host, which lets the float boxes go
+ * (gltang_jit_release_pool), so the next entry into compiled code makes them again. The
+ * unit of the figure is one host return (the elapsed time is divided by the pauses a run
+ * took), and the counters give boxes made per host return. The check of the answer is the
+ * sum of the calls' results. */
+static uint64_t request_pattern(uint64_t slice, int jit_on, uint64_t iterations, double * elapsed) {
+  uint64_t calls = smoke_mode ? 200u : 4000u;
+  char function[256];
+  char source[512];
+  family_function(FK_CAST, 0u, function, sizeof function);
+  snprintf(source, sizeof source, "%s s = 0; i = 0; while (i < %llu) { s = s + g(); i = i + 1; } s;", function, (unsigned long long)calls);
+  have_expected_integer = 1;
+  expected_integer = (int64_t)(3u * calls);
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, slice, jit_on ? setup_jit_on : setup_jit_off);
+  have_expected_integer = 0;
+  if (last_pauses == 0) {
+    setup_failed("a sliced run that never paused");
+  }
+  *elapsed /= (double)last_pauses;
+  return sink;
+}
+
+static uint64_t request_s30_i(uint64_t it, double * el) { return request_pattern(30, 0, it, el); }
+static uint64_t request_s30_c(uint64_t it, double * el) { return request_pattern(30, 1, it, el); }
+static uint64_t request_s300_i(uint64_t it, double * el) { return request_pattern(300, 0, it, el); }
+static uint64_t request_s300_c(uint64_t it, double * el) { return request_pattern(300, 1, it, el); }
+static uint64_t request_s3000_i(uint64_t it, double * el) { return request_pattern(3000, 0, it, el); }
+static uint64_t request_s3000_c(uint64_t it, double * el) { return request_pattern(3000, 1, it, el); }
 #endif
 
 /* ---- Snapshots: a start from scratch against a start from a snapshot ---- */
@@ -911,6 +1422,42 @@ static const Case cases[] = {
     {"steady-template-compiled-first-call", steady_template_compiled_first, 1000u, 2u},
     {"steady-template-interpreted-warm-call", steady_template_interpreted_warm, 50u, 2u},
     {"steady-template-compiled-warm-call", steady_template_compiled_warm, 50u, 2u},
+    PROGRAM_ROWS("jit-float-loop-ret", "steady-float-loop-ret", p_loop_ret, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-loop-cast", "steady-float-loop-cast", p_loop_cast, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-merge-int0", "steady-float-merge-int0", p_merge_int0, 3u, 3u, 2u, 2u)
+    PROGRAM_ROWS("jit-float-mixed-div", "steady-float-mixed-div", p_mixed_div, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-mixed-mul", "steady-float-mixed-mul", p_mixed_mul, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-cmp", "steady-float-cmp", p_cmp, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-intdiv-div3", "steady-float-intdiv-div3", p_div3, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-intdiv-mod7", "steady-float-intdiv-mod7", p_mod7, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-intdiv-div-var", "steady-float-intdiv-div-var", p_div_var, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-intdiv-mod-var", "steady-float-intdiv-mod-var", p_mod_var, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-cast-int", "steady-float-cast-int", p_cast_int, 3u, 20u, 2u, 8u)
+    PROGRAM_ROWS("jit-float-cast-float", "steady-float-cast-float", p_cast_float, 3u, 20u, 2u, 8u)
+    FAMILY_ROWS("float-return-L0", f_ret0, 500u)
+    FAMILY_ROWS("float-return-L100", f_ret100, 200u)
+    FAMILY_ROWS("float-return-L10000", f_ret10k, 8u)
+    FAMILY_ROWS("float-print-L0", f_print0, 500u)
+    FAMILY_ROWS("float-print-L100", f_print100, 200u)
+    FAMILY_ROWS("float-print-L10000", f_print10k, 8u)
+    FAMILY_ROWS("float-entry-cast-L0", f_cast0, 500u)
+    FAMILY_ROWS("float-entry-cast-L100", f_cast100, 200u)
+    FAMILY_ROWS("float-entry-cast-L10000", f_cast10k, 8u)
+    FAMILY_ROWS("float-entry-int-L0", f_int0, 500u)
+    FAMILY_ROWS("float-entry-int-L100", f_int100, 200u)
+    FAMILY_ROWS("float-entry-int-L10000", f_int10k, 8u)
+    STEADY_FAMILY_ROWS("float-exit-div0", f_div0, 500u)
+    STEADY_FAMILY_ROWS("float-exit-nanint", f_nanint, 500u)
+    STEADY_FAMILY_ROWS("float-exit-mod", f_mod, 500u)
+    STEADY_FAMILY_ROWS("float-exit-str", f_str, 500u)
+    STEADY_FAMILY_ROWS("float-exit-ctl-infsub", f_infsub, 500u)
+    STEADY_FAMILY_ROWS("float-exit-ctl-zerodiv", f_zerodiv, 500u)
+    {"float-request-slice30-interpreted", request_s30_i, 5u, 1u},
+    {"float-request-slice30-compiled", request_s30_c, 5u, 1u},
+    {"float-request-slice300-interpreted", request_s300_i, 5u, 1u},
+    {"float-request-slice300-compiled", request_s300_c, 5u, 1u},
+    {"float-request-slice3000-interpreted", request_s3000_i, 5u, 1u},
+    {"float-request-slice3000-compiled", request_s3000_c, 5u, 1u},
 #endif
 };
 
@@ -973,6 +1520,16 @@ int main(int argc, char ** argv) {
           (unsigned long long)last_jit_stats.functions_compiled, (unsigned long long)last_jit_stats.compile_failures,
           (unsigned long long)last_jit_stats.entries, (unsigned long long)last_jit_stats.deopts, (unsigned long long)last_jit_stats.deepest_chain);
     }
+    if (strncmp(cases[c].name, "jit-float-", 10) == 0 || strncmp(cases[c].name, "jit-intdiv-", 11) == 0
+        || strncmp(cases[c].name, "steady-float-", 13) == 0 || strncmp(cases[c].name, "float-", 6) == 0) {
+      printf("  %s: entries %llu, deopts %llu, values_boxed %llu, box_pool_made %llu, functions_compiled %llu, functions_discarded %llu, compile_failures %llu, "
+             "host_returns %llu, heap collections %llu, heap allocations %llu\n",
+          cases[c].name, (unsigned long long)last_jit_stats.entries, (unsigned long long)last_jit_stats.deopts,
+          (unsigned long long)last_jit_stats.values_boxed, (unsigned long long)last_jit_stats.box_pool_made,
+          (unsigned long long)last_jit_stats.functions_compiled, (unsigned long long)last_jit_stats.functions_discarded,
+          (unsigned long long)last_jit_stats.compile_failures, (unsigned long long)last_pauses,
+          (unsigned long long)last_heap_collections, (unsigned long long)last_heap_allocations);
+    }
     if (strncmp(cases[c].name, "fib-", 4) == 0) {
       printf("  %s: compiled calls %llu, call exits %llu (remembered %llu, push refused %llu, callee guard %llu, native stack %llu), compiled at call %llu, deepest chain %llu, hook argument errors %llu\n",
           cases[c].name, (unsigned long long)last_jit_stats.calls,
@@ -984,5 +1541,10 @@ int main(int argc, char ** argv) {
     }
 #endif
   }
+#ifndef GLTANG_WITH_JIT
+  /* Named, not left out: the cases of the compiled float and division operations need the JIT. */
+  printf("jit-float-*, jit-intdiv-*, steady-float-*, float-return-*, float-print-*, float-entry-*, float-exit-*, float-request-*, "
+         "steady-fib-*, fib-*, jit-loop-*: skipped, this build has no JIT (JIT=no)\n");
+#endif
   return 0;
 }
