@@ -1857,8 +1857,8 @@ backend that refuses natives, or an execution whose table could not be made, lea
 exits and counts them (`native_sites_unsupported`), never a fault.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
-names a function of a loaded program, the count `parameter_count + 1`, the flag 0;
-anything else is refused and counted in `hook_argument_errors`), tests the guest
+names a function of a loaded program, the count `parameter_count + 1`, one result,
+and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
 depth at the interpreter's condition, pushes the callee's guest frame (the
 frame-push GC point; it fires no `CALL_REFUSED` of its own: the interpreter makes
 the refused call after the exit and fires it once), reads its arguments **after**
@@ -1875,6 +1875,8 @@ inserted, so no offset moves; each frame then returns `DEOPTED` and nothing else
 runs in compiled code. For an unwind verdict the rebuild is told to skip every
 compiled frame (compiled code opens no scope, so all of them are inside the one
 that is unwinding) and still marks the record rebuilt so that it can be left.
+Tang functions have one VM result; the tail hook validates that shape and declines
+without changing the guest stack, leaving the call to the interpreter fallback.
 
 **Exits and the discard limit.** An exit at a call site because the callee is
 remembered refused, because the push was refused (guest depth, memory) or because

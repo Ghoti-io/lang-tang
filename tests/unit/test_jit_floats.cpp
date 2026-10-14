@@ -1378,8 +1378,8 @@ struct HookRig {
     EXPECT_GE(d.stats().functions_compiled, 1u);
   }
   GLTANG_Execution * exec() { return d.ctx->execution; }
-  int push() { return gltang_vm_jit_test_hook(exec(), 0, token, args, 2); }
-  void pop() { EXPECT_EQ(gltang_vm_jit_test_hook(exec(), 1, 0, nullptr, 0), 0); }
+  int push() { return gltang_vm_jit_test_hook(exec(), exec(), 0, token, args, 2, 1); }
+  void pop() { EXPECT_EQ(gltang_vm_jit_test_hook(exec(), exec(), 1, 0, nullptr, 0, 1), 0); }
 };
 
 }  // namespace
@@ -1427,9 +1427,9 @@ TEST(JitFloats, AFunctionMarkedNeverOrDiscardedMakesNoExtensionWhenPushedAgain) 
   ASSERT_TRUE(d.run());
   ASSERT_GE(d.stats().functions_discarded, 1u);
   const uint64_t args[2] = {(uint64_t{3} << 4) | 1u, 0};
-  ASSERT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, 0, uint64_t{1}, args, 2), 0);
+  ASSERT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, d.ctx->execution, 0, uint64_t{1}, args, 2, 1), 0);
   EXPECT_EQ(d.boxes().extensions, 0u) << "a discarded function's record holds no count";
-  EXPECT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, 1, 0, nullptr, 0), 0);
+  EXPECT_EQ(gltang_vm_jit_test_hook(d.ctx->execution, d.ctx->execution, 1, 0, nullptr, 0, 1), 0);
 }
 
 // ---------------------------------------------------------------------------

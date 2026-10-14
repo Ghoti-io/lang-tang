@@ -40,7 +40,7 @@ extern "C" void gltang_vm_set_statement_polls_unchecked(GLTANG_Execution * execu
 extern "C" int gltang_vm_jit_test_forged_install(GLTANG_Execution * execution, uint32_t code_fn, uint32_t slot_fn, int mode, uintptr_t * before, uintptr_t * after);
 extern "C" int gltang_vm_jit_test_metadata(GLTANG_Execution * execution, uint64_t * sites, uint64_t * derived, uint64_t * converting);
 extern "C" int gltang_vm_jit_test_converting(GLTANG_Execution * execution, uint64_t * f64, uint64_t * other, uint64_t * max_site, uint64_t * max_recorded);
-extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
+extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, void * callee_environment, int hook, uint64_t token, const uint64_t * args, uint64_t count, uint64_t result_count);
 
 namespace jt {
 

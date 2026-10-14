@@ -6,23 +6,19 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -692,7 +692,7 @@
-   for (uint32_t j = 0; j < n; ++j) {
-     args[j] = V(T[at + 1u + j]);
+@@ -1260,3 +1260,3 @@
    }
 -  args[n] = I(0);
 +  args[n] = I(1);  /* planted: 0 */
    fill_state(c, c->state2, i + 1u, at);
-   fill_state(c, c->state, i, d);
-   B(grjit_builder_call_slot(c->b, T[at], c->call_entry[i], GLTANG_FN_WORD(c->program_index, k), args, (size_t)n + 1u,
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -75,7 +75,7 @@
-   // flag, and the flag must be 0 (a compiled call). Anything else is a refusal,
-   // counted, which no correct run has.
+@@ -110,6 +110,6 @@
    const GLTANG_Function * cf = function_of(exec, callee);
--  if (!cf || count != (uint64_t)cf->parameter_count + 1u || args[count - 1u] != 0u) {
-+  if (!cf || count != (uint64_t)cf->parameter_count + 1u) {  /* planted: the flag is not checked */
+-  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
+-      count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
++  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
++      count != (uint64_t)cf->parameter_count + 1u || !args) {  /* planted: the flag is not checked */
      ++exec->jit_stats.hook_argument_errors;
      return refuse_push(jit);
    }

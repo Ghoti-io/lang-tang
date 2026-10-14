@@ -227,6 +227,16 @@ GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword) 
   return f->slot;
 }
 
+uint64_t gltang_jit_slot_entry_address(void * environment, uint64_t fword) {
+  GLTANG_Execution * exec = environment;
+  GLTANG_Jit * jit = exec != NULL ? exec->jit : NULL;
+  GLTANG_JitFn * fn = jit != NULL ? gltang_jit_find_fn(exec, jit, fword, false) : NULL;
+  // Slots are created while compiling the caller, before generated code can run.
+  // This resolver is called at guest-call time and must not allocate at a
+  // GRJIT_CALL_NO_GC site.
+  return fn != NULL && fn->slot != NULL ? (uint64_t)(uintptr_t)&fn->slot->entry : 0;
+}
+
 void gltang_jit_mark_never(GLTANG_Execution * exec, GLTANG_Jit * jit, GLTANG_JitFn * f) {
   (void)jit;
   f->max_converting = 0;
@@ -469,7 +479,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   jit->exit_valid = false;
   jit->refusal = GLTANG_REFUSAL_NONE;
   jit->ext_floor = jit->ext_count;  // this run's calls extend above its entry's own
-  uint32_t exit = grjit_code_call(jc->code, context, args, out);
+  uint32_t exit = grjit_code_call(jc->code, context, exec, args, out);
   // Every exit gives back everything the run opened, the entry's own included.
   gltang_jit_retract_to(exec, ext_base);
   jit->ext_floor = ext_outer_floor;
@@ -820,22 +830,23 @@ int gltang_vm_jit_test_converting(GLTANG_Execution * execution, uint64_t * f64, 
 
 /*
  * For the tests only: calls one of the call hooks (0 push, 1 pop, 2 compile, 3
- * deopt) as compiled code would, with arguments the test chooses, so that the
+ * deopt, 4 tail) as compiled code would, with arguments the test chooses, so that the
  * checks a hook makes of its own arguments are seen to refuse. Returns the hook's
- * result: push and compile return their refusal word (0 is success), pop returns 0,
+ * result: push, compile and tail return their refusal word (0 is success), pop returns 0,
  * and deopt returns its result word with `token` as the cause. -1 means nothing was
  * called (no JIT, or no such hook), which is not a refusal.
  */
-int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count);
-int gltang_vm_jit_test_hook(GLTANG_Execution * execution, int hook, uint64_t token, const uint64_t * args, uint64_t count) {
+int gltang_vm_jit_test_hook(GLTANG_Execution * execution, void * callee_environment, int hook, uint64_t token, const uint64_t * args, uint64_t count, uint64_t result_count);
+int gltang_vm_jit_test_hook(GLTANG_Execution * execution, void * callee_environment, int hook, uint64_t token, const uint64_t * args, uint64_t count, uint64_t result_count) {
   if (!execution || !execution->jit) {
     return -1;
   }
   switch (hook) {
-    case 0: return (int)gltang_jit_hooks.push(execution->context, token, args, count);
+    case 0: return (int)gltang_jit_hooks.push(execution->context, callee_environment, token, args, count, result_count);
     case 1: gltang_jit_hooks.pop(execution->context); return 0;
     case 2: return (int)gltang_jit_hooks.compile(execution->context, token);
     case 3: return (int)gltang_jit_hooks.deopt(execution->context, token);
+    case 4: return (int)gltang_jit_hooks.tail(execution->context, callee_environment, token, args, count, result_count);
     default: return -1;
   }
 }

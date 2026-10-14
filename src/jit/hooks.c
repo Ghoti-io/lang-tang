@@ -21,7 +21,7 @@
 /**
  * @file
  *
- * lang-tang's side of the call protocol (AD-28): the four hooks runtime-jit's
+ * lang-tang's side of the call protocol (AD-28): the hooks runtime-jit's
  * compiled code calls around a call to another compiled guest function, over
  * runtime-core's stack, registry and rebuild.
  *
@@ -72,23 +72,44 @@ static inline const GLTANG_JitFn * record_of(const GLTANG_Jit * jit, uint64_t fw
   return program->fns && f < program->count ? &program->fns[f] : NULL;
 }
 
+/** Tang functions have one VM result; when a compiled target has code, confirm
+ * that its emitted signature agrees with the language contract as well. */
+static uint64_t expected_result_count(const GLTANG_Jit * jit, uint64_t fword) {
+  const GLTANG_JitFn * fn = record_of(jit, fword);
+  if (fn && fn->code) {
+    const GLTANG_JitCode * payload = grcore_code_payload(fn->code);
+    if (payload && payload->code) {
+      return grjit_code_result_count(payload->code);
+    }
+  }
+  return 1u;
+}
+
 static uint32_t refuse_push(GLTANG_Jit * jit) {
   jit->refusal = GLTANG_REFUSAL_PUSH;
   return 1u;
 }
 
-static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args, uint64_t count) {
+static uint32_t hook_push(void * context, void * callee_environment, uint64_t callee, const uint64_t * args, uint64_t count, uint64_t result_count) {
   GLTANG_Execution * exec = exec_of(context);
   GLTANG_Jit * jit = exec ? exec->jit : NULL;
   if (!jit) {
     return 1u;
+  }
+  // Tang guest functions currently share their owning execution as language
+  // environment. The operand is explicit in the JIT ABI so other embedders can
+  // target a different environment; reject a mismatched Tang environment.
+  if (callee_environment != exec) {
+    ++exec->jit_stats.hook_argument_errors;
+    return refuse_push(jit);
   }
   // The hook checks its own arguments: the token must decode to a function of a
   // loaded program, the count must be that function's parameters and the hidden
   // flag, and the flag must be 0 (a compiled call). Anything else is a refusal,
   // counted, which no correct run has.
   const GLTANG_Function * cf = function_of(exec, callee);
-  if (!cf || count != (uint64_t)cf->parameter_count + 1u || args[count - 1u] != 0u) {
+  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
+      count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
     ++exec->jit_stats.hook_argument_errors;
     return refuse_push(jit);
   }
@@ -175,6 +196,26 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
     exec->jit_stats.deepest_chain = jit->chain;
   }
   return 0u;
+}
+
+/** Tang currently has one guest result per function. Tail calls remain an
+ * interpreter fallback, but validate the same boundary contract before
+ * declining them so a mismatched result shape can never replace a guest frame. */
+static uint32_t hook_tail(void * context, void * callee_environment, uint64_t callee, const uint64_t * args, uint64_t count, uint64_t result_count) {
+  GLTANG_Execution * exec = exec_of(context);
+  GLTANG_Jit * jit = exec ? exec->jit : NULL;
+  if (!jit) {
+    return 1u;
+  }
+  const GLTANG_Function * cf = function_of(exec, callee);
+  if (callee_environment != exec || !cf || result_count != 1u ||
+      result_count != expected_result_count(jit, callee) ||
+      count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
+    ++exec->jit_stats.hook_argument_errors;
+  }
+  // Tang does not yet replace guest frames for a compiled tail call. Refusing
+  // leaves the stack untouched and lets the call site's interpreter fallback run.
+  return refuse_push(jit);
 }
 
 static void hook_pop(void * context) {
@@ -416,5 +457,5 @@ const GRJIT_CallHooks gltang_jit_hooks = {
   .pop = hook_pop,
   .compile = hook_compile,
   .deopt = hook_deopt,
-  .tail = NULL,
+  .tail = hook_tail,
 };

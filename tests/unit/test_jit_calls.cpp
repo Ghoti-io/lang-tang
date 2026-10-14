@@ -1164,18 +1164,30 @@ TEST(JitCalls, AHookRefusesAnArgumentItDoesNotAcceptAndCountsIt) {
   // The wrong count (one too few, one too many, none), the flag set (an interpreter
   // entry's, which a compiled call never passes), and a token that names no
   // function (past the program's functions, and in a program that is not loaded).
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, two, ok_args, 2), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, two, ok_args, 4), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, two, ok_args, 0), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, two, flag_set, 3), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, (uint64_t{0} << 32) | 77u, ok_args, 3), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 0, (uint64_t{5} << 32) | 1u, ok_args, 3), 0);
-  EXPECT_EQ(context.jit_stats().hook_argument_errors, 6u) << "each refusal was counted";
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, two, ok_args, 2, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, two, ok_args, 4, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, two, ok_args, 0, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, two, flag_set, 3, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, (uint64_t{0} << 32) | 77u, ok_args, 3, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, (uint64_t{5} << 32) | 1u, ok_args, 3, 1), 0);
+  // Tang's functions return one value. A different requested result shape is
+  // refused before the hook can push or otherwise alter a guest frame.
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 0, two, ok_args, 3, 2), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 4, two, ok_args, 3, 2), 0);
+  int other_environment = 0;
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, &other_environment, 0, two, ok_args, 3, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, &other_environment, 4, two, ok_args, 3, 1), 0);
+  const uint64_t errors_after_mismatch = context.jit_stats().hook_argument_errors;
+  // A well-shaped tail call is also refused for now, but does not count as a
+  // malformed hook argument and must not touch the guest stack.
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 4, two, ok_args, 3, 1), 0);
+  EXPECT_EQ(context.jit_stats().hook_argument_errors, errors_after_mismatch);
+  EXPECT_EQ(context.jit_stats().hook_argument_errors, 10u) << "each malformed call shape and environment mismatch was counted";
   EXPECT_EQ(grcore_stack_frame_count(grcore_context_stack(context.context)), 0u) << "and none pushed a frame";
   // The compile hook refuses a token that names nothing, and a function that was
   // never named is compiled by it (counted as compiled at a call).
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 2, (uint64_t{5} << 32) | 1u, nullptr, 0), 0);
-  EXPECT_NE(gltang_vm_jit_test_hook(exec, 2, (uint64_t{0} << 32) | 99u, nullptr, 0), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 2, (uint64_t{5} << 32) | 1u, nullptr, 0, 1), 0);
+  EXPECT_NE(gltang_vm_jit_test_hook(exec, exec, 2, (uint64_t{0} << 32) | 99u, nullptr, 0, 1), 0);
 }
 
 TEST(JitCalls, TheEmittedMetadataHasNoDerivedPointerAndNoConvertingLocation) {

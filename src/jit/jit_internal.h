@@ -217,6 +217,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
  * @return The slot, or NULL if it could not be made.
  */
 GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword);
+uint64_t gltang_jit_slot_entry_address(void * environment, uint64_t fword);
 
 /**
  * @brief Compiles a function, registers its code and installs it in its slot.
