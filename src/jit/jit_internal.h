@@ -102,6 +102,7 @@ typedef struct GLTANG_JitFn {
 typedef struct GLTANG_JitProgram {
   GLTANG_JitFn * fns;  ///< One per function; allocated at the program's first counted poll.
   uint32_t count;
+  bool slots_ready;    ///< Every function of the program has an entry slot (`gltang_jit_prepare_slots`): generated code reads them through the tables without a test.
 } GLTANG_JitProgram;
 
 /** @brief The payload of a ::GRCORE_Code. */
@@ -191,6 +192,8 @@ typedef struct GLTANG_Jit {
   bool floaty;                   ///< Some compiled function holds raw floats (never cleared): until then a push and a pop do no float bookkeeping at all.
   uint64_t test_fail_stack_push_at; ///< Test seam: the Nth push hook that has extended the reservation finds its stack push refused (0: never).
   uint64_t test_stack_pushes;
+  uint64_t test_fail_slot_at;    ///< Test seam: the Nth entry slot made is refused (0: never): the compile that needed it fails, counted.
+  uint64_t test_slots_made;
   uint64_t test_failed_capacity; ///< The reservation's capacity and the extensions open right after that refusal was undone.
   uint64_t test_failed_extensions;
   uint64_t test_failed_count;
@@ -217,7 +220,20 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
  * @return The slot, or NULL if it could not be made.
  */
 GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword);
-uint64_t gltang_jit_slot_entry_address(void * environment, uint64_t fword);
+
+/**
+ * @brief Makes the entry slot of every function of a program, once.
+ *
+ * Compiled calls find their callee's slot through the execution's tables, as the
+ * code is shareable and holds no execution's address, and the last load of the
+ * lookup is not tested: a program's functions all have a slot before any of its
+ * functions is built. A slot that cannot be made fails the build (the caller is not
+ * compiled, and the interpreter runs it), so no compiled call site can find an
+ * empty one.
+ *
+ * @return False if a slot could not be made, or the program is not loaded.
+ */
+bool gltang_jit_prepare_slots(GLTANG_Execution * exec, uint32_t program_index);
 
 /**
  * @brief Compiles a function, registers its code and installs it in its slot.

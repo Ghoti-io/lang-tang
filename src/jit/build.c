@@ -165,7 +165,9 @@ typedef struct Ctx {
   bool natives_on;
   bool * flowed;                  ///< Per index of a CALL: the walk went on past it as a call.
   bool * force_exit;              ///< Per index of a CALL: after a merge made its callee unnamable.
-  GRJIT_VReg callee_slot;         ///< Runtime-resolved slot address for a guest call.
+  GRJIT_VReg jitp;                ///< This execution's JIT state, read once at entry from the environment.
+  GRJIT_VReg callee_slot;         ///< The callee's entry slot, read from the environment's tables at each call.
+  GRJIT_VReg callee_tbl;          ///< The tables on the way to it.
   uint32_t * global_fn;           ///< Per global: the function its declaration stores, DECL_NONE or DECL_MANY.
   uint32_t * local_fn;            ///< The same for this function's locals.
   uint8_t * call_sites;           ///< One bit per index where a compiled call is emitted.
@@ -1261,10 +1263,17 @@ static void emit_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, uint32_t k) {
   args[n] = I(0);
   fill_state(c, c->state2, i + 1u, at);
   fill_state(c, c->state, i, d);
-  GRJIT_Operand resolve_args[2] = {V(c->ep), I((int64_t)GLTANG_FN_WORD(c->program_index, k))};
-  B(grjit_builder_call(c->b, c->callee_slot,
-      (uint64_t)(uintptr_t)gltang_jit_slot_entry_address, GRJIT_CALL_NO_GC,
-      GRCORE_SITE_GC_POINT_CALL, resolve_args, 2, (GRCORE_PollIdentity){0, 0}, NULL, 0));
+  // The callee's entry slot is found through the environment, so the code holds no
+  // execution's address (it is shareable): the execution's JIT state, its table of
+  // the program's functions and that function's record, whose first word is the
+  // slot. Three loads and no call. Every function of the program has its slot
+  // before the program's first function is compiled (`gltang_jit_prepare_slots`),
+  // so the last load is never null.
+  B(grjit_builder_load(c->b, c->callee_tbl, c->jitp, (int32_t)offsetof(GLTANG_Jit, programs), 64, false));
+  B(grjit_builder_load(c->b, c->callee_tbl, c->callee_tbl,
+      (int32_t)(c->program_index * sizeof(GLTANG_JitProgram) + offsetof(GLTANG_JitProgram, fns)), 64, false));
+  B(grjit_builder_load(c->b, c->callee_slot, c->callee_tbl,
+      (int32_t)(k * sizeof(GLTANG_JitFn) + offsetof(GLTANG_JitFn, slot)), 64, false));
   B(grjit_builder_call_slot_operand_results_env(c->b, &T[at], 1,
       V(c->callee_slot), GLTANG_FN_WORD(c->program_index, k), V(c->ep), args, (size_t)n + 1u,
       identity_at(c, i), c->state2, c->slots, identity_at(c, i), c->state, c->slots));
@@ -1778,18 +1787,10 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   if (!program || function_index >= program->function_count || !grjit_backend_available()) {
     return GLTANG_ERR_UNSUPPORTED;
   }
-  // Every shared caller resolves its slot at runtime from the active execution
-  // environment. Prepare slots for all loaded functions before compiling any
-  // caller; a call may target an imported function in another program. The
-  // resolver remains a nonallocating GRJIT_CALL_NO_GC helper.
-  for (uint32_t p = 0; p < exec->program_count; ++p) {
-    const GLTANG_Program * loaded = gltang_exec_program(exec, p);
-    if (loaded == NULL) continue;
-    for (uint32_t i = 0; i < loaded->function_count; ++i) {
-      if (gltang_jit_slot_for(exec, GLTANG_FN_WORD(p, i)) == NULL) {
-        return GLTANG_ERR_OOM;
-      }
-    }
+  // The generated code finds each callee's entry slot through the environment, and
+  // so needs every function of the program to have one before any caller is built.
+  if (!gltang_jit_prepare_slots(exec, program_index)) {
+    return GLTANG_ERR_OOM;
   }
   const GLTANG_Function * fn = &program->functions[function_index];
   // The shapes that are not worth compiling, which are not failures: a function
@@ -1986,6 +1987,8 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->act));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->gp));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_slot));
+  B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_tbl));
+  B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->jitp));
   for (int j = 0; j < TMP_COUNT; ++j) {
     B(grjit_builder_vreg(c->b, GRJIT_TYPE_I64, &c->tmp[j]));
   }
@@ -2009,6 +2012,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     B(grjit_builder_const(c->b, c->local[k], 0));
   }
   B(grjit_builder_instance(c->b, c->ep));
+  B(grjit_builder_load(c->b, c->jitp, c->ep, (int32_t)offsetof(GLTANG_Execution, jit), 64, false));
   B(grjit_builder_load(c->b, c->act, c->ep, (int32_t)offsetof(GLTANG_Execution, act), 64, false));
   B(grjit_builder_load(c->b, c->flags, c->act, (int32_t)offsetof(GLTANG_Activation, depth), 64, false));
   // The interpreter made the entry poll (flag 1); a compiled call did not.

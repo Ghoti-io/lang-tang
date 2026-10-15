@@ -76,6 +76,9 @@ int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint
 
 /** Refuses the stack push of the Nth push hook that extended the reservation, and what the reservation held after the refusal was undone. */
 void gltang_vm_set_stack_push_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at);
+
+/** Refuses the Nth entry slot the JIT makes (0: never), as an allocation failure would: the compile that needs it fails and is counted. */
+void gltang_vm_set_slot_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at);
 /** Discards a compiled function now (see the eighth counted exit); 1 if it was compiled. */
 int gltang_vm_jit_test_discard(GLTANG_Execution * execution, uint64_t fword);
 

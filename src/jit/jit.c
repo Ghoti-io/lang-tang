@@ -216,7 +216,8 @@ GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword) 
     return NULL;
   }
   if (!f->slot) {
-    if (grcore_entry_slot_create(exec->context, &f->slot) != GRCORE_OK) {
+    if ((jit->test_fail_slot_at != 0 && ++jit->test_slots_made == jit->test_fail_slot_at) ||
+        grcore_entry_slot_create(exec->context, &f->slot) != GRCORE_OK) {
       f->slot = NULL;
       return NULL;
     }
@@ -227,14 +228,26 @@ GRCORE_EntrySlot * gltang_jit_slot_for(GLTANG_Execution * exec, uint64_t fword) 
   return f->slot;
 }
 
-uint64_t gltang_jit_slot_entry_address(void * environment, uint64_t fword) {
-  GLTANG_Execution * exec = environment;
-  GLTANG_Jit * jit = exec != NULL ? exec->jit : NULL;
-  GLTANG_JitFn * fn = jit != NULL ? gltang_jit_find_fn(exec, jit, fword, false) : NULL;
-  // Slots are created while compiling the caller, before generated code can run.
-  // This resolver is called at guest-call time and must not allocate at a
-  // GRJIT_CALL_NO_GC site.
-  return fn != NULL && fn->slot != NULL ? (uint64_t)(uintptr_t)&fn->slot->entry : 0;
+bool gltang_jit_prepare_slots(GLTANG_Execution * exec, uint32_t program_index) {
+  GLTANG_Jit * jit = exec->jit;
+  const GLTANG_Program * program = gltang_exec_program(exec, program_index);
+  if (jit == NULL || program == NULL) {
+    return false;
+  }
+  if (program_index < jit->program_capacity && jit->programs[program_index].slots_ready) {
+    return true;
+  }
+  for (uint32_t i = 0; i < program->function_count; ++i) {
+    if (gltang_jit_slot_for(exec, GLTANG_FN_WORD(program_index, i)) == NULL) {
+      return false;
+    }
+  }
+  // Slots are only ever made, never removed, for the life of the execution. (A program
+  // with no function has no record array to flag, and nothing to call.)
+  if (program_index < jit->program_capacity) {
+    jit->programs[program_index].slots_ready = true;
+  }
+  return true;
 }
 
 void gltang_jit_mark_never(GLTANG_Execution * exec, GLTANG_Jit * jit, GLTANG_JitFn * f) {
@@ -647,6 +660,13 @@ int gltang_vm_jit_test_boxes(GLTANG_Execution * execution, uint64_t * pool, uint
  * extensions right after the refusal was undone, and how many were refused. Declared
  * in vm/test_hooks.h.
  */
+void gltang_vm_set_slot_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at) {
+  if (execution && execution->jit) {
+    execution->jit->test_fail_slot_at = fail_at;
+    execution->jit->test_slots_made = 0;
+  }
+}
+
 void gltang_vm_set_stack_push_failure_unchecked(GLTANG_Execution * execution, uint64_t fail_at) {
   if (execution && execution->jit) {
     execution->jit->test_fail_stack_push_at = fail_at;

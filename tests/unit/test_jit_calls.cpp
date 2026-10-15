@@ -1119,6 +1119,39 @@ TEST(JitCalls, ALongCompiledRunOfFibRetiresNothingAndKeepsEveryCompiledRangeRegi
       (unsigned long long)exits(jit.stats), (unsigned long long)jit.retired_peak);
 }
 
+TEST(JitCalls, AnEntrySlotThatCannotBeMadeFailsTheCompileOfTheCallerAndNothingFaults) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A compiled call site finds its callee's slot through the environment's tables, which
+  // hold a slot for every function of the program before the first of them is built. A
+  // slot that cannot be made fails that compile (counted), the interpreter runs the
+  // function, and the answer is the same; there is no site whose slot is read at run time
+  // and might not be there.
+  const char * source =
+      "function leaf(n) { return n + 1; }\nfunction mid(n) { return leaf(n) + leaf(n + 1); }\n"
+      "function top(n) { return mid(n) + mid(n + 1); }\nprint(top(1));\n";
+  uint64_t failures = 0;
+  for (uint64_t fail_at = 0; fail_at <= 8; ++fail_at) {
+    SCOPED_TRACE(fail_at);
+    Compiled compiled(source, Mode::Script, "slots.tang");
+    ASSERT_TRUE(compiled.ok());
+    Config config;
+    config.jit_threshold = 1;
+    Context context(compiled.program, config);
+    ASSERT_TRUE(context.ok());
+    gltang_vm_set_slot_failure_unchecked(context.execution, fail_at);
+    ASSERT_TRUE(context.execute());
+    EXPECT_EQ(context.raw(), "12") << "top(1) = mid(1) + mid(2) = (2 + 3) + (3 + 4) = 12";
+    const GLTANG_JitStats st = context.jit_stats();
+    EXPECT_EQ(st.hook_argument_errors, 0u);
+    if (fail_at == 0) {
+      EXPECT_EQ(st.compile_failures, 0u) << "the control: no failure injected";
+      EXPECT_GT(st.calls, 0u);
+    }
+    failures += st.compile_failures;
+  }
+  EXPECT_GT(failures, 0u) << "an injected slot failure was reached and counted as a failed compile";
+}
+
 TEST(JitCalls, AnInstallOfCodeBuiltForAnotherFunctionOrCountIsRefusedAndTheSlotIsUnchanged) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Compiled compiled(
