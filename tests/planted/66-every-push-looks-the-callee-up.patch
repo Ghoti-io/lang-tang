@@ -8,12 +8,12 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -120,7 +120,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+@@ -134,7 +134,7 @@
    // stay zero, which a test holds it to). `max_converting` of a record is nonzero only
    // while it is compiled.
    size_t extension = 0;
 -  if (jit->floaty) {
 +  if (jit->floaty || 1) {  /* planted: always */
      ++exec->jit_stats.extension_lookups;
-     const GLTANG_JitFn * callee_fn = record_of(jit, callee);
+     const GLTANG_JitFn * callee_fn = record_of(exec, jit, callee);
      extension = callee_fn ? callee_fn->max_converting : 0;

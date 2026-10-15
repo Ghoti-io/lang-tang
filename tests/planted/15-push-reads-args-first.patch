@@ -7,9 +7,9 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -130,6 +130,11 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+@@ -144,6 +144,11 @@
    }
-   GRCORE_Stack * stack = grcore_context_stack(context);
+   GRCORE_Stack * stack = stack_of(jit, context);
    GRCORE_FrameRef frame;
 +  /* planted: the arguments are read before the push */
 +  uint64_t planted_early[GLTANG_JIT_MAX_CALL_ARGS + 1u];
@@ -19,7 +19,7 @@
    const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
    if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
      if (extension != 0) {
-@@ -162,7 +167,7 @@ static uint32_t hook_push(void * context, uint64_t callee, const uint64_t * args
+@@ -176,7 +181,7 @@
    S[GLTANG_F_FLAGS] = exec->act->depth;
    const uint32_t parameters = cf->parameter_count;
    for (uint32_t i = 0; i < parameters; ++i) {

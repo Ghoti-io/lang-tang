@@ -6,18 +6,22 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1260,3 +1260,3 @@
+@@ -1260,7 +1260,7 @@
+   for (uint32_t j = 0; j < n; ++j) {
+     args[j] = V(T[at + 1u + j]);
    }
 -  args[n] = I(0);
 +  args[n] = I(1);  /* planted: 0 */
    fill_state(c, c->state2, i + 1u, at);
+   fill_state(c, c->state, i, d);
+   // The callee's entry slot is found through the environment, so the code holds no
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -110,6 +110,6 @@
+@@ -102,7 +102,7 @@
+   // else is a refusal, counted, which no correct run has.
    const GLTANG_Function * cf = function_of(exec, callee);
--  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
+   if (!cf || callee_environment != exec || result_count != 1u ||
 -      count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
-+  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
 +      count != (uint64_t)cf->parameter_count + 1u || !args) {  /* planted: the flag is not checked */
      ++exec->jit_stats.hook_argument_errors;
      return refuse_push(jit);
