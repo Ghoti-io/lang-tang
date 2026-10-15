@@ -1361,6 +1361,7 @@ breaks nothing as not caught. Observed:
 | 80 exit-sites-from-the-functions-record | the deopt hook reads an exit's flags from the function's record, whose code is gone if the function was discarded while the record was open | the discard-while-a-record-is-open test (`testJit_floats`) | a designed exit taken from such code is counted |
 | 81 bench-exit-kinds-sum-omits-remembered | the harness's exit-kinds invariant leaves out the remembered call exits | `bench --smoke --only float-caller-declined`: `deopts` is exactly the sum of the classified exits | the harness aborts |
 | 82 bench-declined-callee-entries-ignored | the harness expects a declined function's callee never to be entered | `bench --smoke --only float-arg-L0`: a declined function is not entered, its callee is, exactly | the harness aborts |
+| 83 every-compiled-call-looks-the-callee-up | the push hook looks the callee's function record up for every compiled call (as the run-time slot resolver and the per-call signature check did) | `JitCalls.ACompiledCallLooksNoFunctionUp...`: `record_lookups` is the same for fib to depth 8 and to depth 20 | `large.stats.record_lookups` is not equal to `small.stats.record_lookups` |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1368,10 +1369,10 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 82 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 83 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all eighty-one but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all eighty-two but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
