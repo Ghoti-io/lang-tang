@@ -731,7 +731,7 @@ TEST(JitCalls, AFramePushedForACalleeWhoseEntryThenFailsTheStackCheckHoldsItsRef
   // narrow: the failing push must be the last collection before the first use. The
   // push hook collects at the first 256 levels of the guest stack and at every
   // 1,024th call, so the budgets are swept across the one where the 1,024th call
-  // is the push whose callee does not fit (about 380 bytes a compiled frame with these six parameters), and
+  // is the push whose callee does not fit (about 400 bytes a compiled frame with these six parameters: the environment took a slot of the frame, which moved this window up from 360,000 to 392,000 bytes), and
   // the recursion reads its arguments at the bottom, with no other collection
   // between. Torture is off for the same reason: the push hook's collection is the
   // only one.
@@ -739,7 +739,7 @@ TEST(JitCalls, AFramePushedForACalleeWhoseEntryThenFailsTheStackCheckHoldsItsRef
   // the narrow window is left to the plain run (the planted-defect check runs that).
   const uint64_t step = (tt::moving_stack_requested() || RUNNING_ON_VALGRIND) ? 2048 : 64;
   uint64_t left_at_a_call = 0, runs = 0;
-  for (uint64_t bytes = 360000; bytes <= 392000; bytes += step) {
+  for (uint64_t bytes = 380000; bytes <= 436000; bytes += step) {
     ++runs;
     Scenario sc;
     sc.source =
