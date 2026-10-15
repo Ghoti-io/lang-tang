@@ -340,6 +340,7 @@ typedef struct GLTANG_JitStats {
   uint64_t exits_expected;      ///< Exits from compiled code that only box a raw float for its consumer (a return, a print, a global store, a call argument, a cast to string, an instruction compiled code does not do). Designed, so not counted toward the discard limit.
   uint64_t exits_counted;       ///< Exits of a kind that counts toward a function's discard limit (a failed guard, an unconditional exit that is not the boxing of a raw float, a callee-value guard), whether or not the function was still compiled to be charged. With no rebuild failure, `deopts` is `exits_expected` + `exits_counted` + `call_exits_native_stack` + `call_exits_push_refused` + `call_exits_remembered` + `native_exits_stack`.
   uint64_t functions_declined_expected; ///< Functions declined at compile time because every path ends at an exit that only boxes a raw float and they have no loop: they cannot repay the compile.
+  uint64_t record_lookups;      ///< Lookups of a function's JIT record by its token (`gltang_jit_find_fn`, and the push hook's look at its callee's raw floats). Made when a function is polled, compiled or discarded, never per compiled call: across a run of calls it does not grow with the number of calls, which a test holds it to.
 } GLTANG_JitStats;
 
 /**

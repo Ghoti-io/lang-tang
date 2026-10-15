@@ -78,6 +78,7 @@ static const GRCORE_Key tierup_key = GRCORE_KEY_INIT(
 );
 
 GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uint64_t fword, bool create) {
+  ++exec->jit_stats.record_lookups;
   uint32_t p = GLTANG_FN_PROGRAM(fword);
   uint32_t f = GLTANG_FN_INDEX(fword);
   if (p >= exec->program_count) {
@@ -294,7 +295,11 @@ bool gltang_jit_compile_function(GLTANG_Execution * exec, uint64_t fword) {
     return false;
   }
   GRCORE_EntrySlot * slot = gltang_jit_slot_for(exec, fword);
-  if (!slot || grjit_entry_slot_install(exec->context, slot, handle, jc->code, fword, (size_t)jc->parameter_count + 1u) != GRJIT_OK) {
+  // Tang functions have one result, and every call and tail call site is built for
+  // that shape; the code's signature is checked once, here, where the slot is
+  // bound to it, and not on every call by the hooks.
+  if (!slot || grjit_code_result_count(jc->code) != 1u ||
+      grjit_entry_slot_install(exec->context, slot, handle, jc->code, fword, (size_t)jc->parameter_count + 1u) != GRJIT_OK) {
     (void)grcore_code_unregister(exec->context, start);
     grcore_code_release(handle);
     ++exec->jit_stats.compile_failures;

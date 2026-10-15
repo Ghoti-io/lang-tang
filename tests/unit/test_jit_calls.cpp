@@ -1119,6 +1119,36 @@ TEST(JitCalls, ALongCompiledRunOfFibRetiresNothingAndKeepsEveryCompiledRangeRegi
       (unsigned long long)exits(jit.stats), (unsigned long long)jit.retired_peak);
 }
 
+TEST(JitCalls, ACompiledCallLooksNoFunctionUpSoTheNumberOfLookupsDoesNotGrowWithTheNumberOfCalls) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The regression guard of the call path, as the float-free call test is of the float
+  // bookkeeping: a compiled call finds its callee's slot with three loads through the
+  // environment's tables and a push that checks its arguments against the function
+  // table, and looks no record up. A run's lookups are the compile's and the polls' (a
+  // handful for the functions in it), whatever the number of calls, so two runs of fib
+  // that differ ~100-fold in calls have the same count. The call that resolved its
+  // callee's slot through a helper at every call (which cost fib(15) 5.8% and fib(22)
+  // 6.8%), and the push that read its callee's compiled signature at every call, each
+  // made a lookup per call. Counted, never timed.
+  Outcome small, large;
+  for (int pass = 0; pass < 2; ++pass) {
+    Scenario sc;
+    sc.source = std::string("function fib(n) { if (n < 2) { return n; } return fib(n - 1) + fib(n - 2); }\nprint(fib(") + (pass == 0 ? "8" : "20") + "));\n";
+    sc.calls = 1000;
+    sc.fuel = 100000000000ull;
+    (pass == 0 ? small : large) = run(sc, 1);
+  }
+  ASSERT_TRUE(small.finished);
+  ASSERT_TRUE(large.finished);
+  EXPECT_GE(small.stats.calls, 30u);
+  EXPECT_GE(large.stats.calls, 10000u) << "the calls were compiled calls";
+  EXPECT_GE(large.stats.calls, 100u * small.stats.calls);
+  EXPECT_EQ(exits(large.stats), 0u);
+  EXPECT_GT(small.stats.record_lookups, 0u) << "the counter counts: the compile and the polls look functions up";
+  EXPECT_EQ(large.stats.record_lookups, small.stats.record_lookups)
+      << "the lookups do not depend on how many calls were made";
+}
+
 TEST(JitCalls, AnEntrySlotThatCannotBeMadeFailsTheCompileOfTheCallerAndNothingFaults) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // A compiled call site finds its callee's slot through the environment's tables, which

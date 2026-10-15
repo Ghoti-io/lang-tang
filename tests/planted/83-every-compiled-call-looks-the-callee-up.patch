@@ -1,0 +1,19 @@
+# 83 every compiled call looks its callee's record up
+# defect: the push hook looks the callee's function record up by token at every
+# compiled call, as the call site's slot resolver did (a lookup per call) and as the
+# check of the callee's compiled signature did; nothing in any output changes, and a
+# call of fib is a few percent slower (compiled fib(15) +5.8%, fib(22) +6.8%, measured)
+# caught by: the lookup-count test, which runs fib to depth 8 and to depth 20 and
+# requires the same number of lookups
+# (testJit_calls)
+#
+--- a/src/jit/hooks.c
++++ b/src/jit/hooks.c
+@@ -97,6 +97,7 @@
+     ++exec->jit_stats.hook_argument_errors;
+     return refuse_push(jit);
+   }
++  (void)gltang_jit_find_fn(exec, jit, callee, false);  /* planted: a record lookup at every compiled call */
+   // The interpreter's order: the guest-depth test first, then the extension of
+   // the reservation by the callee's most raw floats at one site (zero for a
+   // function that holds none, which costs nothing) with the top-up of the pool

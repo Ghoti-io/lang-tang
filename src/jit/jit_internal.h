@@ -164,6 +164,8 @@ typedef struct GLTANG_Jit {
   size_t queue_count;
   size_t queue_capacity;
   GRCORE_RequestKind kind;       ///< The tier-up request kind.
+  GRCORE_Stack * stack;          ///< The guest stack of `stack_context`, found once by the hooks (a context's stack is made when the engine registers and never replaced): the push and pop of every compiled call would otherwise look it up through the context's keyed slots.
+  void * stack_context;          ///< The context `stack` was found for.
   GRCORE_Port * port;            ///< Posts it; taken at the first post.
   GRJIT_NativeTable * natives;   ///< The thunks of the library calls and loads; NULL if it could not be made (then no site is compiled as one).
   GRCORE_DeoptReservation * reservation;  ///< Made once, empty; extended by each entry and compiled call by the callee's `max_converting` (AD-27).

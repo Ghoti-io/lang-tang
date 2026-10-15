@@ -62,7 +62,8 @@ static const GLTANG_Function * function_of(const GLTANG_Execution * exec, uint64
 }
 
 /** The record of a function, by its token, without the checks `gltang_jit_find_fn` makes for a caller that may create it. */
-static inline const GLTANG_JitFn * record_of(const GLTANG_Jit * jit, uint64_t fword) {
+static inline const GLTANG_JitFn * record_of(GLTANG_Execution * exec, const GLTANG_Jit * jit, uint64_t fword) {
+  ++exec->jit_stats.record_lookups;
   const uint32_t p = GLTANG_FN_PROGRAM(fword);
   const uint32_t f = GLTANG_FN_INDEX(fword);
   if (p >= jit->program_capacity) {
@@ -72,17 +73,13 @@ static inline const GLTANG_JitFn * record_of(const GLTANG_Jit * jit, uint64_t fw
   return program->fns && f < program->count ? &program->fns[f] : NULL;
 }
 
-/** Tang functions have one VM result; when a compiled target has code, confirm
- * that its emitted signature agrees with the language contract as well. */
-static uint64_t expected_result_count(const GLTANG_Jit * jit, uint64_t fword) {
-  const GLTANG_JitFn * fn = record_of(jit, fword);
-  if (fn && fn->code) {
-    const GLTANG_JitCode * payload = grcore_code_payload(fn->code);
-    if (payload && payload->code) {
-      return grjit_code_result_count(payload->code);
-    }
+/** The context's guest stack: a context's is made when the engine registers and is never replaced, so the first hook to need it keeps it (for that context: a hook handed another one looks again). */
+static inline GRCORE_Stack * stack_of(GLTANG_Jit * jit, void * context) {
+  if (jit->stack_context != context) {
+    jit->stack = grcore_context_stack(context);
+    jit->stack_context = context;
   }
-  return 1u;
+  return jit->stack;
 }
 
 static uint32_t refuse_push(GLTANG_Jit * jit) {
@@ -96,19 +93,15 @@ static uint32_t hook_push(void * context, void * callee_environment, uint64_t ca
   if (!jit) {
     return 1u;
   }
-  // Tang guest functions currently share their owning execution as language
-  // environment. The operand is explicit in the JIT ABI so other embedders can
-  // target a different environment; reject a mismatched Tang environment.
-  if (callee_environment != exec) {
-    ++exec->jit_stats.hook_argument_errors;
-    return refuse_push(jit);
-  }
   // The hook checks its own arguments: the token must decode to a function of a
   // loaded program, the count must be that function's parameters and the hidden
-  // flag, and the flag must be 0 (a compiled call). Anything else is a refusal,
-  // counted, which no correct run has.
+  // flag, and the flag must be 0 (a compiled call). The call's environment must be
+  // this execution (Tang's guest functions share their owning execution as their
+  // language environment; the operand is explicit in the JIT ABI so that another
+  // embedder can name a different one) and its result shape Tang's one. Anything
+  // else is a refusal, counted, which no correct run has.
   const GLTANG_Function * cf = function_of(exec, callee);
-  if (!cf || result_count != 1u || result_count != expected_result_count(jit, callee) ||
+  if (!cf || callee_environment != exec || result_count != 1u ||
       count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
     ++exec->jit_stats.hook_argument_errors;
     return refuse_push(jit);
@@ -143,13 +136,13 @@ static uint32_t hook_push(void * context, void * callee_environment, uint64_t ca
   size_t extension = 0;
   if (jit->floaty) {
     ++exec->jit_stats.extension_lookups;
-    const GLTANG_JitFn * callee_fn = record_of(jit, callee);
+    const GLTANG_JitFn * callee_fn = record_of(exec, jit, callee);
     extension = callee_fn ? callee_fn->max_converting : 0;
     if (extension != 0 && !gltang_jit_extend(exec, extension, jit->chain + 1u, callee)) {
       return refuse_push(jit);
     }
   }
-  GRCORE_Stack * stack = grcore_context_stack(context);
+  GRCORE_Stack * stack = stack_of(jit, context);
   GRCORE_FrameRef frame;
   const bool injected = extension != 0 && jit->test_fail_stack_push_at != 0 && ++jit->test_stack_pushes == jit->test_fail_stack_push_at;
   if (injected || grcore_stack_push(stack, exec->engine, cf->frame_slots, &frame) != GRCORE_OK) {
@@ -209,7 +202,6 @@ static uint32_t hook_tail(void * context, void * callee_environment, uint64_t ca
   }
   const GLTANG_Function * cf = function_of(exec, callee);
   if (callee_environment != exec || !cf || result_count != 1u ||
-      result_count != expected_result_count(jit, callee) ||
       count != (uint64_t)cf->parameter_count + 1u || !args || args[count - 1u] != 0u) {
     ++exec->jit_stats.hook_argument_errors;
   }
@@ -223,8 +215,8 @@ static void hook_pop(void * context) {
   if (!exec) {
     return;
   }
-  GRCORE_Stack * stack = grcore_context_stack(context);
   GLTANG_Jit * jit = exec->jit;
+  GRCORE_Stack * stack = jit ? stack_of(jit, context) : grcore_context_stack(context);
   // The extension this pop gives back is the innermost one if it was made at this depth
   // (at most one call is open at a depth, so a record at this depth is this call's, and a
   // call that extended by zero left none). The test is on the records alone: a call with no
