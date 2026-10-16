@@ -343,7 +343,7 @@ const char * gltang_call_text(const GLTANG_NativeCall * call, size_t index, size
 }
 
 /** Forgets the answer so far (the next `gltang_call_return_*` replaces it). */
-static void call_clear(GLTANG_NativeCall * call) {
+static void call_clear_slow(GLTANG_NativeCall * call) {
   gcu_free(call->text);
   call->text = NULL;
   // A description kept by the host was retained for the call; the call's own is
@@ -354,11 +354,21 @@ static void call_clear(GLTANG_NativeCall * call) {
   call->answer = NULL;
 }
 
+// Most answers are a scalar and most calls build nothing: the common case is
+// two loads and a branch, and the work is out of line.
+static inline void call_clear(GLTANG_NativeCall * call) {
+  if (call->text || call->answer) {
+    call_clear_slow(call);
+  }
+}
+
 /** The end of a call: the answer is dropped and so is the description the native built. */
-static void call_finish(GLTANG_NativeCall * call) {
+static inline void call_finish(GLTANG_NativeCall * call) {
   call_clear(call);
-  gltang_vm_description_destroy_in_run(call->built);
-  call->built = NULL;
+  if (call->built) {
+    gltang_vm_description_destroy_in_run(call->built);
+    call->built = NULL;
+  }
 }
 
 void gltang_call_return_null(GLTANG_NativeCall * call) {
