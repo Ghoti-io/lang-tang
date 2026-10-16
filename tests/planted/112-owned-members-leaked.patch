@@ -1,0 +1,17 @@
+# 112 the native records made at run time not freed
+# defect: the execution owns a record for each native a callback made and never frees them
+# caught by: the context's leak check (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -796,9 +796,7 @@
+     gltang_library_release(hs->held_libraries[i]);
+   }
+   gcu_allocator_free(exec->allocator, hs->held_libraries);
+-  for (size_t i = 0; i < hs->owned_member_count; ++i) {
+-    gcu_allocator_free(exec->allocator, hs->owned_members[i]);
+-  }
++  /* planted: the native records are not freed */
+   gcu_allocator_free(exec->allocator, hs->owned_members);
+   gcu_allocator_free(exec->allocator, hs);
+   exec->handles = NULL;

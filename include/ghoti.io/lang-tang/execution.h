@@ -424,6 +424,19 @@ GLTANG_API GLTANG_Result gltang_execution_native_polls(
 GLTANG_API bool gltang_jit_built(void);
 
 /**
+ * @brief Sets the two limits of the handle API (handle.h).
+ *
+ * @param execution The execution. Refused while a host function runs.
+ * @param scope_handles The most handles one callback's scope holds (0: the
+ *   default, 1,024; at most 1,048,576).
+ * @param persistent_handles The most persistent handles the execution holds (0:
+ *   the default, 4,096; at most 1,048,576).
+ * @return As ::gltang_execution_set_libraries; ::GLTANG_ERR_LIMIT past a maximum.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_handle_limits(
+    GLTANG_Execution * execution, size_t scope_handles, size_t persistent_handles);
+
+/**
  * @brief Caps the error list (default 1,024 entries).
  *
  * Entries past the cap are counted in ::gltang_execution_errors_dropped and not

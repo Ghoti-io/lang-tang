@@ -4,7 +4,7 @@
 #
 --- a/src/library/library_internal.h
 +++ b/src/library/library_internal.h
-@@ -83,6 +83,8 @@
+@@ -84,6 +84,8 @@
    GLTANG_FactoryFn factory;
    GLTANG_ValueFactoryFn value_factory;   ///< VALUE_FACTORY.
    GLTANG_ValueDescription * description; ///< VALUE: retained, sealed.
@@ -15,7 +15,7 @@
    uint64_t scope_fuel;
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -204,7 +204,18 @@
+@@ -233,7 +233,18 @@
      case GLTANG_MEMBER_VALUE:
        // A fresh copy for each reach: never cached, never shared with another
        // reach or another execution.

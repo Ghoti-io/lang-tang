@@ -29,6 +29,10 @@ templates also include `library.h`, and `host_values.c` `description.h`.
 | Build a value only when a program reaches it | [`host_values.c`](host_values.c), `stats_factory`: `gltang_library_add_value_factory` |
 | Answer a native call with an array or a map, built during the call and charged to the run | [`host_values.c`](host_values.c), `search`: `gltang_call_description`, `gltang_call_return_value` |
 | Keep an encoding (escaped, percent-encoded) on a string inside a container | [`host_values.c`](host_values.c), the `GLTANG_String_Type` of each `gltang_value_string` and `gltang_value_map_set` |
+| Read an array of maps in a native, keeping each string's encoding | [`handles.c`](handles.c), `titles`: `gltang_call_arg`, `gltang_handle_array_get`, `gltang_handle_map_get` |
+| Keep the handles of a long loop few | [`handles.c`](handles.c), `titles`: `gltang_handle_push_frame` and `_pop_frame` |
+| Give an object a method that knows which object it is on | [`handles.c`](handles.c), `account` and `label`: `gltang_handle_make_native`, `gltang_call_bound` |
+| Answer a library from a factory (`use pages.recent as r`) | [`handles.c`](handles.c), `recent_factory`: `gltang_library_add_handle_factory`, `gltang_handle_make_library` |
 | Register a template and call it from another (`use sidebar; sidebar()`) | [`nested_templates.c`](nested_templates.c), `gltang_library_add_template` |
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |

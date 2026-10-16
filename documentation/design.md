@@ -825,6 +825,93 @@ library and an instance of a host type (stories 3 and 5 of the spec). The node
 kind is an open enumeration (`GLTANG_NodeKind`), and the host-facing constructors
 for the new kinds are added with the stories that make them.
 
+### Handles: natives and factories that touch the program's values
+
+A native used to read an argument as a scalar or as flattened text and to answer
+with a scalar; ctang's callbacks received and returned any value (ledger D-049 to
+D-052). `spec-tang-host-extensibility` story 3 restores that with **handles**
+(`handle.h`, `stable`; AD-13).
+
+**A handle is a place in the execution's temporary roots.** `exec->temps` is
+the stack of values the collector already reads as precise slots and rewrites
+when it moves an object, which an operation that builds more than one object
+uses to hold its parts. A callback's **scope** is a window onto it: the first
+handle call of a callback opens the window (it records where it starts and takes
+the next serial) and every handle is the serial and the position in the window.
+A handle therefore survives a collection and a relocation with no further work
+(planted defect 104 shows what happens when a table of values the collector does
+not see is used instead). Closing the scope releases the window; the callback's
+answer is read from its handle *before* that, in `call_result`, and nothing
+allocates between the read and the caller's store (planted defect 114).
+
+**The check.** A handle is `{serial, index}`. The serial is the scope's and is
+issued by a counter of the execution's that never goes back (116), and every
+call compares it with the frames the callback has open, so a handle of a
+callback that has returned, or of another, is refused and never read (105). A
+scope holds at most `scope_limit` handles (default 1,024; a context option,
+`gltang_execution_set_handle_limits`), counted over all its frames; a handle that
+cannot be made, for the limit or for memory, sets a flag on the call and the
+callback's value is `Out of memory`, whatever it answered, with the run going on
+(106). A callback that makes no handle opens no scope and pays for none of this:
+the scalar native-call cases are level (the measurements below).
+
+**Frames.** A callback that builds a table of 20,000 rows cannot hold a handle
+for every piece of every row. `gltang_handle_push_frame` and `_pop_frame` open
+and close a frame inside the scope: the handles made in it end with it, the
+handles of the outer frames stay valid inside it, so a value made outside is
+filled from inside (113). It is what JNI's local frames are for.
+
+**Reading keeps the tags.** `gltang_handle_string_segment` gives each tagged run
+of a string, its byte range and its `GLTANG_String_Type`, computed from the
+segment words and the grapheme offsets; the copy a host makes can therefore
+keep the encodings (107). `gltang_handle_text` gives a pointer into the heap
+object: it is valid until the next call that can collect, and `copy_text` copies
+out for anything longer.
+
+**The labels, and the gate that checks them.** Every function in `handle.h` is
+labelled `@may_gc` or `@no_gc` in its documentation (Doxygen aliases make the
+labels print). `tests/unit/test_host_callbacks.cpp` parses the header, requires
+exactly one label on each function and a row in its table for each, and calls
+every function inside a native, under torture (a collection at every
+allocation), with the heap's collection counter read before and after: a
+`@no_gc` function must leave it alone (110), and an allocating `@may_gc` one must
+move it, which shows the counter measures something.
+
+**Constructors** make any value in the heap. A container pushed into a container
+is **copied**, as the language copies it for `a[i] = b` (115), so the program
+never sees two places sharing one object; a host builds from the outside in when
+the containers are large. A string is checked as UTF-8 by the engine's own
+constructor (invalid text is `GLTANG_ERR_INVALID`). `gltang_handle_make_library`
+seals the library and the execution **retains** it until it is destroyed (111);
+`gltang_handle_make_native(call, fn, user, bound, &h)` allocates a record the
+execution owns (112) and the native reads its bound value with
+`gltang_call_bound`, which is how `acct.name()` knows its account.
+
+**Factories** (`gltang_library_add_handle_factory`) are given the same call
+object with no arguments and answer by handle, so a factory can answer a
+container, a native or a library, and `use pages.recent as r` works for a
+library a factory made. Returning false is "not available" and binds null, as for
+the scalar factory. The JIT does not compile a reach of the new member kind (as
+for a described value), and a native is called as before.
+
+**Persistent handles** (`gltang_handle_promote`) are a table of the execution's,
+reported to the collector as roots (104, and 117 for a copy shown instead of the
+slot, which only a heap that moves can see). A slot's generation is odd while it
+is live and even while it is free, so a released handle is a tombstone and the
+slot can be reused; the count is limited (default 4,096; 109); the table, the
+libraries and the native records are freed with the execution (108, 111, 112). A
+snapshot is refused while one is live, or while the execution owns a run-time
+library or native (an image cannot name them; story 8 gives host values hooks and
+the refusal its name).
+
+**The state is lazy.** Everything the handle API keeps for an execution (the frames, the serial counter, the limits, the persistent table, the libraries and native records it owns) is one `GLTANG_HandleState`, made when a callback first asks for a handle; the execution holds one pointer. The first version put the fields in the execution itself, which grew it past 1,032 bytes, the largest block glibc's per-thread cache serves, and cost every engine of a request 400 instructions to make and free (`workaround-list-20-precompiled` +1.3%); the pointer keeps the execution at 1,000 bytes.
+
+**The call object** gained `scope`, the index of its first frame, and two flags
+(a handle could not be made; a constructor's poll ordered the run to stop). All of
+them are zero for a call that never asks for a handle, and the cleanup of a call
+is still two loads and a branch for one that sets no answer by description or
+handle.
+
 ### The seed sequence and the generator per context
 
 A `GLTANG_SeedSequence` holds a master seed and an atomic counter. Draw `k` is
@@ -1019,14 +1106,14 @@ decides the verdict (AD-21); the engine only knows where the call boundary is.
 
 ### Labels
 
-`seeds.h`, `description.h` and `encoding.h` are the host headers that are
+`seeds.h`, `description.h`, `encoding.h`, `valuekind.h` and `handle.h` are the host headers that are
 `stable`: they include only stable headers (`core.h`, `allocator.h`) and are the C
 embedding API's host entry for the seed and for a host-built value. `encoding.h`
 holds `GLTANG_String_Type`, which `unicodeString.h` (free) used to hold, so that
 `description.h` can name the segment tag without including a free header; the
 enum is the same and `unicodeString.h` includes the new header, so nothing is
 renamed. Two more fixtures show that `description.h` and `encoding.h` labelled free
-are refused (`tools/check-gates.sh`). `library.h` is
+are refused (`tools/check-gates.sh`). `valuekind.h` holds `GLTANG_ValueKind` for the same reason `encoding.h` holds the string tag: `handle.h` names the kind of a value, and `value.h` (free) includes the new header. `handle.h` also declares `GLTANG_Library`, `GLTANG_NativeCall` and `GLTANG_NativeFn`, which `library.h` used to declare, so the call object is an opaque stable type. `library.h` is
 `free`, for a reason of the rule and not of caution: a stable header includes only
 stable ones, `gltang_library_add_template` names `GLTANG_Program`, and the call
 object names `GLTANG_ErrorKind` and `GLTANG_ValueKind`, all of which are free
@@ -1517,6 +1604,20 @@ breaks nothing as not caught. Observed:
 | 101 materializer-node-ceiling-ignored | the materializer holds a description to its own limit and not to the engine's ceiling | the description that claims no limit, against lowered ceilings (`testHost_values`) | the result is an array, not `Out of memory` |
 | 102 materializer-byte-ceiling-ignored | the same for bytes | the same | the same |
 | 103 ref-of-another-description-accepted | a ref is checked against the node count only, so a ref made by one description names a node of another | the foreign-ref test (`testDescription`) | the push with a ref of another description returns `GLTANG_OK` |
+| 104 persistent-not-rooted | the persistent table is not reported as roots | the persistent handle across collections under torture (`testHandles`) | the handle's value is gone |
+| 105 handle-serial-unchecked | a handle is looked up by position alone | the stale-handle test (`testHandles`) | a handle of a returned callback is valid |
+| 106 scope-limit-unchecked | a scope takes handles without end | the scope-limit test (`testHandles`) | ten handles made under a limit of four |
+| 107 segment-tag-flattened | the segment reader reports every run as TRUSTED | the segment test (`testHandles`) | the html run reads as trusted |
+| 108 persistent-table-leaked | the persistent arrays are not freed at destroy | the context's leak check (`testHandles`) | `live_blocks` is not zero |
+| 109 persistent-limit-unchecked | a host can promote without end | the persistent-limit test (`testHandles`) | the fifth promotion of four succeeds |
+| 110 no-gc-function-collects | `gltang_handle_array_get` runs a collection | the label gate (`testHost_callbacks`) | a `@no_gc` function moved the collection counter |
+| 111 held-libraries-leaked | libraries made into values are never released | the count of cutil allocations across a run (`testHandles`) | allocations minus frees did not return |
+| 112 owned-members-leaked | native records are never freed | the context's leak check (`testHandles`) | `live_blocks` is not zero |
+| 113 frame-pop-keeps-handles | a popped frame leaves its values on the temporaries | the frame test (`testHandles`) | a build with frames runs out of handles |
+| 114 answer-read-after-the-scope-closes | the result is read after the scope is dropped | the answer tests (`testHandles`) | a handle answer is `Host function failed` |
+| 115 stored-container-aliased | a pushed container is stored itself | the copy test (`testHandles`) | the stored copy grew with the original |
+| 116 scope-serial-reused | every scope takes serial 1 | the stale-handle test (`testHandles`) | a new scope's serial equals the old |
+| 117 persistent-reported-through-a-copy | the collector is shown a copy of each persistent value | the persistent handle under relocation torture (`testHandles`; relocation arm only) | not seen without relocation |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1524,12 +1625,12 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
+104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 103 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all hundred and two but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all hundred and fifteen but the relocation cases (10 is retired). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -3345,8 +3446,8 @@ both engines, is a different thing and is described under "Verification".
 
 No library other than `math` and `random`, and in those no `next_int_range`,
 `next_float_range`, `next_gaussian`, `shuffle`, `sample` or `choose`: they stay
-`Not implemented`, as in ctang. A host can inject arrays and maps (a description: "Host-described values"), but
-not yet its own types, or have a native take a container or return a library:
+`Not implemented`, as in ctang. A host can inject arrays and maps (a description: "Host-described values") and
+have a native take and return any value ("Handles"), but not yet its own types:
 ctang could, the rewrite dropped it without a decision, and
 `spec-tang-host-extensibility` restores it (ledger D-032 to D-056; D-048 is
 fixed). No template arguments, no

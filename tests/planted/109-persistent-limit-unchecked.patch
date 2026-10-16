@@ -1,0 +1,17 @@
+# 109 the persistent limit not checked
+# defect: a host can promote without end
+# caught by: the persistent-limit test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -721,9 +721,7 @@
+   if (!hs) {
+     return GLTANG_ERR_LIMIT;
+   }
+-  if (hs->persistent_live >= hs->persistent_limit) {
+-    return GLTANG_ERR_LIMIT;
+-  }
++  /* planted: no persistent limit */
+   uint32_t slot;
+   if (hs->persistent_free) {
+     slot = hs->persistent_free - 1u;

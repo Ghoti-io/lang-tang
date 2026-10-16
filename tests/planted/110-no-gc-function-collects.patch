@@ -1,0 +1,14 @@
+# 110 a function labelled no_gc that collects
+# defect: a reader of an array element runs a collection, so a text pointer a host holds is no longer good after it
+# caught by: the label gate: every no_gc function under torture (testHost_callbacks)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -352,6 +352,7 @@
+   if (!ok || !out || index >= gltang_vm_array(v)->length) {
+     return GLTANG_ERR_INVALID;
+   }
++  (void)grheap_collect(call->exec->heap); /* planted: a no_gc function collects */
+   GLTANG_Handle h;
+   GLTANG_Result r = push_handle(call, gltang_vm_array(v)->store.typed->slots[index], &h);
+   if (r == GLTANG_OK) {

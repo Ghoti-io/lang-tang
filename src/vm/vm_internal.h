@@ -62,6 +62,7 @@
 #include <ghoti.io/lang-tang/bytecode.h>
 #include <ghoti.io/cutil/random.h>
 #include <ghoti.io/lang-tang/execution.h>
+#include <ghoti.io/lang-tang/handle.h>
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/seeds.h>
 #include <ghoti.io/lang-tang/value.h>
@@ -283,6 +284,13 @@ static inline uint32_t * gltang_map_index(const GLTANG_MapStore * store) {
   return (uint32_t *)(void *)((char *)store + sizeof(GLTANG_MapStore) + (size_t)store->capacity * 2u * sizeof(GLTANG_Value));
 }
 
+/** @brief A handle frame: a window onto the execution's temporary roots (handle.c). A callback's scope is its first frame; it can push more. */
+typedef struct GLTANG_HostScope {
+  uint32_t serial;              ///< 0: none open. Never reused within an execution.
+  size_t base;                  ///< GLTANG_Execution::temp_count when it opened.
+  size_t count;                 ///< Handles made in it.
+} GLTANG_HostScope;
+
 /** @brief What a host function is given; see library.h. */
 struct GLTANG_NativeCall {
   GLTANG_Execution * exec;
@@ -292,7 +300,8 @@ struct GLTANG_NativeCall {
     GLTANG_CALL_NONE = 0, GLTANG_CALL_NULL, GLTANG_CALL_BOOL, GLTANG_CALL_INTEGER,
     GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR,
     GLTANG_CALL_VALUE,  ///< Test natives only: `value`, a heap value or ::GLTANG_V_UNWIND, as it is.
-    GLTANG_CALL_DESCRIPTION   ///< `answer`: a description, made into a value when the call returns.
+    GLTANG_CALL_DESCRIPTION,  ///< `answer`: a description, made into a value when the call returns.
+    GLTANG_CALL_HANDLE  ///< `answer_handle`: the value a handle names, read when the call returns.
   } set;
   GLTANG_Value value;
   bool boolean;
@@ -308,6 +317,11 @@ struct GLTANG_NativeCall {
   GLTANG_Value callk_state;     ///< ... and the state it wants handed back, with that call's value.
   GLTANG_ValueDescription * built;   ///< The description the native built during the call (gltang_call_description); the call owns it and frees it when it ends.
   GLTANG_ValueDescription * answer;  ///< The description answered: `built`, or one the host keeps and the call has retained.
+  uint32_t scope;               ///< The serial of the handle scope this call opened; 0 if it has used no handle.
+  size_t frame_floor;           ///< Index in GLTANG_Execution::frames of this call's first (outermost) frame.
+  bool scope_oom;               ///< A handle or a value could not be made: the call's value is Out of memory.
+  bool scope_unwind;            ///< A constructor's poll ordered the run to stop.
+  GLTANG_Handle answer_handle;  ///< GLTANG_CALL_HANDLE.
   uint32_t test_status;         ///< Test natives only: what the native asks of compiled code (a GLTANG_NATIVE_STATUS_*); the interpreter ignores it.
 };
 
@@ -396,6 +410,29 @@ typedef struct GLTANG_Activation {
   GLTANG_ScopePolicy policy;
   size_t temp_base;             ///< GLTANG_Execution::temp_count when the call began.
 } GLTANG_Activation;
+
+/** @brief What the handle API keeps for an execution (handle.c); made when a callback first asks for a handle. */
+typedef struct GLTANG_HandleState {
+  GLTANG_HostScope * frames;    ///< Handle frames of the callbacks running, innermost last; a callback's own start at its `frame_floor`.
+  size_t frame_count;
+  size_t frame_capacity;
+  uint32_t scope_serial;        ///< The last serial issued; never goes back.
+  size_t scope_limit;           ///< Most handles in one scope (default 1,024).
+  size_t persistent_limit;      ///< Most persistent handles (default 4,096).
+  GLTANG_Value * persistent;    ///< Slot values, roots; 0 in a free slot.
+  uint32_t * persistent_generation;
+  uint32_t * persistent_next;   ///< Free list: the next free slot plus one, 0 at the end.
+  size_t persistent_capacity;
+  size_t persistent_used;       ///< Slots ever handed out.
+  size_t persistent_live;
+  uint32_t persistent_free;     ///< Head of the free list plus one.
+  GLTANG_Library ** held_libraries;   ///< Libraries made into values; released at destroy.
+  size_t held_library_count;
+  size_t held_library_capacity;
+  GLTANG_LibraryMember ** owned_members;  ///< Native records made at run time; freed at destroy.
+  size_t owned_member_count;
+  size_t owned_member_capacity;
+} GLTANG_HandleState;
 
 struct GLTANG_Execution {
   GRCORE_Context * context;
@@ -486,6 +523,12 @@ struct GLTANG_Execution {
   uint64_t jit_settled_fword;
   GLTANG_JitStats jit_stats;
 #endif
+
+  // Handles (handle.c). The state is made when a callback first asks for one:
+  // most executions never do, and the struct is kept under the size of the
+  // allocator's cached blocks (an execution a little larger than that cost every
+  // engine of a request several hundred instructions to make and free).
+  struct GLTANG_HandleState * handles;
 };
 
 /**
@@ -656,6 +699,35 @@ GLTANG_Value gltang_vm_string_from_trusted_utf8(GLTANG_Execution * exec, const c
  * when the run is to stop. The caller stores the value before the next GC point.
  */
 GLTANG_Value gltang_vm_materialize(GLTANG_Execution * exec, const GLTANG_ValueDescription * description);
+
+// ---------------------------------------------------------------------------
+// Handles (handle.c)
+// ---------------------------------------------------------------------------
+
+/** @brief The value a handle names in the call's open scope, or 0 with `*ok` false. */
+GLTANG_Value gltang_vm_handle_value(const GLTANG_NativeCall * call, GLTANG_Handle handle, bool * ok);
+
+/** @brief Closes the scope a call opened: drops its handles, puts the outer scope back. */
+void gltang_vm_scope_close(GLTANG_NativeCall * call);
+
+/** @brief Releases the persistent table, the libraries and the native records the callbacks made. */
+void gltang_vm_handles_destroy(GLTANG_Execution * exec);
+
+/** @brief Reports the persistent values to the collector. */
+void gltang_vm_handles_enumerate(GLTANG_Execution * exec, const GRCORE_RootVisitor * visitor);
+
+/** @brief The library as a value (the execution keeps the library alive). */
+GLTANG_Value gltang_vm_make_library_value(GLTANG_Execution * exec, const GLTANG_Library * library);
+
+/** @brief A native function value for `member`, bound to `bound`. */
+GLTANG_Value gltang_vm_make_native_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member, GLTANG_Value bound);
+
+/** @brief Forgets the answer a call has so far (a new `gltang_call_return_*` replaces it). */
+void gltang_vm_call_forget_answer(GLTANG_NativeCall * call);
+
+/** @brief The defaults of the two handle limits. */
+#define GLTANG_SCOPE_LIMIT_DEFAULT ((size_t)1024)
+#define GLTANG_PERSISTENT_LIMIT_DEFAULT ((size_t)4096)
 /** @brief A string from bytes that are ASCII without a carriage return. */
 GLTANG_Value gltang_vm_string_from_ascii(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type);
 /** @brief A heap string copied from a program's constant block. */

@@ -119,6 +119,21 @@
 #   101 the engine's node ceiling not applied (a description is held to its own limit only)   the description that claims no limit, against the lowered ceilings   (testHost_values)
 #   102 the engine's byte ceiling not applied   the same   (testHost_values)
 #   103 a ref of another description accepted   the foreign-ref test   (testDescription)
+#   104 a persistent handle the collector does not see   the persistent handle across collections under torture and verify   (testHandles)
+#   105 a handle of another scope accepted   the stale-handle test   (testHandles)
+#   106 the handle limit not checked   the scope-limit test   (testHandles)
+#   107 a string's segment tags dropped by the reader   the segment test   (testHandles)
+#   108 the persistent table not freed at destroy   the context's leak check   (testHandles)
+#   109 the persistent limit not checked   the persistent-limit test   (testHandles)
+#   110 a function labelled no_gc that collects   the label gate, every no_gc function under torture   (testHost_callbacks)
+#   111 the libraries a callback made into values not released at destroy   the count of cutil allocations across a run   (testHandles)
+#   112 the native records made at run time not freed   the context's leak check   (testHandles)
+#   113 a popped frame's handles kept   the frame test   (testHandles)
+#   114 a handle answer read after the scope is closed   the answer tests   (testHandles)
+#   115 a container stored without the copy the language makes   the copy test   (testHandles)
+#   116 a scope serial reused   the stale-handle test   (testHandles)
+#   117 the persistent values reported to the collector through a copy   the persistent handle under relocation torture   (testHandles, GRHEAP_RELOCATE+TORTURE); invisible without relocation
+#   (104 to 117 are the handles of spec-tang-host-extensibility story 3, all in src/vm/handle.c and libvalue.c.)
 #   (Library defects, all of them, in src/: the host-described values of spec-tang-host-extensibility story 2. 84 and 85 are
 #   the two a collector finds and a plain run does not; each of the rest is a rule of the builder or the materializer that a
 #   test states from the outside. 91 to 94, 96, 97 and 100 are in the builder (src/vm/description.c) and 90, 98 and 99 are the
@@ -150,7 +165,7 @@
 # that held. The copy is removed when the script ends (PLANTED_KEEP=1 keeps it).
 #
 # Usage: PLANTED_PREFIX=<prefix> PLANTED_LIBDIR=<dir> tools/check-planted.sh [--quick | --slow | --all | --relocate] [--selftest] [case...]
-#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 103; 10 is retired); `make test` runs these
+#   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
 #   --relocate  cases 13, 14, 15, 20, 27 and 46, against PLANTED_RELOC_PREFIX and
@@ -213,11 +228,11 @@ for arg in "$@"; do
 done
 
 # The cases that need a runtime-heap that moves objects.
-RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15-push-reads-args-first 20-poll-helper-copies-the-guest-frame-back 27-arguments-not-pinned 46-pool-box-reported-through-a-copy"
+RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15-push-reads-args-first 20-poll-helper-copies-the-guest-frame-back 27-arguments-not-pinned 46-pool-box-reported-through-a-copy 117-persistent-reported-through-a-copy"
 # What a relocation case runs under: relocation and torture together (a move at
 # every GC point). The "relocation is the instrument" check removes the first.
 RELOC_ENV="GRHEAP_TORTURE=1 GRHEAP_RELOCATE=1"
-QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm 35-pool-boxes-not-reported-as-roots 36-reservation-short-by-one 37-raw-word-in-the-root-cell-across-a-collection 38-reverse-with-no-type-test 39-pop-does-not-retract 40-unwind-converts 41-box-at-every-slow-poll 42-merge-conflict-ignored 43-float-constant-through-32-bits 44-pool-not-let-go-at-host-return 45-failed-push-keeps-the-extension 47-failed-rebuild-leaves-raw-words-in-the-guest-frame 48-float-divide-guard-tests-the-dividend 49-integer-operand-converted-unsigned 50-unbox-with-no-kind-test 51-ge-and-le-as-the-negation-of-lt-and-gt 52-as-int-upper-bound-inclusive 53-integer-quotient-not-range-guarded 54-result-slot-written-before-the-second-guard 55-mixed-subtraction-operands-swapped 56-float-operation-adds-no-fuel 57-arithmetic-on-raw-operands-is-an-exit 58-integer-converted-from-its-tagged-word 59-unary-minus-is-zero-minus-x 60-unbox-with-no-pointer-test 61-as-int-lower-bound-too-wide 62-nan-divisor-read-as-zero 63-modulo-zero-divisor-guard-removed 64-neg-compare-cast-mod-div-add-no-fuel 65-bench-reference-one-off 66-every-push-looks-the-callee-up 67-every-extension-is-recorded 68-bench-integer-reference-one-off 69-bench-steady-expectation-one-off 70-bench-family-expectation-one-off 71-bench-compiled-row-is-interpreted 72-bench-discard-expectation-wrong 73-expected-exit-counts-toward-the-limit 74-static-decline-ignores-the-loop 75-static-decline-ignores-a-real-exit 76-bench-expected-exit-count-wrong 77-bench-decline-not-expected 78-bench-counted-exit-count-wrong 79-static-decline-ignores-a-normal-return 80-exit-sites-from-the-functions-record 81-bench-exit-kinds-sum-omits-remembered 82-bench-declined-callee-entries-ignored 83-every-compiled-call-looks-the-callee-up 84-container-held-across-a-childs-allocation 85-raw-word-in-a-temp-cell 86-string-tag-dropped 87-map-key-tag-dropped 88-materialization-not-charged 89-in-run-arena-from-the-process-allocator 90-materializer-depth-unchecked 91-builder-depth-unchecked 92-builder-node-limit-unchecked 93-builder-byte-limit-unchecked 94-second-parent-allowed 95-reach-cached 96-no-ancestor-check 97-no-self-attach-check 98-materializer-node-limit-unchecked 99-materializer-byte-limit-unchecked 100-utf8-unchecked 101-materializer-node-ceiling-ignored 102-materializer-byte-ceiling-ignored 103-ref-of-another-description-accepted"
+QUICK="03-order-dependent-decide 04-native-never-polls 05-frame-slot-mismatch 06-wrong-operator 07-silent-runner 08-jit-wrong-tag 09-jit-skipped-fuel 11-host-pointer-no-hook 12-skipped-output-capture 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm 35-pool-boxes-not-reported-as-roots 36-reservation-short-by-one 37-raw-word-in-the-root-cell-across-a-collection 38-reverse-with-no-type-test 39-pop-does-not-retract 40-unwind-converts 41-box-at-every-slow-poll 42-merge-conflict-ignored 43-float-constant-through-32-bits 44-pool-not-let-go-at-host-return 45-failed-push-keeps-the-extension 47-failed-rebuild-leaves-raw-words-in-the-guest-frame 48-float-divide-guard-tests-the-dividend 49-integer-operand-converted-unsigned 50-unbox-with-no-kind-test 51-ge-and-le-as-the-negation-of-lt-and-gt 52-as-int-upper-bound-inclusive 53-integer-quotient-not-range-guarded 54-result-slot-written-before-the-second-guard 55-mixed-subtraction-operands-swapped 56-float-operation-adds-no-fuel 57-arithmetic-on-raw-operands-is-an-exit 58-integer-converted-from-its-tagged-word 59-unary-minus-is-zero-minus-x 60-unbox-with-no-pointer-test 61-as-int-lower-bound-too-wide 62-nan-divisor-read-as-zero 63-modulo-zero-divisor-guard-removed 64-neg-compare-cast-mod-div-add-no-fuel 65-bench-reference-one-off 66-every-push-looks-the-callee-up 67-every-extension-is-recorded 68-bench-integer-reference-one-off 69-bench-steady-expectation-one-off 70-bench-family-expectation-one-off 71-bench-compiled-row-is-interpreted 72-bench-discard-expectation-wrong 73-expected-exit-counts-toward-the-limit 74-static-decline-ignores-the-loop 75-static-decline-ignores-a-real-exit 76-bench-expected-exit-count-wrong 77-bench-decline-not-expected 78-bench-counted-exit-count-wrong 79-static-decline-ignores-a-normal-return 80-exit-sites-from-the-functions-record 81-bench-exit-kinds-sum-omits-remembered 82-bench-declined-callee-entries-ignored 83-every-compiled-call-looks-the-callee-up 84-container-held-across-a-childs-allocation 85-raw-word-in-a-temp-cell 86-string-tag-dropped 87-map-key-tag-dropped 88-materialization-not-charged 89-in-run-arena-from-the-process-allocator 90-materializer-depth-unchecked 91-builder-depth-unchecked 92-builder-node-limit-unchecked 93-builder-byte-limit-unchecked 94-second-parent-allowed 95-reach-cached 96-no-ancestor-check 97-no-self-attach-check 98-materializer-node-limit-unchecked 99-materializer-byte-limit-unchecked 100-utf8-unchecked 101-materializer-node-ceiling-ignored 102-materializer-byte-ceiling-ignored 103-ref-of-another-description-accepted 104-persistent-not-rooted 105-handle-serial-unchecked 106-scope-limit-unchecked 107-segment-tag-flattened 108-persistent-table-leaked 109-persistent-limit-unchecked 110-no-gc-function-collects 111-held-libraries-leaked 112-owned-members-leaked 113-frame-pop-keeps-handles 114-answer-read-after-the-scope-closes 115-stored-container-aliased 116-scope-serial-reused"
 SLOW="01-missing-root 02-missing-gc-store"
 
 if [ "$MODE" = relocate ]; then
@@ -257,6 +272,8 @@ target_of() {
     04-*) echo "build/linux/$TREE/apps/testNative_gate" ;;
     84-*|85-*|86-*|87-*|88-*|89-*|90-*|95-*|98-*|99-*|101-*|102-*) echo "build/linux/$TREE/apps/testHost_values" ;;
     91-*|92-*|93-*|94-*|96-*|97-*|100-*|103-*) echo "build/linux/$TREE/apps/testDescription" ;;
+    104-*|105-*|106-*|107-*|108-*|109-*|111-*|112-*|113-*|114-*|115-*|116-*|117-*) echo "build/linux/$TREE/apps/testHandles" ;;
+    110-*) echo "build/linux/$TREE/apps/testHost_callbacks" ;;
     06-*|07-*) echo "build/linux/$TREE/apps/oracle/oracle_ctang build/linux/$TREE/apps/testOracle" ;;
     13-*|14-*) echo "build/linux/$TREE/apps/testExecute_simple" ;;
     selftest) echo "build/linux/$TREE/apps/testObserver" ;;
@@ -395,6 +412,13 @@ run_test() {
       (cd "$WORK" && env GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testHost_values --gtest_brief=1 --gtest_filter='HostValues.ANested*:HostValues.TheTagsAreRead*:HostValues.Numbers*') ;;
     86-*|87-*|88-*|89-*|90-*|95-*|98-*|99-*|101-*|102-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testHost_values --gtest_brief=1) ;;
+    104-*|105-*|106-*|107-*|108-*|109-*|111-*|112-*|113-*|114-*|115-*|116-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testHandles --gtest_brief=1) ;;
+    110-*)
+      (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testHost_callbacks --gtest_brief=1) ;;
+    117-*)
+      # shellcheck disable=SC2086
+      (cd "$WORK" && env -u GRHEAP_TORTURE -u GRHEAP_RELOCATE $RELOC_ENV LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testHandles --gtest_brief=1) ;;
     91-*|92-*|93-*|94-*|96-*|97-*|100-*|103-*)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testDescription --gtest_brief=1) ;;
     13-*|14-*)
@@ -488,6 +512,18 @@ name_of_test() {
     96-*|97-*) echo "testDescription (the cycle tests)" ;;
     100-*) echo "testDescription (the invalid-text tests)" ;;
     103-*) echo "testDescription (the foreign-ref test)" ;;
+    104-*) echo "testHandles (the persistent handle across collections under torture)" ;;
+    105-*|116-*) echo "testHandles (the stale-handle test)" ;;
+    106-*) echo "testHandles (the scope-limit test)" ;;
+    107-*) echo "testHandles (the segment test)" ;;
+    108-*|112-*) echo "testHandles (the context's leak check)" ;;
+    111-*) echo "testHandles (the count of cutil allocations across a run)" ;;
+    109-*) echo "testHandles (the persistent-limit test)" ;;
+    110-*) echo "testHost_callbacks (the label gate)" ;;
+    113-*) echo "testHandles (the frame test)" ;;
+    114-*) echo "testHandles (the answer tests)" ;;
+    115-*) echo "testHandles (the copy test)" ;;
+    117-*) echo "testHandles under relocation torture" ;;
     11-*) echo "testSnapshot (the address scan)" ;;
     12-*) echo "testSnapshot (the output-so-far test and the corpus sweep)" ;;
     13-*|14-*) echo "testExecute_simple under relocation torture" ;;
@@ -568,7 +604,7 @@ run_case() {
     else
       printf '  caught by %s (exit %s): %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")"
       case "$case_name" in
-        13-*|14-*|15-*|20-*|27-*|46-*)
+        13-*|14-*|15-*|20-*|27-*|46-*|117-*)
           # Relocation is the instrument: with torture on and relocation off the
           # same patched build passes.
           saved="$RELOC_ENV"

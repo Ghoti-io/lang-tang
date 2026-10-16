@@ -950,6 +950,114 @@ static uint64_t built_in_script_wide_run(uint64_t iterations, double * elapsed) 
   return sink;
 }
 
+/*
+ * Natives that touch values through handles (story 3 of spec-tang-host-extensibility).
+ * The scalar native (run-native-call-1000) is the "before": these show what a
+ * handle scope costs, and what a native that reads or builds a container costs.
+ */
+static bool bench_sum_titles(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle rows;
+  if (gltang_call_arg(call, 0, &rows) != GLTANG_OK) {
+    return false;
+  }
+  int64_t total = 0;
+  size_t count = gltang_handle_array_length(call, rows);
+  for (size_t i = 0; i < count; i++) {
+    GLTANG_Handle row, title;
+    bool found;
+    if (gltang_handle_push_frame(call) != GLTANG_OK || gltang_handle_array_get(call, rows, i, &row) != GLTANG_OK
+        || gltang_handle_map_get(call, row, "title", 5, &found, &title) != GLTANG_OK || !found) {
+      return false;
+    }
+    size_t length = 0;
+    (void)gltang_handle_text(call, title, &length);
+    total += (int64_t)length;
+    (void)gltang_handle_pop_frame(call);
+  }
+  gltang_call_return_integer(call, total);
+  return true;
+}
+
+static bool bench_make_rows(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle rows;
+  if (gltang_handle_make_array(call, WORKAROUND_ITEMS, &rows) != GLTANG_OK) {
+    return false;
+  }
+  for (size_t k = 0; k < WORKAROUND_ITEMS; k++) {
+    GLTANG_Handle row, title, url;
+    if (gltang_handle_push_frame(call) != GLTANG_OK || gltang_handle_make_map(call, 2, &row) != GLTANG_OK
+        || gltang_handle_make_string(call, workaround_titles[k], strlen(workaround_titles[k]), GLTANG_UNICODE_STRING_TYPE_HTML, &title) != GLTANG_OK
+        || gltang_handle_make_string(call, "/page", 5, GLTANG_UNICODE_STRING_TYPE_HTML_ATTRIBUTE, &url) != GLTANG_OK
+        || gltang_handle_map_set(call, row, "title", 5, GLTANG_UNICODE_STRING_TYPE_TRUSTED, title) != GLTANG_OK
+        || gltang_handle_map_set(call, row, "url", 3, GLTANG_UNICODE_STRING_TYPE_TRUSTED, url) != GLTANG_OK
+        || gltang_handle_array_push(call, rows, row) != GLTANG_OK || gltang_handle_pop_frame(call) != GLTANG_OK) {
+      return false;
+    }
+  }
+  gltang_call_return_handle(call, rows);
+  return true;
+}
+
+static bool bench_bound_seven(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle bound;
+  if (gltang_call_bound(call, &bound) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_integer(call, gltang_handle_integer(call, bound));
+  return true;
+}
+
+static bool bench_make_bound(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle seven, method;
+  if (gltang_handle_make_integer(call, 7, &seven) != GLTANG_OK || gltang_handle_make_native(call, bench_bound_seven, NULL, seven, &method) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, method);
+  return true;
+}
+
+static void setup_handle_natives(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "sum_titles", bench_sum_titles, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "make_rows", bench_make_rows, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "make_bound", bench_make_bound, NULL) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK) {
+    setup_failed("a library of handle natives");
+  }
+  gltang_library_release(library);
+}
+
+static uint64_t handle_read_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 290 * 100;
+  uint64_t sink = run_source_with(
+      "use sum_titles; rows = []; for (i = 0; i < 20; i += 1) { rows[i] = {title: \"title number \" + i, url: \"/p\"}; } n = 0; for (j = 0; j < 100; j += 1) { n += sum_titles(rows); } n;",
+      iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_handle_natives);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t handle_build_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 20 * 20;
+  uint64_t sink = run_source_with("use make_rows; n = 0; for (j = 0; j < 20; j += 1) { r = make_rows(); n += r.size; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_handle_natives);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t handle_bound_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 7 * 1000;
+  uint64_t sink = run_source_with("use make_bound; m = make_bound(); n = 0; for (i = 0; i < 1000; i += 1) { n += m(); } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_handle_natives);
+  have_expected_integer = 0;
+  return sink;
+}
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -1951,6 +2059,9 @@ static const Case cases[] = {
     {"described-deep-60", described_deep_run, 5000u, 5u},
     {"described-path-read", described_path_run, 2000u, 2u},
     {"script-array-50000-same-size", built_in_script_wide_run, 200u, 1u},
+    {"handle-native-reads-20-rows-x100", handle_read_run, 1000u, 2u},
+    {"handle-native-builds-20-rows-x20", handle_build_run, 1000u, 2u},
+    {"handle-bound-native-call-1000", handle_bound_run, 3000u, 5u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},

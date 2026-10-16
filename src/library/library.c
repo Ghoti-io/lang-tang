@@ -281,6 +281,21 @@ GLTANG_Result gltang_library_add_factory(GLTANG_Library * library, const char * 
   return member_commit(library);
 }
 
+GLTANG_Result gltang_library_add_handle_factory(GLTANG_Library * library, const char * name, GLTANG_NativeFn factory, void * user) {
+  if (!factory) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Result r;
+  GLTANG_LibraryMember * member = member_begin(library, name, &r);
+  if (!member) {
+    return r;
+  }
+  member->kind = GLTANG_MEMBER_HANDLE_FACTORY;
+  member->native = factory;
+  member->user = user;
+  return member_commit(library);
+}
+
 GLTANG_Result gltang_library_add_value(GLTANG_Library * library, const char * name, GLTANG_ValueDescription * description) {
   if (!description) {
     return GLTANG_ERR_INVALID;

@@ -41,7 +41,7 @@ set -eu
 ROOT="${1:?usage: check-labels.sh <root>}"
 BASE="$ROOT/include/ghoti.io/lang-tang"
 
-STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h seeds.h encoding.h description.h lang-tang.h'
+STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h seeds.h encoding.h valuekind.h description.h handle.h lang-tang.h'
 FREE='location.h unicodeString.h tangScanner.h bytecode.h program.h compile.h value.h execution.h library.h'
 
 if [ ! -d "$BASE" ]; then

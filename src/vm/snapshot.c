@@ -1028,6 +1028,12 @@ GLTANG_Result gltang_snapshot_take(GLTANG_Execution * execution, GLTANG_Snapshot
   if (!execution || !out_snapshot || execution->destroyed || execution->in_host) {
     return GLTANG_ERR_INVALID;
   }
+  // A persistent handle, a library a callback made into a value and a native it
+  // made at run time are the host's, and an image cannot name them (story 8 gives
+  // host values their hooks and the refusal their name).
+  if (execution->handles && (execution->handles->persistent_live || execution->handles->held_library_count || execution->handles->owned_member_count)) {
+    return GLTANG_ERR_UNSUPPORTED;
+  }
   GRCORE_Snapshot * snapshot = NULL;
   GRCORE_Result r = grcore_context_snapshot(execution->context, NULL, &snapshot);
   if (r != GRCORE_OK) {

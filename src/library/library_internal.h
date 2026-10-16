@@ -53,7 +53,8 @@ typedef enum {
   GLTANG_MEMBER_FACTORY,
   GLTANG_MEMBER_BUILTIN,  ///< Written in C inside the engine: see GLTANG_BuiltinId.
   GLTANG_MEMBER_VALUE,    ///< A described value (description.h): a fresh copy for each reach.
-  GLTANG_MEMBER_VALUE_FACTORY   ///< A lazy described value: the factory fills a description when a `use` reaches it.
+  GLTANG_MEMBER_VALUE_FACTORY,  ///< A lazy described value: the factory fills a description when a `use` reaches it.
+  GLTANG_MEMBER_HANDLE_FACTORY  ///< A lazy factory that answers with any value, through handles (`native` is the function).
 } GLTANG_MemberKind;
 
 /** @brief The built-in members that need the engine (`random`'s). */

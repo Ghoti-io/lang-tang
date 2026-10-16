@@ -73,6 +73,10 @@ static GLTANG_Value library_value(GLTANG_Execution * exec, const GLTANG_Library 
   return gltang_value_of(value);
 }
 
+GLTANG_Value gltang_vm_make_library_value(GLTANG_Execution * exec, const GLTANG_Library * library) {
+  return library_value(exec, library);
+}
+
 static GLTANG_Value native_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member, GLTANG_BuiltinId builtin, GLTANG_Value bound) {
   // The value it is bound to is a parameter, held by nothing the collector
   // reads: hold it across the allocation and take it from there afterwards.
@@ -93,6 +97,10 @@ static GLTANG_Value native_value(GLTANG_Execution * exec, const GLTANG_LibraryMe
   value->member = member;
   (void)grheap_store_word(exec->heap, value, &value->bound, bound);
   return gltang_value_of(value);
+}
+
+GLTANG_Value gltang_vm_make_native_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member, GLTANG_Value bound) {
+  return native_value(exec, member, GLTANG_BUILTIN_NONE, bound);
 }
 
 static GLTANG_Value template_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member) {
@@ -179,6 +187,10 @@ static GLTANG_Value host_value(GLTANG_Execution * exec, const GLTANG_HostValue *
   }
 }
 
+static GLTANG_Value call_result_general(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked);
+static inline GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked);
+static inline void call_finish(GLTANG_NativeCall * call);
+
 GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_LibraryMember * member) {
   switch (member->kind) {
     case GLTANG_MEMBER_NULL: return GLTANG_V_NULL;
@@ -200,6 +212,23 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
       bool available = member->factory(member->user, &host);
       exec->in_host = outer_in_host;
       return available ? host_value(exec, &host) : GLTANG_V_NULL;
+    }
+    case GLTANG_MEMBER_HANDLE_FACTORY: {
+      // A factory that answers with any value: it is given a call object with no
+      // arguments, makes what it answers with handles, and is read as a native is.
+      GLTANG_NativeCall call;
+      memset(&call, 0, sizeof(call));
+      call.exec = exec;
+      const bool outer_in_host = exec->in_host;
+      exec->in_host = true;
+      bool available = member->native(&call, member->user);
+      exec->in_host = outer_in_host;
+      if (!available) {
+        gltang_vm_scope_close(&call);
+        call_finish(&call);
+        return GLTANG_V_NULL;
+      }
+      return call_result(exec, &call, true);
     }
     case GLTANG_MEMBER_VALUE:
       // A fresh copy for each reach: never cached, never shared with another
@@ -362,6 +391,10 @@ static inline void call_clear(GLTANG_NativeCall * call) {
   }
 }
 
+void gltang_vm_call_forget_answer(GLTANG_NativeCall * call) {
+  call_clear(call);
+}
+
 /** The end of a call: the answer is dropped and so is the description the native built. */
 static inline void call_finish(GLTANG_NativeCall * call) {
   call_clear(call);
@@ -479,9 +512,17 @@ void gltang_call_return_error(GLTANG_NativeCall * call, GLTANG_ErrorKind kind) {
 }
 
 /** The value a finished host call stands for. */
-static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
+static GLTANG_Value call_result_general(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
   GLTANG_Value result;
-  if (call->set == GLTANG_CALL_ERROR) {
+  if (call->scope_unwind) {
+    // A constructor's poll ordered the run to stop.
+    result = GLTANG_V_UNWIND;
+  }
+  else if (call->scope_oom) {
+    // A handle or a value could not be made: the callback's own out-of-memory result.
+    result = exec->roots[GLTANG_ROOT_OOM];
+  }
+  else if (call->set == GLTANG_CALL_ERROR) {
     GLTANG_ErrorKind kind = (unsigned)call->error < (unsigned)GLTANG_ERROR_KIND_COUNT ? call->error : GLTANG_ERROR_HOST_FAILED;
     result = gltang_vm_make_error(exec, kind);
   }
@@ -494,6 +535,15 @@ static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * cal
       case GLTANG_CALL_INTEGER: result = gltang_vm_make_int(exec, call->integer); break;
       case GLTANG_CALL_FLOAT: result = gltang_vm_make_float(exec, call->number); break;
       case GLTANG_CALL_VALUE: result = call->value; break;
+      case GLTANG_CALL_HANDLE: {
+        // Read now, while the scope that holds it is open; nothing allocates between here and the caller's store.
+        bool ok;
+        result = gltang_vm_handle_value(call, call->answer_handle, &ok);
+        if (!ok) {
+          result = gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+        }
+        break;
+      }
       case GLTANG_CALL_DESCRIPTION:
         // A fresh copy in the heap of this execution, paced and charged as it is
         // made. The call's own description is still alive; it is freed with the call.
@@ -510,8 +560,31 @@ static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * cal
       default: result = GLTANG_V_NULL; break;
     }
   }
+  gltang_vm_scope_close(call);
   call_finish(call);
   return result;
+}
+
+/**
+ * The value a finished host call stands for. A scalar answer from a call that
+ * used no handle, no description and no text (nearly every native call) is made
+ * here, inline; everything else is the general function's.
+ */
+static inline GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
+  if (worked && !call->scope && !call->scope_oom && !call->scope_unwind && !call->failed_to_copy) {
+    GLTANG_Value result;
+    switch (call->set) {
+      case GLTANG_CALL_NONE:
+      case GLTANG_CALL_NULL: result = GLTANG_V_NULL; break;
+      case GLTANG_CALL_BOOL: result = gltang_v_from_bool(call->boolean); break;
+      case GLTANG_CALL_INTEGER: result = gltang_vm_make_int(exec, call->integer); break;
+      case GLTANG_CALL_FLOAT: result = gltang_vm_make_float(exec, call->number); break;
+      default: return call_result_general(exec, call, worked);
+    }
+    call_finish(call);
+    return result;
+  }
+  return call_result_general(exec, call, worked);
 }
 
 static bool integer_argument(GLTANG_Value v) {
@@ -572,6 +645,7 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
   if (call.callk_function) {
     // The native asked for a guest call and to be called again with its result
     // (AD-23): the interpreter does that, from its own loop, never here.
+    gltang_vm_scope_close(&call);
     call_finish(&call);
     exec->callk_function = call.callk_function;
     exec->callk_state = call.callk_state;

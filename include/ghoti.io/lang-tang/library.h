@@ -87,6 +87,7 @@
 
 #include <ghoti.io/lang-tang/core.h>
 #include <ghoti.io/lang-tang/description.h>
+#include <ghoti.io/lang-tang/handle.h>
 #include <ghoti.io/lang-tang/program.h>
 #include <ghoti.io/lang-tang/unicodeString.h>
 #include <ghoti.io/lang-tang/value.h>
@@ -99,29 +100,7 @@
 extern "C" {
 #endif
 
-/** @brief A named table of members. Opaque; reference counted. */
-typedef struct GLTANG_Library GLTANG_Library;
-
-/**
- * @brief What a native function is given: its arguments, and where it puts its
- *   answer. Opaque; valid for the duration of the call.
- */
-typedef struct GLTANG_NativeCall GLTANG_NativeCall;
-
-/**
- * @brief A native function.
- *
- * Read the arguments with the `gltang_call_*` accessors, set the answer with one
- * of the `gltang_call_return_*` calls, and return true. Returning false, with
- * no answer set, makes the call's value the error `Host function failed`;
- * returning with no answer set makes it null. An answer set by
- * ::gltang_call_return_error is the call's value whatever is returned.
- *
- * @param call The call.
- * @param user The pointer given at registration.
- * @return Whether the function worked.
- */
-typedef bool (*GLTANG_NativeFn)(GLTANG_NativeCall * call, void * user);
+/* GLTANG_Library, GLTANG_NativeCall and GLTANG_NativeFn are declared in handle.h (stable), which this header includes. */
 
 /**
  * @brief A lazy factory: makes a scalar when a `use` that reaches it executes.
@@ -260,6 +239,24 @@ GLTANG_API GLTANG_Result gltang_library_add_string(GLTANG_Library * library,
  */
 GLTANG_API GLTANG_Result gltang_library_add_native(GLTANG_Library * library,
     const char * name, GLTANG_NativeFn function, void * user);
+
+/**
+ * @brief Adds a lazy factory that answers with any value, called each time a
+ *   `use` that reaches it executes and never at registration.
+ *
+ * The function is given a call object with no arguments, makes what it answers
+ * with handles (handle.h) and answers with ::gltang_call_return_handle or any
+ * other `gltang_call_return_*`, so it can answer with a container, a native
+ * function bound to a value, or a **library** (`use pages.recent as r;` where
+ * `recent` is made by a factory). Returning false is "not available", which
+ * binds null.
+ *
+ * @param factory The factory; see ::GLTANG_NativeFn.
+ * @param user Handed to it.
+ */
+GLTANG_API GLTANG_Result gltang_library_add_handle_factory(
+    GLTANG_Library * library, const char * name, GLTANG_NativeFn factory,
+    void * user);
 
 /**
  * @brief Adds a lazy factory, called each time a `use` that reaches it

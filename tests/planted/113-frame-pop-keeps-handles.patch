@@ -1,0 +1,17 @@
+# 113 a popped frame's handles kept
+# defect: closing a frame forgets it but leaves its values on the temporaries, so a callback that builds with frames still runs out of handles
+# caught by: the frame test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -185,8 +185,9 @@
+   GLTANG_Execution * exec = call->exec;
+   GLTANG_HandleState * hs = exec->handles;
+   GLTANG_HostScope * top = &hs->frames[hs->frame_count - 1u];
+-  gltang_vm_temp_release(exec, top->base);
++  /* planted: the temporaries are not released */
+   --hs->frame_count;
++  (void)top;
+   return GLTANG_OK;
+ }
+ 

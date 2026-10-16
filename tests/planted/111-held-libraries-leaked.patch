@@ -1,0 +1,17 @@
+# 111 the libraries a callback made into values not released at destroy
+# defect: the execution retains each library made into a value and never lets go
+# caught by: the context's leak check (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -792,9 +792,7 @@
+   gcu_allocator_free(exec->allocator, hs->persistent);
+   gcu_allocator_free(exec->allocator, hs->persistent_generation);
+   gcu_allocator_free(exec->allocator, hs->persistent_next);
+-  for (size_t i = 0; i < hs->held_library_count; ++i) {
+-    gltang_library_release(hs->held_libraries[i]);
+-  }
++  /* planted: the libraries are not released */
+   gcu_allocator_free(exec->allocator, hs->held_libraries);
+   for (size_t i = 0; i < hs->owned_member_count; ++i) {
+     gcu_allocator_free(exec->allocator, hs->owned_members[i]);

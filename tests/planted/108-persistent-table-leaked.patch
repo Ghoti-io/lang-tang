@@ -1,0 +1,16 @@
+# 108 the persistent table not freed at destroy
+# defect: the arrays of persistent values are not freed when the execution is destroyed
+# caught by: the context's leak check, in any test that promotes a handle (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -789,8 +789,7 @@
+     return;   // most executions never used a handle: nothing was made
+   }
+   gcu_allocator_free(exec->allocator, hs->frames);
+-  gcu_allocator_free(exec->allocator, hs->persistent);
+-  gcu_allocator_free(exec->allocator, hs->persistent_generation);
++  /* planted: the persistent arrays are not freed */
+   gcu_allocator_free(exec->allocator, hs->persistent_next);
+   for (size_t i = 0; i < hs->held_library_count; ++i) {
+     gltang_library_release(hs->held_libraries[i]);

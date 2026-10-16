@@ -41,6 +41,7 @@
 
 #include <ghoti.io/lang-tang/core.h>
 #include <ghoti.io/lang-tang/unicodeString.h>
+#include <ghoti.io/lang-tang/valuekind.h>
 #include <ghoti.io/runtime-heap/options.h>
 
 #include <stdbool.h>
@@ -50,21 +51,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/** @brief What kind of value a result is. */
-typedef enum {
-  GLTANG_KIND_NULL = 0, ///< `null`, and the result of an empty program.
-  GLTANG_KIND_BOOL,     ///< `true` or `false`.
-  GLTANG_KIND_INTEGER,  ///< A signed 64-bit integer.
-  GLTANG_KIND_FLOAT,    ///< An IEEE-754 double.
-  GLTANG_KIND_STRING,   ///< A grapheme string with segment-tagged encodings.
-  GLTANG_KIND_ARRAY,    ///< A mutable array.
-  GLTANG_KIND_MAP,      ///< A mutable map from strings to values.
-  GLTANG_KIND_FUNCTION, ///< A function declared by the program, a native function, or a template.
-  GLTANG_KIND_ERROR,    ///< An error value (language reference, section 10.2).
-  GLTANG_KIND_LIBRARY,  ///< A library: a named table of members (language reference, section 9).
-  GLTANG_KIND_RNG       ///< A random number generator (`random.seeded(n)`).
-} GLTANG_ValueKind;
 
 /**
  * @brief Which error an error value is.

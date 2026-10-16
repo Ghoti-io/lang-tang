@@ -1,0 +1,16 @@
+# 106 the handle limit not checked
+# defect: a scope takes handles without end, so a callback can use the context's memory one temporary at a time
+# caught by: the scope-limit test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -158,7 +158,8 @@
+   // The frames are contiguous: nothing else is on the temporaries above them between calls.
+   assert(exec->temp_count == top->base + top->count);
+   const size_t live = exec->temp_count - hs->frames[call->frame_floor].base;
+-  if (live >= hs->scope_limit || !gltang_vm_temp_push(exec, v)) {
++  if (!gltang_vm_temp_push(exec, v)) { /* planted: the limit is not checked */
++    (void)live;
+     call->scope_oom = true;
+     return GLTANG_ERR_LIMIT;
+   }

@@ -1,0 +1,16 @@
+# 107 a string's segment tags dropped by the reader
+# defect: the segment reader reports every run as TRUSTED, so a host that copies a string to another place makes the html it held safe text
+# caught by: the segment test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -336,7 +336,8 @@
+   size_t end = gltang_string_byte_offset(s, next);
+   out->offset = begin;
+   out->length = end - begin;
+-  out->encoding = GLTANG_SEGMENT_TYPE(segments[index]);
++  out->encoding = GLTANG_UNICODE_STRING_TYPE_TRUSTED; /* planted: the tag is dropped */
++  (void)segments;
+   return true;
+ }
+ 

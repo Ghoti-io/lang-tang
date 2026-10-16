@@ -1,0 +1,15 @@
+# 116 a scope serial reused
+# defect: every scope takes the same serial, so a stale handle names a live scope
+# caught by: the stale-handle test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -83,7 +83,7 @@
+     hs->frame_capacity = grown;
+   }
+   GLTANG_HostScope * f = &hs->frames[hs->frame_count++];
+-  f->serial = ++hs->scope_serial;
++  f->serial = 1; /* planted: a serial is reused */
+   f->base = exec->temp_count;
+   f->count = 0;
+   return true;

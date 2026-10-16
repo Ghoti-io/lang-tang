@@ -408,6 +408,8 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
   // The float boxes made ahead of time for the rebuild's conversions.
   gltang_jit_enumerate_roots(exec, visitor);
 #endif
+  // The persistent handles of the host (handle.c).
+  gltang_vm_handles_enumerate(exec, visitor);
   // Every running program: its result, and (for a template call) its own
   // variables. The main program's variables are in `roots`.
   for (GLTANG_Activation * a = exec->act; a; a = a->parent) {
@@ -477,6 +479,7 @@ static void release_parts(GLTANG_Execution * exec) {
   gcu_allocator_free(exec->allocator, exec->programs);
   gcu_allocator_free(exec->allocator, exec->roots);
   gcu_allocator_free(exec->allocator, exec->temps);
+  gltang_vm_handles_destroy(exec);
   exec->programs = NULL;
   exec->program_count = 0;
   exec->roots = exec->globals = exec->constants = exec->temps = NULL;

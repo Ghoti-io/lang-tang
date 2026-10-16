@@ -1,0 +1,15 @@
+# 105 a handle of another scope accepted
+# defect: a handle is looked up by its position alone, so one that outlived its callback, or belongs to another, reads whatever the slot holds now
+# caught by: the stale-handle test (testHandles)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -125,7 +125,7 @@
+   const GLTANG_HandleState * hs = call->exec->handles;
+   for (size_t i = hs->frame_count; i > call->frame_floor; --i) {
+     const GLTANG_HostScope * f = &hs->frames[i - 1u];
+-    if (f->serial == handle.scope) {
++    if (true /* planted: the serial is not compared */) {
+       return handle.index < f->count ? f : NULL;
+     }
+   }

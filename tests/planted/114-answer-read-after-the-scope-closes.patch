@@ -1,0 +1,14 @@
+# 114 a handle answer read after its scope is closed
+# defect: the call's result is read from the handle after the scope has been dropped, so every handle answer is an error
+# caught by: the answer tests (testHandles)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -514,6 +514,7 @@
+ /** The value a finished host call stands for. */
+ static GLTANG_Value call_result_general(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
+   GLTANG_Value result;
++  gltang_vm_scope_close(call); /* planted: closed before the answer is read */
+   if (call->scope_unwind) {
+     // A constructor's poll ordered the run to stop.
+     result = GLTANG_V_UNWIND;
