@@ -715,6 +715,241 @@ static uint64_t workaround_account_run(uint64_t iterations, double * elapsed) {
   return sink;
 }
 
+/*
+ * Host-described values (story 2 of spec-tang-host-extensibility). The same 20-link
+ * list as the workarounds above, rendered by one template in one run from a host
+ * array of maps, so that the first two cases are comparable with
+ * "workaround-list-20-precompiled": "-built" builds the description in the clock
+ * (a host builds it per request, as the workaround adds its strings per item) and
+ * "-sealed" builds it once and shares it (a menu that does not change).
+ */
+static const char described_list_source[] =
+  "<% use links; %><% for (l : links) { %><li><a href=\"<%= l[\"url\"] %>\"><%= l[\"title\"] %></a></li><% } %>";
+
+static GLTANG_ValueDescription * described_list_description(void) {
+  GLTANG_ValueDescription * d = NULL;
+  GLTANG_ValueRef array = {0};
+  if (gltang_value_description_create(NULL, &d) != GLTANG_OK || gltang_value_array(d, &array) != GLTANG_OK) {
+    setup_failed("a described list");
+  }
+  for (size_t k = 0; k < WORKAROUND_ITEMS; k++) {
+    char url[32];
+    int url_length = snprintf(url, sizeof url, "/page/%zu", k);
+    GLTANG_ValueRef map = {0}, title = {0}, link = {0};
+    if (gltang_value_map(d, &map) != GLTANG_OK
+        || gltang_value_string(d, workaround_titles[k], strlen(workaround_titles[k]), GLTANG_UNICODE_STRING_TYPE_HTML, &title) != GLTANG_OK
+        || gltang_value_string(d, url, (size_t)url_length, GLTANG_UNICODE_STRING_TYPE_HTML_ATTRIBUTE, &link) != GLTANG_OK
+        || gltang_value_map_set(d, map, "title", 5, GLTANG_UNICODE_STRING_TYPE_TRUSTED, title) != GLTANG_OK
+        || gltang_value_map_set(d, map, "url", 3, GLTANG_UNICODE_STRING_TYPE_TRUSTED, link) != GLTANG_OK
+        || gltang_value_array_push(d, array, map) != GLTANG_OK) {
+      setup_failed("a described list item");
+    }
+  }
+  if (gltang_value_set_root(d, array) != GLTANG_OK || gltang_value_description_seal(d) != GLTANG_OK) {
+    setup_failed("a described list root");
+  }
+  return d;
+}
+
+static uint64_t described_list(uint64_t iterations, double * elapsed, bool build_each) {
+  GLTANG_Program * program = compile_source(described_list_source, GLTANG_PARSE_TEMPLATE);
+  GLTANG_ValueDescription * shared = build_each ? NULL : described_list_description();
+  uint64_t sink = 0;
+  double start = now_ns();
+  for (uint64_t it = 0; it < iterations; it++) {
+    GLTANG_ValueDescription * description = build_each ? described_list_description() : shared;
+    GLTANG_Library * library = NULL;
+    if (gltang_library_create(NULL, &library) != GLTANG_OK || gltang_library_add_value(library, "links", description) != GLTANG_OK) {
+      setup_failed("a library of a described list");
+    }
+    Engine e;
+    engine_open(&e, program, GRCORE_UNLIMITED);
+    if (gltang_execution_set_libraries(e.execution, library) != GLTANG_OK) {
+      setup_failed("a described list attached");
+    }
+    gltang_library_release(library);
+    GRCORE_Outcome outcome;
+    if (grcore_run(e.context, gltang_execution_entry, e.execution, &outcome) != GRCORE_OK || outcome != GRCORE_OUTCOME_FINISHED) {
+      setup_failed("a described list run");
+    }
+    char * text = NULL;
+    size_t length = 0;
+    if (gltang_execution_output_render(e.execution, &text, &length) != GLTANG_OK || length == 0 || strstr(text, "News &amp; events") == NULL) {
+      setup_failed("a described list's output (the titles must be escaped)");
+    }
+    sink += length + (uint64_t)(unsigned char)text[length - 1u];
+    gltang_buffer_free(text);
+    engine_close(&e);
+    if (build_each) {
+      gltang_value_description_release(description);
+    }
+  }
+  *elapsed = now_ns() - start;
+  gltang_value_description_release(shared);
+  gltang_program_release(program);
+  return sink;
+}
+
+static uint64_t described_list_built_run(uint64_t iterations, double * elapsed) {
+  return described_list(iterations, elapsed, true);
+}
+
+static uint64_t described_list_sealed_run(uint64_t iterations, double * elapsed) {
+  return described_list(iterations, elapsed, false);
+}
+
+/*
+ * What a reach costs by the shape of what is reached: a description held by a
+ * library and read with `use`, the context made and run for each iteration, so
+ * the clock covers one materialization and what is around it. Each is checked by
+ * the result's kind and size.
+ */
+static GLTANG_ValueDescription * bench_description;
+
+static void setup_bench_description(GLTANG_Execution * execution) {
+  GLTANG_Library * root = NULL;
+  if (gltang_library_create(NULL, &root) != GLTANG_OK || gltang_library_add_value(root, "cfg", bench_description) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, root) != GLTANG_OK) {
+    setup_failed("a described value attached");
+  }
+  gltang_library_release(root);
+}
+
+/** An array of `count` integers: the cheapest element, so the per-element cost of the copy. */
+static GLTANG_ValueDescription * described_integers(size_t count) {
+  GLTANG_ValueLimits wide = {sizeof wide, count + 16u, 0, 0};
+  GLTANG_ValueDescription * d = NULL;
+  GLTANG_ValueRef array = {0};
+  if (gltang_value_description_create(&wide, &d) != GLTANG_OK || gltang_value_array(d, &array) != GLTANG_OK) {
+    setup_failed("a wide description");
+  }
+  for (size_t i = 0; i < count; i++) {
+    GLTANG_ValueRef n = {0};
+    if (gltang_value_integer(d, (int64_t)i, &n) != GLTANG_OK || gltang_value_array_push(d, array, n) != GLTANG_OK) {
+      setup_failed("a wide description element");
+    }
+  }
+  if (gltang_value_set_root(d, array) != GLTANG_OK || gltang_value_description_seal(d) != GLTANG_OK) {
+    setup_failed("a wide description root");
+  }
+  return d;
+}
+
+/** An array of `count` strings of 12 bytes: an allocation for each element. */
+static GLTANG_ValueDescription * described_strings(size_t count) {
+  GLTANG_ValueLimits wide = {sizeof wide, count + 16u, 0, 0};
+  GLTANG_ValueDescription * d = NULL;
+  GLTANG_ValueRef array = {0};
+  if (gltang_value_description_create(&wide, &d) != GLTANG_OK || gltang_value_array(d, &array) != GLTANG_OK) {
+    setup_failed("a description of strings");
+  }
+  for (size_t i = 0; i < count; i++) {
+    GLTANG_ValueRef s = {0};
+    if (gltang_value_string(d, "twelve bytes", 12, GLTANG_UNICODE_STRING_TYPE_HTML, &s) != GLTANG_OK || gltang_value_array_push(d, array, s) != GLTANG_OK) {
+      setup_failed("a description of strings element");
+    }
+  }
+  if (gltang_value_set_root(d, array) != GLTANG_OK || gltang_value_description_seal(d) != GLTANG_OK) {
+    setup_failed("a description of strings root");
+  }
+  return d;
+}
+
+/** Arrays nested `depth` deep, each holding the next and an integer. */
+static GLTANG_ValueDescription * described_deep(size_t depth) {
+  GLTANG_ValueDescription * d = NULL;
+  GLTANG_ValueRef root = {0}, previous = {0};
+  if (gltang_value_description_create(NULL, &d) != GLTANG_OK || gltang_value_array(d, &root) != GLTANG_OK) {
+    setup_failed("a deep description");
+  }
+  previous = root;
+  for (size_t k = 1; k < depth; k++) {
+    GLTANG_ValueRef next = {0}, n = {0};
+    if (gltang_value_array(d, &next) != GLTANG_OK || gltang_value_integer(d, (int64_t)k, &n) != GLTANG_OK || gltang_value_array_push(d, previous, n) != GLTANG_OK
+        || gltang_value_array_push(d, previous, next) != GLTANG_OK) {
+      setup_failed("a deep description level");
+    }
+    previous = next;
+  }
+  if (gltang_value_set_root(d, root) != GLTANG_OK || gltang_value_description_seal(d) != GLTANG_OK) {
+    setup_failed("a deep description root");
+  }
+  return d;
+}
+
+/** A map `{a: {b: 7, c: [0..999]}, d: "text"}`: a path read goes through it. */
+static GLTANG_ValueDescription * described_path(void) {
+  GLTANG_ValueLimits wide = {sizeof wide, 2000, 0, 0};
+  GLTANG_ValueDescription * d = NULL;
+  GLTANG_ValueRef top = {0}, a = {0}, b = {0}, c = {0}, text = {0};
+  if (gltang_value_description_create(&wide, &d) != GLTANG_OK || gltang_value_map(d, &top) != GLTANG_OK || gltang_value_map(d, &a) != GLTANG_OK
+      || gltang_value_integer(d, 7, &b) != GLTANG_OK || gltang_value_array(d, &c) != GLTANG_OK
+      || gltang_value_string(d, "text", 4, GLTANG_UNICODE_STRING_TYPE_TRUSTED, &text) != GLTANG_OK) {
+    setup_failed("a path description");
+  }
+  for (int i = 0; i < 1000; i++) {
+    GLTANG_ValueRef n = {0};
+    if (gltang_value_integer(d, i, &n) != GLTANG_OK || gltang_value_array_push(d, c, n) != GLTANG_OK) {
+      setup_failed("a path description element");
+    }
+  }
+  if (gltang_value_map_set(d, a, "b", 1, GLTANG_UNICODE_STRING_TYPE_TRUSTED, b) != GLTANG_OK || gltang_value_map_set(d, a, "c", 1, GLTANG_UNICODE_STRING_TYPE_TRUSTED, c) != GLTANG_OK
+      || gltang_value_map_set(d, top, "a", 1, GLTANG_UNICODE_STRING_TYPE_TRUSTED, a) != GLTANG_OK || gltang_value_map_set(d, top, "d", 1, GLTANG_UNICODE_STRING_TYPE_TRUSTED, text) != GLTANG_OK
+      || gltang_value_set_root(d, top) != GLTANG_OK || gltang_value_description_seal(d) != GLTANG_OK) {
+    setup_failed("a path description root");
+  }
+  return d;
+}
+
+static uint64_t described_reach_run(GLTANG_ValueDescription * d, const char * source, GLTANG_ValueKind kind, uint64_t iterations, double * elapsed) {
+  bench_description = d;
+  uint64_t sink = run_source_with(source, iterations, elapsed, kind, 0, setup_bench_description);
+  gltang_value_description_release(d);
+  bench_description = NULL;
+  return sink;
+}
+
+static uint64_t described_wide_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 50000;
+  uint64_t sink = described_reach_run(described_integers(50000), "use cfg; cfg.size;", GLTANG_KIND_INTEGER, iterations, elapsed);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t described_strings_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 10000;
+  uint64_t sink = described_reach_run(described_strings(10000), "use cfg; cfg.size;", GLTANG_KIND_INTEGER, iterations, elapsed);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t described_deep_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 2;
+  uint64_t sink = described_reach_run(described_deep(60), "use cfg; cfg.size;", GLTANG_KIND_INTEGER, iterations, elapsed);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t described_path_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 7;
+  uint64_t sink = described_reach_run(described_path(), "use cfg.a.b as x; x;", GLTANG_KIND_INTEGER, iterations, elapsed);
+  have_expected_integer = 0;
+  return sink;
+}
+
+/** The reach alone, against the same script on a program-built array of the same shape: the cost of the host's data being a description. */
+static uint64_t built_in_script_wide_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 50000;
+  uint64_t sink = run_source_with("cfg = [0] * 50000; cfg.size;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  return sink;
+}
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -1709,6 +1944,13 @@ static const Case cases[] = {
     {"workaround-list-20-precompiled", workaround_list_precompiled_run, 500u, 1u},
     {"workaround-list-20-compiled", workaround_list_compiled_run, 200u, 1u},
     {"workaround-account-libraries-200", workaround_account_run, 5000u, 5u},
+    {"described-list-20-built", described_list_built_run, 1000u, 1u},
+    {"described-list-20-sealed", described_list_sealed_run, 1000u, 1u},
+    {"described-wide-50000-integers", described_wide_run, 200u, 1u},
+    {"described-strings-10000", described_strings_run, 200u, 1u},
+    {"described-deep-60", described_deep_run, 5000u, 5u},
+    {"described-path-read", described_path_run, 2000u, 2u},
+    {"script-array-50000-same-size", built_in_script_wide_run, 200u, 1u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},

@@ -12,9 +12,9 @@
 # Which headers are which is decided here, by name, so that neither the author
 # of a header nor a quiet edit can move one across the line:
 #
-#   stable   the C embedding API: core.h, parse.h, libver.h, macros.h,
-#            namespace.h, allocator.h, seeds.h, and the umbrella lang-tang.h.
-#            seeds.h is the one host header that includes only stable ones.
+#   stable   the C embedding API: core.h, parse.h, libver.h, macros.h, encoding.h,
+#            namespace.h, allocator.h, seeds.h, description.h and the umbrella lang-tang.h.
+#            seeds.h, encoding.h and description.h are the host headers that include only stable ones.
 #   free     the syntax tree's node classes (everything under ast/) and the
 #            two headers they are built on, location.h and unicodeString.h,
 #            and tangScanner.h, which the generated scanner and parser share.
@@ -41,7 +41,7 @@ set -eu
 ROOT="${1:?usage: check-labels.sh <root>}"
 BASE="$ROOT/include/ghoti.io/lang-tang"
 
-STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h seeds.h lang-tang.h'
+STABLE='core.h parse.h libver.h macros.h namespace.h allocator.h seeds.h encoding.h description.h lang-tang.h'
 FREE='location.h unicodeString.h tangScanner.h bytecode.h program.h compile.h value.h execution.h library.h'
 
 if [ ! -d "$BASE" ]; then

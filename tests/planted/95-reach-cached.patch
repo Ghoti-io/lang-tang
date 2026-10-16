@@ -1,0 +1,37 @@
+# 95 a reach cached and shared
+# defect: the first reach of a description member in an execution makes the value and every later reach of it in that execution gets the same object, so a program that changes one sees the change in the next
+# caught by: the fresh-copy tests: two reaches, a reach in a loop, a second execution (testHost_values)
+#
+--- a/src/library/library_internal.h
++++ b/src/library/library_internal.h
+@@ -83,6 +83,8 @@
+   GLTANG_FactoryFn factory;
+   GLTANG_ValueFactoryFn value_factory;   ///< VALUE_FACTORY.
+   GLTANG_ValueDescription * description; ///< VALUE: retained, sealed.
++  uint64_t planted_cache;
++  const void * planted_for;
+   void * user;
+   GLTANG_Program * program;      ///< TEMPLATE: retained.
+   uint64_t scope_fuel;
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -204,7 +204,18 @@
+     case GLTANG_MEMBER_VALUE:
+       // A fresh copy for each reach: never cached, never shared with another
+       // reach or another execution.
+-      return gltang_vm_materialize(exec, member->description);
++    {
++      GLTANG_LibraryMember * shared = (GLTANG_LibraryMember *)(uintptr_t)member;
++      if (shared->planted_for == exec && shared->planted_cache) {
++        return shared->planted_cache;
++      }
++      GLTANG_Value made = gltang_vm_materialize(exec, member->description);
++      if (gltang_v_is_object(made)) {
++        shared->planted_cache = made;
++        shared->planted_for = exec;
++      }
++      return made;
++    }
+     case GLTANG_MEMBER_VALUE_FACTORY: {
+       // Called each time a `use` that reaches it executes, and never at
+       // registration. It fills a description that is the context's own (its

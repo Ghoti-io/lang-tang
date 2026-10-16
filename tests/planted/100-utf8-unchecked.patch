@@ -1,0 +1,17 @@
+# 100 a string not checked for UTF-8 when added
+# defect: the builder accepts any bytes as a string or key, so text that is not UTF-8 reaches the engine, which (trusting the description) makes a string of it
+# caught by: the invalid-text tests (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -211,9 +211,7 @@
+   if ((!text && length) || (unsigned)encoding > (unsigned)GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT) {
+     return GLTANG_ERR_INVALID;
+   }
+-  if (length && guni_utf8_validate(text, length, NULL) != GUNI_OK) {
+-    return GLTANG_ERR_INVALID;
+-  }
++  /* planted: no UTF-8 check */
+   return GLTANG_OK;
+ }
+ 

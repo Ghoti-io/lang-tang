@@ -697,6 +697,132 @@ that value in a traced slot that is written only through the collector's barrier
 A generator is the `std::mt19937_64` state inline in a 2.5 KiB object, with no
 handle to free.
 
+### Host-described values
+
+A host that wants a template to see `menu` as an array of maps of strings cannot
+build that in the engine's heap: the heap belongs to one execution, moves its
+objects, and is collected while the program runs. ctang offered
+`gta_computed_value_array_create` and `map_create` for it, the rewrite dropped
+them without a decision (ledger D-048), and `spec-tang-host-extensibility`
+story 2 restores them as **descriptions** (`description.h`, `stable`).
+
+A `GLTANG_ValueDescription` is a tree of nodes in the host's own memory (null,
+boolean, integer, float, tagged string, array, map): plain data, no pointer into
+any heap, buildable before any execution exists. The engine makes a **fresh
+copy** of it in the heap of the execution that asks, each time a program
+reaches it: there is no per-execution cache, no hoisting and no sharing between
+two reaches, so a program that changes what it was given changes only its own
+copy (planted defect 95). It is handed over in three places: a library member
+(`gltang_library_add_value`), a lazy factory (`gltang_library_add_value_factory`,
+called only when a `use` reaches it, never at registration, with an empty
+description to fill), and a native function's answer
+(`gltang_call_return_value`, a description built during the call by
+`gltang_call_description` or a sealed one the host keeps and answers again and
+again). The existing scalar `GLTANG_FactoryFn`, `GLTANG_HostValue` and
+`gltang_call_return_*` are unchanged.
+
+**The names.** The spine and the decision document call the object a
+*description* and a handle to a node in it a *ref*, so the types are
+`GLTANG_ValueDescription` and `GLTANG_ValueRef` and the functions
+`gltang_value_*` (decided with Corey, 2026-10-16). `GLTANG_HostValue` was taken
+by the scalar a factory fills in.
+
+**What a node is.** A `GLTANG_ValueRef` is an index and the number of the description that made it (`owner`), so a ref handed to another description, or a zero ref, is refused with `GLTANG_ERR_INVALID` instead of naming some other node that happens to have that index (planted defect 103). A node has at most one parent (`GLTANG_ERR_INVALID` for a
+second), and attaching a container under itself or under one of its own
+descendants is refused too: the builder walks up from the container, which is as
+long as the depth limit allows and no longer, so the check is bounded and a cycle
+cannot be built (planted defects 94, 96, 97). A map's entries keep the order they
+were set in, and a key set twice keeps its first position and takes the last
+value, as `m[k] = v` does; the second value's node stays in the description and
+counts against its limits, and the engine's own map fill collapses the pair when
+it makes the copy. Keys are matched by their bytes only, whatever their tag.
+
+**Strings.** A string or a key is checked once, when it is added, to be valid
+UTF-8 and to carry a tag in range, and is refused otherwise (planted defect
+100). Nothing checks it again: the materializer uses a trusted entry
+(`gltang_vm_string_from_trusted_utf8`) that skips the validation and the poll
+that `gltang_vm_string_from_utf8` makes, so a text is never scanned twice and
+a concatenation is never scanned at all. The tag survives inside a container, in
+`print`, in `as string` and through concatenation (ledger D-013's property,
+tested by a differential against the same cells put into containers by the
+script through library strings), and a map key's tag survives as well (planted
+defects 86 and 87).
+
+**Limits.** Three, each with a default and a hard ceiling:
+
+| Limit | Default | Ceiling | What counts |
+| --- | --- | --- | --- |
+| nodes | 100,000 | 4,194,304 | every node, a duplicate key's included |
+| bytes | 16 MiB | 256 MiB | the bytes of every string and key, and 16 for each node |
+| depth | 64 | 2,048 (`GLTANG_MAX_VALUE_DEPTH`) | a scalar is 0, an array of scalars 1, an array of arrays of scalars 2 |
+
+A host raises a limit with the size-prefixed `GLTANG_ValueLimits`; one past its
+ceiling is `GLTANG_ERR_LIMIT` at creation. An addition that would pass a limit is
+refused with `GLTANG_ERR_LIMIT` before anything is written (every check comes
+first, then the two steps that can fail for want of memory, then the writes that
+cannot), so a refusal changes nothing. The depth is kept as the *extent* of each
+subtree (a scalar 0, a container one more than its deepest child), which makes
+attaching a subtree under a deep parent a single comparison of the parent's level
+and the child's extent, and growth below an ancestor a walk up that stops where
+the ancestor already reaches as deep. The builder tests the limits on its side
+(planted defects 91, 92, 93), and the materializer tests them again on its own:
+the node and byte counts against the smaller of the description's own limit and
+the engine's ceiling, and the depth by the recursion's own bound, whatever the
+description says (planted defects 90, 98, 99, 101, 102). A description past a
+limit can only exist through a test hook (`gltang_vm_test_description_limits`),
+which is how the materializer's checks are reached. A text whose length would
+wrap the byte count is refused before it is read.
+
+**The materializer** (`src/vm/materialize.c`) is `copy_rec` with a different
+source and the same rules. A container is made at its exact size and held in a
+temporary root while its children are made; each pointer store goes through the
+array and map calls, which use the collector's barrier; a map entry's child is
+held while its key is made, and the two are stored by a call that allocates
+nothing. Nothing collects between a child's return and its store (planted
+defects 84 and 85: the container held by a C variable, and a float held across
+the key's allocation as its raw bits). It returns `Out of memory`,
+`Recursion Limit Exceeded` or `GLTANG_V_UNWIND` as values, and the run goes on
+after the first two, as it does after any failed allocation.
+
+**Charging.** The heap bytes of a copy go to the context's memory budget, as any
+allocation does. Its work goes to the fuel: each node is charged, before it is
+made, 8 bytes and the bytes of its string and key, through a pacer that polls
+under the native `DESCRIPTION_MATERIALIZE` every `GLTANG_POLL_BYTES`, and what
+never reached a poll is added to the fuel the run has pending (a copy of any size
+runs the budget out and unwinds like a long string copy: planted defect 88). A
+description built *during a call* is allocated from the context's own allocator,
+not the process's (planted defect 89), so a native that builds an enormous answer
+is refused by the memory budget while it builds, and its description belongs to
+the call: it cannot be retained, and it is freed when the call returns whether it
+was answered or not (the `callk` path included). The native gate has two rows for
+`DESCRIPTION_MATERIALIZE`, one a reach in a straight line and one a reach in an
+endless loop of a function that is compiled when every function is.
+
+**Where the engine reads it.** `gltang_vm_member_value` makes the value of the
+two new member kinds (`GLTANG_MEMBER_VALUE`, `GLTANG_MEMBER_VALUE_FACTORY`) and
+`call_result` the value of an answered description. Every caller of the first
+(`gltang_vm_resolve`, `gltang_vm_library_attr`, the interpreter's `USE` and
+`ATTR`, and the JIT's member-load thunks) stores what it returns before the next
+GC point, and already treated it as allocating, since a library string is made
+there; `call_result` runs while the native's activation record is still open and
+its arguments pinned. The JIT does not compile a reach of a described member:
+`loadable` and `static_member` accept natives and libraries only, so a function
+that reaches one leaves compiled code at the `use` and the interpreter makes the
+value (tested with every function compiled at its first poll, for a member by
+name, by a path through a library and for a factory). A path through a described
+value (`use cfg.a.b`) materializes the whole member and reads the attributes of
+the copy, as a library member is read; the benchmark measures a path read so that
+a cost shows if it is one.
+
+**Snapshots.** A copy is plain heap data (arrays, maps, strings, numbers), so a
+snapshot of an execution that holds one needs nothing of the description, and
+`snapshot.c` names only natives, templates and libraries.
+
+**What is not in a description yet.** The node kinds of a bound native, a
+library and an instance of a host type (stories 3 and 5 of the spec). The node
+kind is an open enumeration (`GLTANG_NodeKind`), and the host-facing constructors
+for the new kinds are added with the stories that make them.
+
 ### The seed sequence and the generator per context
 
 A `GLTANG_SeedSequence` holds a master seed and an atomic counter. Draw `k` is
@@ -891,8 +1017,14 @@ decides the verdict (AD-21); the engine only knows where the call boundary is.
 
 ### Labels
 
-`seeds.h` is the one new header that is `stable`: it includes only stable headers
-(`core.h`) and is the C embedding API's host entry for the seed. `library.h` is
+`seeds.h`, `description.h` and `encoding.h` are the host headers that are
+`stable`: they include only stable headers (`core.h`, `allocator.h`) and are the C
+embedding API's host entry for the seed and for a host-built value. `encoding.h`
+holds `GLTANG_String_Type`, which `unicodeString.h` (free) used to hold, so that
+`description.h` can name the segment tag without including a free header; the
+enum is the same and `unicodeString.h` includes the new header, so nothing is
+renamed. Two more fixtures show that `description.h` and `encoding.h` labelled free
+are refused (`tools/check-gates.sh`). `library.h` is
 `free`, for a reason of the rule and not of caution: a stable header includes only
 stable ones, `gltang_library_add_template` names `GLTANG_Program`, and the call
 object names `GLTANG_ErrorKind` and `GLTANG_ValueKind`, all of which are free
@@ -1363,6 +1495,26 @@ breaks nothing as not caught. Observed:
 | 81 bench-exit-kinds-sum-omits-remembered | the harness's exit-kinds invariant leaves out the remembered call exits | `bench --smoke --only float-caller-declined`: `deopts` is exactly the sum of the classified exits | the harness aborts |
 | 82 bench-declined-callee-entries-ignored | the harness expects a declined function's callee never to be entered | `bench --smoke --only float-arg-L0`: a declined function is not entered, its callee is, exactly | the harness aborts |
 | 83 every-compiled-call-looks-the-callee-up | the push hook looks the callee's function record up for every compiled call (as the run-time slot resolver and the per-call signature check did) | `JitCalls.ACompiledCallLooksNoFunctionUp...`: `record_lookups` is the same for fib to depth 8 and to depth 20 | `large.stats.record_lookups` is not equal to `small.stats.record_lookups` |
+| 84 container-held-across-a-childs-allocation | the materializer keeps the array or map it is filling in a C variable, not a temporary root, so the allocation of a child can collect it | the descriptions read under torture and verify (`testHost_values`) | the process is killed by SIGSEGV (a store into a collected object) |
+| 85 raw-word-in-a-temp-cell | a map entry's value is held across the allocation of its key as the raw bits of a float, not the tagged word | the numbers in a map under torture and verify (`testHost_values`) | the process is killed by SIGSEGV |
+| 86 string-tag-dropped | the materializer makes every string TRUSTED, so html, percent and javascript strings are no longer escaped | the rendering differentials (`testHost_values`) | `both.described.rendered` differs from the reference |
+| 87 map-key-tag-dropped | every key is made TRUSTED | the map-key test (`testHost_values`) | `described.rendered` differs from the reference |
+| 88 materialization-not-charged | the pacer adds nothing, so a copy of any size costs the run nothing | the fuel a long copy is charged, and the budget that stops it (`testHost_values`) | `unlimited.fuel` is 7 against a baseline that needs 707 |
+| 89 in-run-arena-from-the-process-allocator | a description a native or factory builds during a run takes its memory from the process | the memory-budget test of a factory (`testHost_values`) | `hog.refused` is `GLTANG_OK` where `GLTANG_ERR_OOM` is expected |
+| 90 materializer-depth-unchecked | the materializer recurses as deep as the description says | the over-deep description reached through the test hook (`testHost_values`) | the result is an array, not `Recursion Limit Exceeded` |
+| 91 builder-depth-unchecked | attaching a node never asks whether the nesting is within the limit | the depth-limit tests (`testDescription`) | the push past the limit returns `GLTANG_OK` |
+| 92 builder-node-limit-unchecked | making a node never asks whether the description is full | the node-limit test (`testDescription`) | the fourth node of three is made |
+| 93 builder-byte-limit-unchecked | adding a string, a key or a node never asks whether the bytes fit | the byte-limit tests (`testDescription`) | the node past 48 bytes is made |
+| 94 second-parent-allowed | a node that has a parent can be attached again | the one-parent tests (`testDescription`) | the second push of a node returns `GLTANG_OK` |
+| 95 reach-cached | the first reach in an execution makes the value and every later reach gets the same object | the fresh-copy tests: two reaches, a reach in a loop, a second execution (`testHost_values`) | the loop prints 1234, not 1111 |
+| 96 no-ancestor-check | the walk up never compares an ancestor with the node attached, so a cycle can be built | the cycle tests (`testDescription`) | an ancestor is attached under its descendant |
+| 97 no-self-attach-check | a container may be pushed into itself | the self-attach rows of the cycle test (`testDescription`) | the push of an array into itself returns `GLTANG_OK` |
+| 98 materializer-node-limit-unchecked | the materializer never counts the description's nodes against its limit again | the description past its own node limit, through the test hook (`testHost_values`) | the result is an array, not `Out of memory` |
+| 99 materializer-byte-limit-unchecked | the same for bytes | the description past its own byte limit, through the test hook (`testHost_values`) | the result is an array, not `Out of memory` |
+| 100 utf8-unchecked | the builder accepts any bytes as a string or key | the invalid-text tests (`testDescription`) | a text that is not UTF-8 is accepted |
+| 101 materializer-node-ceiling-ignored | the materializer holds a description to its own limit and not to the engine's ceiling | the description that claims no limit, against lowered ceilings (`testHost_values`) | the result is an array, not `Out of memory` |
+| 102 materializer-byte-ceiling-ignored | the same for bytes | the same | the same |
+| 103 ref-of-another-description-accepted | a ref is checked against the node count only, so a ref made by one description names a node of another | the foreign-ref test (`testDescription`) | the push with a ref of another description returns `GLTANG_OK` |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1370,10 +1522,12 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 83 (`check-planted-quick`, about two minutes with the
+84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
+
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 103 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all eighty-two but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
+runs all hundred and two but the relocation cases (10 is retired). 13, 14, 15, 20, 27 and 46 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -3189,10 +3343,11 @@ both engines, is a different thing and is described under "Verification".
 
 No library other than `math` and `random`, and in those no `next_int_range`,
 `next_float_range`, `next_gaussian`, `shuffle`, `sample` or `choose`: they stay
-`Not implemented`, as in ctang. A host cannot yet inject arrays, maps or its own
-types, or have a native take or return a container: ctang could, the rewrite
-dropped it without a decision, and `spec-tang-host-extensibility` restores it
-(ledger D-032 to D-056). No template arguments, no
+`Not implemented`, as in ctang. A host can inject arrays and maps (a description: "Host-described values"), but
+not yet its own types, or have a native take a container or return a library:
+ctang could, the rewrite dropped it without a decision, and
+`spec-tang-host-extensibility` restores it (ledger D-032 to D-056; D-048 is
+fixed). No template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
 differential against ctang is described under "Verification". The ledger is
 not closed while D-032 to D-056 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame

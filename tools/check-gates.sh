@@ -95,6 +95,10 @@ expect_fail 'labels/planted-stable-library (the host library API labelled stable
   'library.h is labelled stable but must be free' "$L" "$FIX/labels/planted-stable-library"
 expect_fail 'labels/planted-free-seeds (the seed sequence labelled free)' \
   'seeds.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-seeds"
+expect_fail 'labels/planted-free-description (the host-value API labelled free)' \
+  'description.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-description"
+expect_fail 'labels/planted-free-encoding (the segment tag the stable API names labelled free)' \
+  'encoding.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-encoding"
 expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"

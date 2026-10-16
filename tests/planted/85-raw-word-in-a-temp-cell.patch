@@ -1,0 +1,15 @@
+# 85 a raw word in a temporary root cell
+# defect: the value of a map entry is held across the allocation of its key as the raw bits of a float and not as the tagged word, so the collector reads a number as a pointer and the store puts a number where a value belongs
+# caught by: the numbers-in-a-map test under torture and verify (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -181,7 +181,7 @@
+     }
+     // The entry's value is held while its key is made.
+     size_t held = gltang_vm_temp_mark(exec);
+-    if (!gltang_vm_temp_push(exec, value)) {
++    if (!gltang_vm_temp_push(exec, child->kind == GLTANG_NODE_FLOAT ? (GLTANG_Value)child->as.integer : value)) {
+       *fail = MAT_OOM;
+       break;
+     }

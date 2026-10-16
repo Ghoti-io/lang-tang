@@ -1,0 +1,17 @@
+# 98 the materializer's node limit not checked
+# defect: the materializer trusts that the description kept its limits and never counts its nodes against them
+# caught by: the description past its own node limit, reached through the test hook (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -218,9 +218,7 @@
+   const size_t byte_ceiling = atomic_load_explicit(&g_byte_ceiling, memory_order_relaxed);
+   size_t node_limit = description->max_nodes < node_ceiling ? description->max_nodes : node_ceiling;
+   size_t byte_limit = description->max_bytes < byte_ceiling ? description->max_bytes : byte_ceiling;
+-  if (gltang_desc_node_count(description) > node_limit) {
+-    return exec->roots[GLTANG_ROOT_OOM];
+-  }
++  (void)node_limit; /* planted: the node limit is not checked again */
+   if (description->counted_bytes > byte_limit) {
+     return exec->roots[GLTANG_ROOT_OOM];
+   }

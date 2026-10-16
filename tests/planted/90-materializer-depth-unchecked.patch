@@ -1,0 +1,18 @@
+# 90 the materializer's depth ceiling not checked
+# defect: the materializer trusts the description's own depth and recurses as deep as it says, past the engine's ceiling
+# caught by: the over-deep description reached through the test hook (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -146,10 +146,7 @@
+     default:
+       return GLTANG_V_NULL;
+   }
+-  if (depth >= GLTANG_MAX_VALUE_DEPTH) {
+-    *fail = MAT_DEEP;
+-    return GLTANG_V_NULL;
+-  }
++  /* planted: no depth ceiling */
+   const bool is_array = node->kind == GLTANG_NODE_ARRAY;
+   const size_t n = node->count;
+   if (!charge(m, 16u)) {

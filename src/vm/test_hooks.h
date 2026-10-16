@@ -31,6 +31,7 @@
 #define GHOTI_IO_GLTANG_VM_TEST_HOOKS_H
 
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/description.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/runtime-core/a/deopt.h>
@@ -42,6 +43,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * Sets a description's limits as they are, with no ceiling and whatever it holds,
+ * so that a test can build one the engine's own limits refuse (past the ceilings,
+ * or deeper than the engine nests values) and show that the materializer refuses
+ * it again, or lower them after the building to show the same.
+ */
+void gltang_vm_test_description_limits(GLTANG_ValueDescription * description, size_t max_nodes, size_t max_bytes, size_t max_depth);
+
+/**
+ * Lowers the ceilings (nodes and bytes) the materializer holds every description
+ * to, whatever its own limits say, so that a test reaches them with a few nodes;
+ * pass GLTANG_VALUE_MAX_NODES and GLTANG_VALUE_MAX_BYTES to put them back.
+ */
+void gltang_vm_test_materialize_ceilings(size_t max_nodes, size_t max_bytes);
 
 /** Turns off compiled calls, fails rebuilds, or makes every push a GC point. */
 void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, bool calls_off, bool fail_rebuild, bool gc_at_push);

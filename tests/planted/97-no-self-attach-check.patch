@@ -1,0 +1,17 @@
+# 97 a container attached under itself
+# defect: a container may be pushed into itself
+# caught by: the self-attach rows of the cycle test (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -356,9 +356,7 @@
+   // level. The walk is as long as the nesting the limit allows and no longer.
+   size_t level = 0;
+   size_t bound = d->max_depth + 2u;
+-  if (child.index == container.index) {
+-    return GLTANG_ERR_INVALID;
+-  }
++  /* planted: a container may hold itself */
+   for (uint32_t at = container.index; d->nodes[at].parent != 0 && d->nodes[at].parent != GLTANG_NODE_ROOT; at = d->nodes[at].parent) {
+     if (d->nodes[at].parent == child.index) {
+       return GLTANG_ERR_INVALID;

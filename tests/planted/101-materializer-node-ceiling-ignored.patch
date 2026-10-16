@@ -1,0 +1,16 @@
+# 101 the engine's node ceiling not applied
+# defect: the materializer holds a description to the limit it states for itself and never to the engine's ceiling, so a description that claims to be allowed any number of nodes is allowed them
+# caught by: the description that claims no limit, against the lowered ceilings (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -216,7 +216,8 @@
+   // has somehow passed them is refused as a request too large for the heap.
+   const size_t node_ceiling = atomic_load_explicit(&g_node_ceiling, memory_order_relaxed);
+   const size_t byte_ceiling = atomic_load_explicit(&g_byte_ceiling, memory_order_relaxed);
+-  size_t node_limit = description->max_nodes < node_ceiling ? description->max_nodes : node_ceiling;
++  size_t node_limit = description->max_nodes; /* planted: the ceiling is ignored */
++  (void)node_ceiling;
+   size_t byte_limit = description->max_bytes < byte_ceiling ? description->max_bytes : byte_ceiling;
+   if (gltang_desc_node_count(description) > node_limit) {
+     return exec->roots[GLTANG_ROOT_OOM];

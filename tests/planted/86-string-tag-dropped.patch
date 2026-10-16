@@ -1,0 +1,15 @@
+# 86 a string's encoding tag dropped inside a container
+# defect: the materializer makes every string TRUSTED, so a string that was html, percent or javascript is no longer escaped when the program prints it
+# caught by: the rendering differentials (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -130,7 +130,7 @@
+         *fail = MAT_UNWIND;
+         return GLTANG_V_NULL;
+       }
+-      v = gltang_vm_string_from_trusted_utf8(exec, gltang_desc_bytes(d, node->as.text.offset), node->as.text.length, (GLTANG_String_Type)node->tag);
++      v = gltang_vm_string_from_trusted_utf8(exec, gltang_desc_bytes(d, node->as.text.offset), node->as.text.length, GLTANG_UNICODE_STRING_TYPE_TRUSTED /* planted: the tag is dropped */);
+       if (failed(m, v, fail)) {
+         return GLTANG_V_NULL;
+       }

@@ -1,0 +1,17 @@
+# 92 the builder's node limit not checked
+# defect: making a node never asks whether the description already holds as many as it may
+# caught by: the node-limit test (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -155,9 +155,7 @@
+ 
+ /** Whether `extra` more bytes, and one more node when `node`, fit under the limits. */
+ static GLTANG_Result room_for(const GLTANG_ValueDescription * d, size_t extra, bool node) {
+-  if (node && gltang_desc_node_count(d) >= d->max_nodes) {
+-    return GLTANG_ERR_LIMIT;
+-  }
++  /* planted: no node limit */
+   size_t add = extra + (node ? GLTANG_NODE_COST : 0u);
+   if (extra > d->max_bytes || d->counted_bytes > d->max_bytes || add > d->max_bytes - d->counted_bytes) {
+     return GLTANG_ERR_LIMIT;

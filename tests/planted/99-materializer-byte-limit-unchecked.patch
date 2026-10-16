@@ -1,0 +1,17 @@
+# 99 the materializer's byte limit not checked
+# defect: the materializer trusts that the description kept its limits and never counts its bytes against them
+# caught by: the description past its own byte limit, reached through the test hook (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -221,9 +221,7 @@
+   if (gltang_desc_node_count(description) > node_limit) {
+     return exec->roots[GLTANG_ROOT_OOM];
+   }
+-  if (description->counted_bytes > byte_limit) {
+-    return exec->roots[GLTANG_ROOT_OOM];
+-  }
++  (void)byte_limit; /* planted: the byte limit is not checked again */
+   Materializer m = {exec, description, 0};
+   int fail = MAT_OK;
+   GLTANG_Value v = make_rec(&m, description->root, 0, &fail);

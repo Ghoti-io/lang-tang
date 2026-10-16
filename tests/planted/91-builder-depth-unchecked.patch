@@ -1,0 +1,17 @@
+# 91 the builder's depth limit not checked
+# defect: attaching a node never asks whether the nesting is still within the limit
+# caught by: the depth-limit tests (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -369,9 +369,7 @@
+   }
+   // The container sits at `level`, the child one below it, and the child's own
+   // subtree reaches `extent` further.
+-  if (level + 1u + node->extent > d->max_depth) {
+-    return GLTANG_ERR_LIMIT;
+-  }
++  /* planted: no depth limit */
+   GLTANG_Result r = room_for(d, want == GLTANG_NODE_MAP ? key_length : 0u, false);
+   if (r != GLTANG_OK) {
+     return r;

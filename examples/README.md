@@ -6,8 +6,8 @@ an example that stops working fails the build. Run them with the same
 the umbrella header, `<ghoti.io/lang-tang/lang-tang.h>`; the two that run a
 program also include the free headers for compiling and executing
 (`compile.h`, `program.h`, `execution.h`, `value.h`) and runtime-core's and
-runtime-heap's umbrella headers. The two that give a program libraries and
-templates also include `library.h`.
+runtime-heap's umbrella headers. The ones that give a program libraries and
+templates also include `library.h`, and `host_values.c` `description.h`.
 
 | To see how to... | Read |
 | --- | --- |
@@ -24,6 +24,11 @@ templates also include `library.h`.
 | Run one compiled template in many contexts, each with its own user | [`inject_context.c`](inject_context.c), `main` and `render_for` |
 | Write a native function: read its arguments, answer with a value or an error | [`inject_context.c`](inject_context.c), `greet` |
 | Answer with a string that is escaped on output (an encoding tag) | [`inject_context.c`](inject_context.c), `greet`, `gltang_call_return_string` |
+| Hand a template an array of maps (a menu) that the host builds without touching the program's heap | [`host_values.c`](host_values.c), `build_menu`: `gltang_value_description_create`, `gltang_value_array`, `gltang_value_map`, `gltang_value_string` |
+| Share one built value between many executions, each of which gets its own copy | [`host_values.c`](host_values.c), `main` and `render`: `gltang_library_add_value` |
+| Build a value only when a program reaches it | [`host_values.c`](host_values.c), `stats_factory`: `gltang_library_add_value_factory` |
+| Answer a native call with an array or a map, built during the call and charged to the run | [`host_values.c`](host_values.c), `search`: `gltang_call_description`, `gltang_call_return_value` |
+| Keep an encoding (escaped, percent-encoded) on a string inside a container | [`host_values.c`](host_values.c), the `GLTANG_String_Type` of each `gltang_value_string` and `gltang_value_map_set` |
 | Register a template and call it from another (`use sidebar; sidebar()`) | [`nested_templates.c`](nested_templates.c), `gltang_library_add_template` |
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |

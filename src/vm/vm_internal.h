@@ -291,7 +291,8 @@ struct GLTANG_NativeCall {
   enum {
     GLTANG_CALL_NONE = 0, GLTANG_CALL_NULL, GLTANG_CALL_BOOL, GLTANG_CALL_INTEGER,
     GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR,
-    GLTANG_CALL_VALUE   ///< Test natives only: `value`, a heap value or ::GLTANG_V_UNWIND, as it is.
+    GLTANG_CALL_VALUE,  ///< Test natives only: `value`, a heap value or ::GLTANG_V_UNWIND, as it is.
+    GLTANG_CALL_DESCRIPTION   ///< `answer`: a description, made into a value when the call returns.
   } set;
   GLTANG_Value value;
   bool boolean;
@@ -305,6 +306,8 @@ struct GLTANG_NativeCall {
   GLTANG_Value resume_state;    ///< A resumable native's state, handed back (0 on the first call).
   GLTANG_Value callk_function;  ///< Test natives only: the guest function the native wants called before it is called again.
   GLTANG_Value callk_state;     ///< ... and the state it wants handed back, with that call's value.
+  GLTANG_ValueDescription * built;   ///< The description the native built during the call (gltang_call_description); the call owns it and frees it when it ends.
+  GLTANG_ValueDescription * answer;  ///< The description answered: `built`, or one the host keeps and the call has retained.
   uint32_t test_status;         ///< Test natives only: what the native asks of compiled code (a GLTANG_NATIVE_STATUS_*); the interpreter ignores it.
 };
 
@@ -636,6 +639,23 @@ static inline GLTANG_StringBlock * gltang_vm_string(GLTANG_Value v) {
 GLTANG_Status gltang_vm_string_alloc(GLTANG_Execution * exec, size_t segments, size_t bytes, size_t graphemes, GLTANG_StringBlock ** out);
 /** @brief A string from UTF-8 bytes, breaking graphemes. Null on invalid text. */
 GLTANG_Value gltang_vm_string_from_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type);
+
+/**
+ * @brief A string from bytes already known to be valid UTF-8 (a description's,
+ *   checked when the host added them), neither validated nor charged here: the
+ *   caller has paced the work (materialize.c).
+ */
+GLTANG_Value gltang_vm_string_from_trusted_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type);
+
+/**
+ * @brief The value a sealed description describes, made fresh in the
+ *   execution's heap.
+ *
+ * Each call makes a new copy; nothing is cached. The result is an ordinary
+ * value, or `Out of memory`, `Recursion Limit Exceeded`, or ::GLTANG_V_UNWIND
+ * when the run is to stop. The caller stores the value before the next GC point.
+ */
+GLTANG_Value gltang_vm_materialize(GLTANG_Execution * exec, const GLTANG_ValueDescription * description);
 /** @brief A string from bytes that are ASCII without a carriage return. */
 GLTANG_Value gltang_vm_string_from_ascii(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type);
 /** @brief A heap string copied from a program's constant block. */

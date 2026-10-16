@@ -1,0 +1,17 @@
+# 93 the builder's byte limit not checked
+# defect: adding a string, a key or a node never asks whether the bytes still fit
+# caught by: the byte-limit tests (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -159,9 +159,7 @@
+     return GLTANG_ERR_LIMIT;
+   }
+   size_t add = extra + (node ? GLTANG_NODE_COST : 0u);
+-  if (extra > d->max_bytes || d->counted_bytes > d->max_bytes || add > d->max_bytes - d->counted_bytes) {
+-    return GLTANG_ERR_LIMIT;
+-  }
++  (void)add; /* planted: no byte limit */
+   return GLTANG_OK;
+ }
+ 

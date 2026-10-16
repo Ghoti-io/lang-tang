@@ -1,0 +1,24 @@
+# 89 an in-run description allocated from the process and not the context
+# defect: a description a native or a factory builds during a run takes its memory from the process allocator, so the context's memory budget never sees it
+# caught by: the memory-budget test of a factory (testHost_values)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -212,7 +212,7 @@
+       // returns; the value is made from it after the factory has returned and
+       // the host-function flag is back as it was.
+       GLTANG_ValueDescription * description;
+-      if (gltang_vm_description_create_in_run(exec->allocator, &description) != GLTANG_OK) {
++      if (gltang_vm_description_create_in_run(NULL /* planted: the process allocator */, &description) != GLTANG_OK) {
+         return GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
+       }
+       const bool outer_in_host = exec->in_host;
+@@ -424,7 +424,7 @@
+   }
+   // The context's allocator: what the host builds during a call is charged to
+   // the context, and fails when its memory budget does.
+-  GLTANG_Result r = gltang_vm_description_create_in_run(call->exec->allocator, &call->built);
++  GLTANG_Result r = gltang_vm_description_create_in_run(NULL /* planted: the process allocator */, &call->built);
+   if (r != GLTANG_OK) {
+     call->built = NULL;
+     return r;

@@ -79,6 +79,7 @@ static void member_free(GLTANG_LibraryMember * member) {
   gcu_free(member->text);
   gltang_program_release(member->program);
   gltang_library_release(member->library);
+  gltang_value_description_release(member->description);
 }
 
 static void library_free(GLTANG_Library * library) {
@@ -276,6 +277,43 @@ GLTANG_Result gltang_library_add_factory(GLTANG_Library * library, const char * 
   }
   member->kind = GLTANG_MEMBER_FACTORY;
   member->factory = factory;
+  member->user = user;
+  return member_commit(library);
+}
+
+GLTANG_Result gltang_library_add_value(GLTANG_Library * library, const char * name, GLTANG_ValueDescription * description) {
+  if (!description) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Result r;
+  GLTANG_LibraryMember * member = member_begin(library, name, &r);
+  if (!member) {
+    return r;
+  }
+  // Retained before it is sealed: a description that cannot be retained (one a
+  // call built) is refused with nothing changed.
+  GLTANG_ValueDescription * held = gltang_value_description_retain(description);
+  if (!held) {
+    gcu_free(member->name);
+    return GLTANG_ERR_INVALID;
+  }
+  (void)gltang_value_description_seal(held);
+  member->kind = GLTANG_MEMBER_VALUE;
+  member->description = held;
+  return member_commit(library);
+}
+
+GLTANG_Result gltang_library_add_value_factory(GLTANG_Library * library, const char * name, GLTANG_ValueFactoryFn factory, void * user) {
+  if (!factory) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Result r;
+  GLTANG_LibraryMember * member = member_begin(library, name, &r);
+  if (!member) {
+    return r;
+  }
+  member->kind = GLTANG_MEMBER_VALUE_FACTORY;
+  member->value_factory = factory;
   member->user = user;
   return member_commit(library);
 }

@@ -39,6 +39,7 @@
 #include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/runtime-core/a/activation.h>
 #include <ghoti.io/runtime-heap/heap.h>
+#include "description_internal.h"
 #include "vm_internal.h"
 #ifdef GLTANG_WITH_JIT
 #include "../jit/jit.h"
@@ -200,6 +201,28 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
       exec->in_host = outer_in_host;
       return available ? host_value(exec, &host) : GLTANG_V_NULL;
     }
+    case GLTANG_MEMBER_VALUE:
+      // A fresh copy for each reach: never cached, never shared with another
+      // reach or another execution.
+      return gltang_vm_materialize(exec, member->description);
+    case GLTANG_MEMBER_VALUE_FACTORY: {
+      // Called each time a `use` that reaches it executes, and never at
+      // registration. It fills a description that is the context's own (its
+      // memory is charged to the context) and that is gone when the factory
+      // returns; the value is made from it after the factory has returned and
+      // the host-function flag is back as it was.
+      GLTANG_ValueDescription * description;
+      if (gltang_vm_description_create_in_run(exec->allocator, &description) != GLTANG_OK) {
+        return GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
+      }
+      const bool outer_in_host = exec->in_host;
+      exec->in_host = true;
+      bool available = member->value_factory(member->user, description);
+      exec->in_host = outer_in_host;
+      GLTANG_Value result = available ? gltang_vm_materialize(exec, description) : GLTANG_V_NULL;
+      gltang_vm_description_destroy_in_run(description);
+      return result;
+    }
     case GLTANG_MEMBER_BUILTIN:
       switch (member->builtin) {
         case GLTANG_BUILTIN_RANDOM_GLOBAL: {
@@ -319,9 +342,23 @@ const char * gltang_call_text(const GLTANG_NativeCall * call, size_t index, size
   return gltang_string_bytes(s);
 }
 
+/** Forgets the answer so far (the next `gltang_call_return_*` replaces it). */
 static void call_clear(GLTANG_NativeCall * call) {
   gcu_free(call->text);
   call->text = NULL;
+  // A description kept by the host was retained for the call; the call's own is
+  // freed when the call ends, whatever was answered.
+  if (call->answer && call->answer != call->built) {
+    gltang_value_description_release(call->answer);
+  }
+  call->answer = NULL;
+}
+
+/** The end of a call: the answer is dropped and so is the description the native built. */
+static void call_finish(GLTANG_NativeCall * call) {
+  call_clear(call);
+  gltang_vm_description_destroy_in_run(call->built);
+  call->built = NULL;
 }
 
 void gltang_call_return_null(GLTANG_NativeCall * call) {
@@ -381,6 +418,48 @@ void gltang_call_return_string(GLTANG_NativeCall * call, const char * text, size
   call->text[length] = '\0';
 }
 
+GLTANG_Result gltang_call_description(GLTANG_NativeCall * call, GLTANG_ValueDescription ** out_description) {
+  if (!call || !out_description || call->built) {
+    return GLTANG_ERR_INVALID;
+  }
+  // The context's allocator: what the host builds during a call is charged to
+  // the context, and fails when its memory budget does.
+  GLTANG_Result r = gltang_vm_description_create_in_run(call->exec->allocator, &call->built);
+  if (r != GLTANG_OK) {
+    call->built = NULL;
+    return r;
+  }
+  *out_description = call->built;
+  return GLTANG_OK;
+}
+
+void gltang_call_return_value(GLTANG_NativeCall * call, GLTANG_ValueDescription * description) {
+  if (!call) {
+    return;
+  }
+  call_clear(call);
+  if (!description) {
+    call->set = GLTANG_CALL_NULL;
+    return;
+  }
+  if (description == call->built) {
+    call->answer = description;
+  }
+  else {
+    // One the host keeps: sealed by being answered, and held for the call. One
+    // that belongs to another call cannot be kept, and is not an answer.
+    GLTANG_ValueDescription * held = gltang_value_description_retain(description);
+    if (!held) {
+      call->set = GLTANG_CALL_ERROR;
+      call->error = GLTANG_ERROR_HOST_FAILED;
+      return;
+    }
+    (void)gltang_value_description_seal(held);
+    call->answer = held;
+  }
+  call->set = GLTANG_CALL_DESCRIPTION;
+}
+
 void gltang_call_return_error(GLTANG_NativeCall * call, GLTANG_ErrorKind kind) {
   if (call) {
     call_clear(call);
@@ -405,6 +484,11 @@ static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * cal
       case GLTANG_CALL_INTEGER: result = gltang_vm_make_int(exec, call->integer); break;
       case GLTANG_CALL_FLOAT: result = gltang_vm_make_float(exec, call->number); break;
       case GLTANG_CALL_VALUE: result = call->value; break;
+      case GLTANG_CALL_DESCRIPTION:
+        // A fresh copy in the heap of this execution, paced and charged as it is
+        // made. The call's own description is still alive; it is freed with the call.
+        result = gltang_vm_materialize(exec, call->answer);
+        break;
       case GLTANG_CALL_STRING:
         // A native costs fuel in proportion to the bytes it returns.
         exec->pending_fuel += call->length / GLTANG_WORK_BYTES_PER_FUEL;
@@ -416,7 +500,7 @@ static GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * cal
       default: result = GLTANG_V_NULL; break;
     }
   }
-  call_clear(call);
+  call_finish(call);
   return result;
 }
 
@@ -478,7 +562,7 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
   if (call.callk_function) {
     // The native asked for a guest call and to be called again with its result
     // (AD-23): the interpreter does that, from its own loop, never here.
-    gcu_free(call.text);
+    call_finish(&call);
     exec->callk_function = call.callk_function;
     exec->callk_state = call.callk_state;
     exec->native_status = GLTANG_NATIVE_STATUS_OK;

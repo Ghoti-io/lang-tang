@@ -1,0 +1,15 @@
+# 103 a ref of another description accepted
+# defect: a ref is checked against the node count only, so a ref made by one description names a node of another, and the tree it builds is not the one the host meant
+# caught by: the foreign-ref test (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -321,7 +321,7 @@
+ // ---------------------------------------------------------------------------
+ 
+ static bool valid_ref(const GLTANG_ValueDescription * d, GLTANG_ValueRef ref) {
+-  return ref.index > 0 && ref.index < d->node_used && ref.owner == d->owner;
++  return ref.index > 0 && ref.index < d->node_used; /* planted: the owner is not compared */
+ }
+ 
+ /**

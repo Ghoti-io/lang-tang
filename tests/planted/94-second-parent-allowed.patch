@@ -1,0 +1,17 @@
+# 94 a node given a second parent
+# defect: attaching a node that already has a parent is not refused, so one node can be in two containers (and a value built from it is a shared structure the materializer would copy twice)
+# caught by: the one-parent tests (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -348,9 +348,7 @@
+   }
+   // One parent only: a node already under a container, or the root, is not
+   // attached again.
+-  if (node->parent != 0) {
+-    return GLTANG_ERR_INVALID;
+-  }
++  /* planted: a node may have any number of parents */
+   // The ancestors of the container, from its own parent upward: the child must
+   // not be one of them (that is a cycle), and their number is the container's
+   // level. The walk is as long as the nesting the limit allows and no longer.

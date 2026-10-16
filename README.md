@@ -178,7 +178,9 @@ stable ones.
 | `ast/*.h`, `location.h`, `unicodeString.h` | free | the node classes and what they are built on; the compiler reads them, so their shape may change |
 | `compile.h`, `program.h`, `bytecode.h` | free | `gltang_compile`, the immutable reference-counted `GLTANG_Program`, the opcode table |
 | `execution.h`, `value.h` | free | `GLTANG_Execution` (a program on a runtime-core context), its entry point for `grcore_run`, the result, output and error-origin accessors, the heap codec, the setters (`set_libraries`, `set_seeds`, `set_name`, `set_log_all_errors`, `set_halt_on_error`, `set_statement_polls`, `set_error_limit`), the baseline JIT's host API (`gltang_execution_set_jit_threshold`, `gltang_execution_jit_stats`, `gltang_jit_built`) and the error list (`gltang_execution_error*`), and context snapshots (`gltang_snapshot_take`, `gltang_snapshot_restore`, `_retain`, `_release`, `_size`) |
-| `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
+| `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, described values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
+| `description.h` | stable | `GLTANG_ValueDescription` and `gltang_value_*`: a host-built value (null, boolean, integer, float, tagged string, array, map) in the host's memory, with limits, that a program reaches as a fresh copy: handed over by `gltang_library_add_value`, `gltang_library_add_value_factory` and `gltang_call_return_value` |
+| `encoding.h` | stable | `GLTANG_String_Type`, the segment tag a string carries (`unicodeString.h` includes it) |
 | `seeds.h` | stable | `GLTANG_SeedSequence`: the master seed and atomic counter that every execution's `random.global` and `random.default` are seeded from |
 
 **Who owns what.** A parse result owns its tree and `gltang_tree_destroy` frees

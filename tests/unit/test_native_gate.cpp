@@ -98,6 +98,8 @@ struct Row {
   // registered). Called from a function that is compiled, it is a native called from
   // compiled code whose answer is the adversarial input.
   size_t host_native_bytes = 0;
+  // Elements of an array of integers, a host-described value named `cfg` (0: none).
+  size_t host_value_elements = 0;
 };
 
 /// The JIT threshold the rows run with: -1 is the suite's own (the default, or the
@@ -152,6 +154,24 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
   if (row.host_string) {
     EXPECT_TRUE(context.add_library("big", tt::Host::string(std::string(row.host_string, 'x'))));
   }
+  GLTANG_ValueDescription * cfg = nullptr;
+  if (row.host_value_elements) {
+    GLTANG_ValueLimits wide;
+    wide.size = sizeof(wide);
+    wide.max_nodes = row.host_value_elements + 16;
+    wide.max_bytes = 0;
+    wide.max_depth = 0;
+    EXPECT_EQ(gltang_value_description_create(&wide, &cfg), GLTANG_OK);
+    GLTANG_ValueRef array = {0, 0};
+    EXPECT_EQ(gltang_value_array(cfg, &array), GLTANG_OK);
+    for (size_t i = 0; i < row.host_value_elements; ++i) {
+      GLTANG_ValueRef n = {0, 0};
+      EXPECT_EQ(gltang_value_integer(cfg, static_cast<int64_t>(i), &n), GLTANG_OK);
+      EXPECT_EQ(gltang_value_array_push(cfg, array, n), GLTANG_OK);
+    }
+    EXPECT_EQ(gltang_value_set_root(cfg, array), GLTANG_OK);
+    EXPECT_EQ(gltang_library_add_value(context.library(), "cfg", cfg), GLTANG_OK);
+  }
   if (row.host_native_bytes) {
     g_answer_bytes = row.host_native_bytes;
     EXPECT_EQ(gltang_library_add_native(context.library(), "answer", answer_native, nullptr), GLTANG_OK);
@@ -178,6 +198,7 @@ Result run_source(const std::string & source, const Row & row, uint64_t fuel, ui
         << row.native << " is not an id in natives.def";
   }
   r.compiled_native_calls = context.jit_stats().native_calls;
+  gltang_value_description_release(cfg);
   r.m.fuel = grcore_context_fuel_used(context.context);
   r.m.peak = context.tracker.peak_bytes;
   r.m.memory_peak = grcore_context_memory_peak(context.context);
@@ -303,6 +324,15 @@ std::vector<Row> rows() {
   answer.host_native_bytes = kSmall ? kMiB / 32 : kMiB;
   answer.fuel_slack = 2 * (answer.host_native_bytes / 64) + 1500;  // the call charges the answer's bytes, and so does the string it makes
   t.push_back(answer);
+  // A host-described value (story 2): the copy of a large description into the heap, at a reach.
+  Row from_description = {"DESCRIPTION_MATERIALIZE", "reaching a huge host-described array", "x = 1;", "use cfg; t = cfg;", 300, 16 * kMiB, kStops, 12 * kMiB};
+  from_description.host_value_elements = kSmall ? 20000 : 200000;
+  from_description.fuel_slack = 3000;
+  t.push_back(from_description);
+  Row described_loop = {"DESCRIPTION_MATERIALIZE", "reaching a huge host-described array in an endless loop", "function f() { while (true) { use cfg as t; } } x = 1;", "f();", 300, 16 * kMiB, kStops, 12 * kMiB};
+  described_loop.host_value_elements = kSmall ? 20000 : 200000;
+  described_loop.fuel_slack = 3000;
+  t.push_back(described_loop);
   t.push_back({"PRINT", "printing a huge string", kStr1M, "print(s);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"PRINT", "printing a large container", kArr200k, "print(a);", 300, 16 * kMiB, kStops, 12 * kMiB});
   t.push_back({"RENDER_TO_STRING", "rendering a large container with as string", kArr200k, "t = a as string;", 300, 16 * kMiB, kStops, 12 * kMiB});
@@ -431,7 +461,7 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
     listed.insert(n.id);
   }
   std::set<std::string> named;
-  const char * files[] = {"container.c", "errorlist.c", "execution.c", "interp.c", "libvalue.c", "ops.c", "string.c", "template.c", "text.c", "value.c"};
+  const char * files[] = {"container.c", "description.c", "errorlist.c", "execution.c", "interp.c", "libvalue.c", "materialize.c", "ops.c", "string.c", "template.c", "text.c", "value.c"};
   size_t polls = 0;
   for (const char * f : files) {
     std::string text = slurp(src_dir() + "/" + f);
@@ -482,7 +512,7 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
 
 TEST(NativeGate, EveryRowReachesAVerdictWithinABoundedAmountOfWork) {
   std::vector<Row> t = rows();
-  EXPECT_EQ(t.size(), kSmall ? 27u : 28u);
+  EXPECT_EQ(t.size(), kSmall ? 29u : 30u);
   g_jit_threshold = -1;
   for (const Row & row : t) {
     run_row(row);

@@ -1,0 +1,15 @@
+# 87 a map key's encoding tag dropped
+# defect: the materializer makes every key TRUSTED, so a key that was html is no longer escaped when the map is printed
+# caught by: the map-key test (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -189,7 +189,7 @@
+       *fail = MAT_UNWIND;
+       break;
+     }
+-    GLTANG_Value key = gltang_vm_string_from_trusted_utf8(exec, gltang_desc_bytes(d, child->key_offset), child->key_length, (GLTANG_String_Type)child->key_tag);
++    GLTANG_Value key = gltang_vm_string_from_trusted_utf8(exec, gltang_desc_bytes(d, child->key_offset), child->key_length, GLTANG_UNICODE_STRING_TYPE_TRUSTED /* planted: the key's tag is dropped */);
+     if (failed(m, key, fail)) {
+       break;
+     }

@@ -46,6 +46,7 @@
 #define GHOTI_IO_GLTANG_UNICODESTRING_H
 
 #include <ghoti.io/lang-tang/macros.h>
+#include <ghoti.io/lang-tang/encoding.h>
 
 #include <stddef.h>
 #include <ghoti.io/cutil/vector.h>
@@ -113,34 +114,6 @@ struct GLTANG_Unicode_String {
                                    ///<   lower 32 bits.  The offset is the
                                    ///<   grapheme offset.
 };
-
-/**
- * The type of the substring.
- *
- * This allows a string to be manipulated in its original form, even if it will
- * later be encoded.  For example, a string may be "Untrusted", which will
- * result in a percent or html encoding being applied (depending on the
- * context), but it may be concatenated with a "Trusted" string, which will not
- * be encoded.  The resulting string will then "tag" the "Trusted" and
- * "Untrusted" parts, so that they can be encoded correctly, and yet the string
- * may be manipulated as a single string for further concatenation or
- * substring.
- */
-typedef enum {
-  GLTANG_UNICODE_STRING_TYPE_TRUSTED,   ///< String is from a trusted source.
-  GLTANG_UNICODE_STRING_TYPE_HTML,      ///< String is to be HTML encoded. Only
-                                     ///<   characters that need to be encoded
-                                     ///<   in order to prevent injection
-                                     ///<   attacks will actually be encoded.
-  GLTANG_UNICODE_STRING_TYPE_HTML_ATTRIBUTE, ///< String is to be HTML encoded,
-                                     ///<   with all more aggressive encoding
-                                     ///<   applied. This is used for attribute
-                                     ///<   values.
-  GLTANG_UNICODE_STRING_TYPE_PERCENT,   ///< String is to be percent encoded.
-                                     ///<   This is used for query strings.
-  GLTANG_UNICODE_STRING_TYPE_JAVASCRIPT,///< String is to be JavaScript encoded.
-                                     ///<   This is used for inline scripts.
-} GLTANG_String_Type;
 
 /**
  * Construct a new Unicode String object and copy the source string buffer.

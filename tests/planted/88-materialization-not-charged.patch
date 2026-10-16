@@ -1,0 +1,15 @@
+# 88 the work of making a value not charged
+# defect: the pacer adds nothing, so a copy of any size costs the run nothing and the budget never stops it
+# caught by: the fuel charged for a long copy, and the budget that stops it (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -74,7 +74,7 @@
+ 
+ /** Charges `bytes` of work; polls when enough has gathered. Returns whether the run goes on. */
+ static bool charge(Materializer * m, size_t bytes) {
+-  m->since += bytes;
++  (void)bytes; /* planted: nothing is charged */
+   if (m->since >= GLTANG_POLL_BYTES) {
+     size_t work = m->since / GLTANG_WORK_BYTES_PER_FUEL;
+     m->since = 0;

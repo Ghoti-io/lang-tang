@@ -51,7 +51,9 @@ typedef enum {
   GLTANG_MEMBER_TEMPLATE,
   GLTANG_MEMBER_LIBRARY,
   GLTANG_MEMBER_FACTORY,
-  GLTANG_MEMBER_BUILTIN   ///< Written in C inside the engine: see GLTANG_BuiltinId.
+  GLTANG_MEMBER_BUILTIN,  ///< Written in C inside the engine: see GLTANG_BuiltinId.
+  GLTANG_MEMBER_VALUE,    ///< A described value (description.h): a fresh copy for each reach.
+  GLTANG_MEMBER_VALUE_FACTORY   ///< A lazy described value: the factory fills a description when a `use` reaches it.
 } GLTANG_MemberKind;
 
 /** @brief The built-in members that need the engine (`random`'s). */
@@ -79,6 +81,8 @@ typedef struct GLTANG_LibraryMember {
   GLTANG_NativeFn native;
   uint32_t native_flags;         ///< GLTANG_NATIVE_FLAG_*: what only the engine's test natives have (src/vm/testnatives.c).
   GLTANG_FactoryFn factory;
+  GLTANG_ValueFactoryFn value_factory;   ///< VALUE_FACTORY.
+  GLTANG_ValueDescription * description; ///< VALUE: retained, sealed.
   void * user;
   GLTANG_Program * program;      ///< TEMPLATE: retained.
   uint64_t scope_fuel;

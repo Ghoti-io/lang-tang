@@ -1,0 +1,41 @@
+# 84 a container held across a child's allocation (a missing root)
+# defect: the materializer keeps the array or map it is filling in a C variable and not in a temporary root, so the allocation of a child (a GC point) can collect it, or move it
+# caught by: the descriptions read under torture and verify (testHost_values)
+#
+--- a/src/vm/materialize.c
++++ b/src/vm/materialize.c
+@@ -162,12 +162,7 @@
+     *fail = copy == GLTANG_V_UNWIND ? MAT_UNWIND : MAT_OOM;
+     return GLTANG_V_NULL;
+   }
+-  // Every call below can collect, and the copy is in no root of its own: hold
+-  // it, and read it again from the temporary each time it is wanted.
+-  if (!gltang_vm_temp_push(exec, copy)) {
+-    *fail = MAT_OOM;
+-    return GLTANG_V_NULL;
+-  }
++  /* planted: the copy is held by a C variable only, across every child's allocation */
+   for (uint32_t at = node->first; at && !*fail; at = d->nodes[at].next) {
+     const GLTANG_DescNode * child = &d->nodes[at];
+     GLTANG_Value value = make_rec(m, at, depth + 1, fail);
+@@ -176,7 +171,7 @@
+     }
+     if (is_array) {
+       // Nothing collects between the child's return and its being stored.
+-      gltang_vm_array_push(exec, gltang_vm_temp_at(exec, mark), value);
++      gltang_vm_array_push(exec, copy, value);
+       continue;
+     }
+     // The entry's value is held while its key is made.
+@@ -200,10 +195,9 @@
+     // A key set twice keeps its first position and takes the last value: the
+     // map's own fill says so.
+     GLTANG_Value pair[2] = {key, gltang_vm_temp_at(exec, held)};
+-    gltang_vm_map_fill(exec, gltang_vm_temp_at(exec, mark), pair, 1);
++    gltang_vm_map_fill(exec, copy, pair, 1);
+     gltang_vm_temp_release(exec, held);
+   }
+-  copy = gltang_vm_temp_at(exec, mark);
+   gltang_vm_temp_release(exec, mark);
+   return copy;
+ }

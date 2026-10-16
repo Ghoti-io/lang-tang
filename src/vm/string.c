@@ -124,20 +124,8 @@ static bool is_plain_ascii(const char * bytes, size_t length) {
   return true;
 }
 
-GLTANG_Value gltang_vm_string_from_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
-  // The scan, the break iterator and the copy are each one call that cannot be
-  // paced from inside, so the work is charged before them, for the plain-ASCII
-  // path too: a guest that reads a host string in a loop pays for the copy it
-  // makes each time (the native gate found this path charging nothing).
-  if (GLTANG_NATIVE_POLL(exec, STRING_FROM_UTF8, length / GLTANG_WORK_BYTES_PER_FUEL + 1) != GLTANG_ST_OK) {
-    return GLTANG_V_UNWIND;
-  }
-  if (is_plain_ascii(bytes, length)) {
-    return gltang_vm_string_from_ascii(exec, bytes, length, type);
-  }
-  if (length > UINT32_MAX || guni_utf8_validate(bytes, length, NULL) != GUNI_OK) {
-    return GLTANG_V_NULL;
-  }
+/** A string of valid UTF-8 that is not plain ASCII: its graphemes found, the block made. */
+static GLTANG_Value string_from_valid_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
   size_t * bounds = gcu_allocator_malloc(exec->allocator, (length + 1u) * sizeof(size_t));
   if (!bounds) {
     return exec->roots[GLTANG_ROOT_OOM];
@@ -165,6 +153,32 @@ GLTANG_Value gltang_vm_string_from_utf8(GLTANG_Execution * exec, const char * by
   memcpy(gltang_string_bytes(s), bytes, length);
   gcu_allocator_free(exec->allocator, bounds);
   return gltang_value_of(s);
+}
+
+GLTANG_Value gltang_vm_string_from_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+  // The scan, the break iterator and the copy are each one call that cannot be
+  // paced from inside, so the work is charged before them, for the plain-ASCII
+  // path too: a guest that reads a host string in a loop pays for the copy it
+  // makes each time (the native gate found this path charging nothing).
+  if (GLTANG_NATIVE_POLL(exec, STRING_FROM_UTF8, length / GLTANG_WORK_BYTES_PER_FUEL + 1) != GLTANG_ST_OK) {
+    return GLTANG_V_UNWIND;
+  }
+  if (is_plain_ascii(bytes, length)) {
+    return gltang_vm_string_from_ascii(exec, bytes, length, type);
+  }
+  if (length > UINT32_MAX || guni_utf8_validate(bytes, length, NULL) != GUNI_OK) {
+    return GLTANG_V_NULL;
+  }
+  return string_from_valid_utf8(exec, bytes, length, type);
+}
+
+GLTANG_Value gltang_vm_string_from_trusted_utf8(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+  // The text was validated when the host added it to a description, and the
+  // caller has charged the work: neither is done again here.
+  if (is_plain_ascii(bytes, length)) {
+    return gltang_vm_string_from_ascii(exec, bytes, length, type);
+  }
+  return string_from_valid_utf8(exec, bytes, length, type);
 }
 
 // ---------------------------------------------------------------------------

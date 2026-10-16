@@ -1,0 +1,17 @@
+# 96 a container attached under its own descendant
+# defect: the walk up from the container never compares an ancestor with the node being attached, so a cycle can be built
+# caught by: the cycle tests (testDescription)
+#
+--- a/src/vm/description.c
++++ b/src/vm/description.c
+@@ -360,9 +360,7 @@
+     return GLTANG_ERR_INVALID;
+   }
+   for (uint32_t at = container.index; d->nodes[at].parent != 0 && d->nodes[at].parent != GLTANG_NODE_ROOT; at = d->nodes[at].parent) {
+-    if (d->nodes[at].parent == child.index) {
+-      return GLTANG_ERR_INVALID;
+-    }
++    /* planted: an ancestor is never compared with the child */
+     if (++level > bound) {
+       return GLTANG_ERR_LIMIT;
+     }

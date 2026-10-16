@@ -26,8 +26,8 @@
  *
  * A ::GLTANG_Library is a named table of members. A host builds one with the
  * `gltang_library_add_*` calls (null, boolean, integer, float and string
- * values, native functions, compiled templates, other libraries, and lazy
- * factories), then attaches it to an execution (::gltang_execution_set_libraries)
+ * values, described values (arrays and maps: description.h), native functions,
+ * compiled templates, other libraries, and lazy factories), then attaches it to an execution (::gltang_execution_set_libraries)
  * or to a program (::gltang_program_set_libraries). The program reads it with
  * `use name;`, which binds the member, and `use name.member as m;`, which binds
  * a member of a member.
@@ -86,6 +86,7 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <ghoti.io/lang-tang/core.h>
+#include <ghoti.io/lang-tang/description.h>
 #include <ghoti.io/lang-tang/program.h>
 #include <ghoti.io/lang-tang/unicodeString.h>
 #include <ghoti.io/lang-tang/value.h>
@@ -134,6 +135,23 @@ typedef bool (*GLTANG_NativeFn)(GLTANG_NativeCall * call, void * user);
  * @return Whether there is a value.
  */
 typedef bool (*GLTANG_FactoryFn)(void * user, GLTANG_HostValue * out);
+
+/**
+ * @brief A lazy value factory: fills a description when a `use` that reaches it
+ *   executes.
+ *
+ * Never called at registration. `out` is an empty description that belongs to
+ * the run (its memory is the context's, and it is freed when the factory
+ * returns): build the value in it with the `gltang_value_*` calls and make it the
+ * root, then return true. Returning false is "not available", which binds null;
+ * a description left without a root is null. Called once for each `use` that
+ * reaches it, so each reach gets a fresh copy.
+ *
+ * @param user The pointer given at registration.
+ * @param out The description to fill.
+ * @return Whether there is a value.
+ */
+typedef bool (*GLTANG_ValueFactoryFn)(void * user, GLTANG_ValueDescription * out);
 
 /** @brief What a template call does when its own budget runs out (AD-21). */
 typedef enum {
@@ -254,6 +272,30 @@ GLTANG_API GLTANG_Result gltang_library_add_factory(GLTANG_Library * library,
     const char * name, GLTANG_FactoryFn factory, void * user);
 
 /**
+ * @brief Adds a described value (description.h): an array, a map, or any value a
+ *   host built.
+ *
+ * `use name;` binds a fresh copy of it in the execution's heap each time the
+ * `use` executes: the copies are independent of each other and of the
+ * description. The library retains the description and seals it.
+ *
+ * @param description The description, with its root set.
+ */
+GLTANG_API GLTANG_Result gltang_library_add_value(GLTANG_Library * library,
+    const char * name, GLTANG_ValueDescription * description);
+
+/**
+ * @brief Adds a lazy described value, built when a `use` that reaches it
+ *   executes and never at registration.
+ *
+ * @param factory The factory.
+ * @param user Handed to it.
+ */
+GLTANG_API GLTANG_Result gltang_library_add_value_factory(
+    GLTANG_Library * library, const char * name, GLTANG_ValueFactoryFn factory,
+    void * user);
+
+/**
  * @brief Adds a compiled template.
  *
  * `use name;` binds a function value; calling it, `name()`, takes no arguments
@@ -355,6 +397,35 @@ GLTANG_API void gltang_call_return_float(GLTANG_NativeCall * call, double value)
  */
 GLTANG_API void gltang_call_return_string(GLTANG_NativeCall * call,
     const char * text, size_t length, GLTANG_String_Type encoding);
+
+/**
+ * @brief Makes an empty description for this call to build a value in.
+ *
+ * Its memory is the context's own, so it is charged to the context, and it
+ * belongs to the call: build it with the `gltang_value_*` calls, answer with it
+ * (::gltang_call_return_value), and it is freed when the call returns. It cannot
+ * be retained. One description for each call.
+ *
+ * @param out_description Receives the description. Written only on success.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument or a second
+ *   description in one call; ::GLTANG_ERR_OOM (the context's budget is out).
+ */
+GLTANG_API GLTANG_Result gltang_call_description(GLTANG_NativeCall * call,
+    GLTANG_ValueDescription ** out_description);
+
+/**
+ * @brief Answers with the value a description describes, made fresh in the
+ *   caller's heap.
+ *
+ * `description` is the call's own (::gltang_call_description), or a description
+ * the host built earlier and keeps, which is sealed by being answered and
+ * retained for the call; it may be answered again by any later call, from any
+ * context. Answering with a description that cannot be made into a value
+ * (memory, the budget, a limit) makes the call's value `Out of memory` or stops
+ * the run, as any allocation does.
+ */
+GLTANG_API void gltang_call_return_value(GLTANG_NativeCall * call,
+    GLTANG_ValueDescription * description);
 
 /** @brief Answers with an error value of this kind. */
 GLTANG_API void gltang_call_return_error(
