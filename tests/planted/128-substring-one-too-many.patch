@@ -1,0 +1,15 @@
+# 128 a substring one grapheme too long
+# defect: the end of a substring is one grapheme past what was asked, so it carries text and a tag it should not
+# caught by: the substring test (testHost_context)
+#
+--- a/src/unicodeString.c
++++ b/src/unicodeString.c
+@@ -253,7 +253,7 @@
+   if (grapheme_start >= string->grapheme_length || grapheme_count == 0) {
+     return gltang_unicode_string_create("", 0, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+   }
+-  size_t end = grapheme_count >= string->grapheme_length - grapheme_start ? string->grapheme_length : grapheme_start + grapheme_count;
++  size_t end = grapheme_count >= string->grapheme_length - grapheme_start ? string->grapheme_length : grapheme_start + grapheme_count + 1u; /* planted */
+   size_t byte_start = string->grapheme_offsets->data[grapheme_start].ui32;
+   size_t byte_end = string->grapheme_offsets->data[end].ui32;
+   // The run that holds the first grapheme: the last that begins at or before it.

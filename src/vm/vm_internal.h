@@ -483,6 +483,11 @@ struct GLTANG_Execution {
 
   // What the host attached.
   GLTANG_Library * libraries;
+  GLTANG_Library * language;    ///< The process's language layer as it was when this execution was created; retained.
+  void * host_context;          ///< The host's per-request pointer; never read, copied or freed.
+  GLTANG_OutputSinkFn sink;     ///< Output delivered as prints finish, or NULL.
+  void * sink_user;
+  size_t sink_delivered;        ///< Bytes of the main output already given to the sink.
   GLTANG_SeedSequence * seeds;
   const char * name;            ///< The main template's name, for the error list; NULL for the default.
   char * name_storage;          ///< Owns `name`.

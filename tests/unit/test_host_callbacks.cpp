@@ -105,6 +105,7 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   segment.size = sizeof(segment);
   CASE(gltang_call_arg, false, (void)gltang_call_arg(call, 1, &out));
   CASE(gltang_call_bound, false, (void)gltang_call_bound(call, &out));
+  CASE(gltang_call_host_context, false, (void)gltang_call_host_context(call));
   CASE(gltang_call_return_handle, false, gltang_call_return_handle(call, s));
   CASE(gltang_handle_push_frame, false, (void)gltang_handle_push_frame(call));
   CASE(gltang_handle_pop_frame, false, (void)gltang_handle_pop_frame(call));

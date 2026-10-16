@@ -12,8 +12,8 @@
 +      if (gltang_vm_description_create_in_run(NULL /* planted: the process allocator */, &description) != GLTANG_OK) {
          return GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
        }
-       const bool outer_in_host = exec->in_host;
-@@ -467,7 +467,7 @@
+       description->host_context = exec->host_context;
+@@ -470,7 +470,7 @@
    }
    // The context's allocator: what the host builds during a call is charged to
    // the context, and fails when its memory budget does.

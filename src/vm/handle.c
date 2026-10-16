@@ -223,6 +223,10 @@ GLTANG_Result gltang_call_arg(GLTANG_NativeCall * call, size_t index, GLTANG_Han
   return r;
 }
 
+void * gltang_call_host_context(const GLTANG_NativeCall * call) {
+  return call && call->exec ? call->exec->host_context : NULL;
+}
+
 GLTANG_Result gltang_call_bound(GLTANG_NativeCall * call, GLTANG_Handle * out) {
   if (!call || !out) {
     return GLTANG_ERR_INVALID;

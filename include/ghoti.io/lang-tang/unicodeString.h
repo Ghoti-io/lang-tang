@@ -116,6 +116,14 @@ struct GLTANG_Unicode_String {
 };
 
 /**
+ * A rendered string: bytes the caller owns (free with gcu_free).
+ */
+typedef struct GLTANG_Unicode_Rendered_String {
+  char * buffer;                   ///< The rendered bytes, null-terminated; NULL on failure.
+  size_t length;                   ///< Length in bytes, not counting the terminator.
+} GLTANG_Unicode_Rendered_String;
+
+/**
  * Construct a new Unicode String object and copy the source string buffer.
  *
  * @param source The source string.  It is not adopted.
@@ -143,6 +151,55 @@ GLTANG_API GLTANG_NO_DISCARD GLTANG_Unicode_String * gltang_unicode_string_creat
  * @param string The string to destroy.
  */
 GLTANG_API void gltang_unicode_string_destroy(GLTANG_Unicode_String * string);
+
+/**
+ * Concatenate two Unicode Strings.
+ *
+ * Graphemes are found again across the join (a combining mark at the start of
+ * the second string joins the last grapheme of the first), as the language's
+ * own `+` does, and each grapheme keeps the tag of the run it began in. Runs of
+ * equal tag join into one. The inputs are not adopted and not changed.
+ *
+ * @param string1 The first string.
+ * @param string2 The second string.
+ * @return The new string, or NULL on an allocation failure or a NULL argument.
+ */
+GLTANG_API GLTANG_NO_DISCARD GLTANG_Unicode_String * gltang_unicode_string_concat(const GLTANG_Unicode_String * string1, const GLTANG_Unicode_String * string2);
+
+/**
+ * The substring of a Unicode String, by graphemes.
+ *
+ * A start at or past the end, or a count of zero, gives an empty trusted
+ * string. The substring keeps the tag of every grapheme it takes.
+ *
+ * @param string The string.
+ * @param grapheme_start The first grapheme.
+ * @param grapheme_count How many graphemes (clamped to the end).
+ * @return The new string, or NULL on an allocation failure or a NULL string.
+ */
+GLTANG_API GLTANG_NO_DISCARD GLTANG_Unicode_String * gltang_unicode_string_substring(const GLTANG_Unicode_String * string, size_t grapheme_start, size_t grapheme_count);
+
+/**
+ * Render a string, encoding each run by its tag: trusted as it is, html and
+ * html-attribute HTML-escaped (the attribute tag also escapes quotes),
+ * percent percent-encoded, JavaScript escaped. The bytes are the ones the
+ * engine's own output render gives for the same tagged text.
+ *
+ * @param string The string.
+ * @return The rendered bytes (free `buffer` with gcu_free), or a NULL buffer on
+ *   an allocation failure or a NULL string.
+ */
+GLTANG_API GLTANG_NO_DISCARD GLTANG_Unicode_Rendered_String gltang_unicode_string_render(const GLTANG_Unicode_String * string);
+
+/**
+ * Encode text as ::GLTANG_UNICODE_STRING_TYPE_HTML.
+ *
+ * @param source The text.
+ * @param length Its length in bytes, not counting any terminator.
+ * @return The encoded bytes (free `buffer` with gcu_free), or a NULL buffer on
+ *   an allocation failure.
+ */
+GLTANG_API GLTANG_NO_DISCARD GLTANG_Unicode_Rendered_String gltang_unicode_string_html_encode(const char * source, size_t length);
 
 #ifdef __cplusplus
 }

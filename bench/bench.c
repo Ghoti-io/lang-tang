@@ -62,6 +62,7 @@
 #include <ghoti.io/lang-tang/compile.h>
 #include <ghoti.io/lang-tang/execution.h>
 #include <ghoti.io/lang-tang/lang-tang.h>
+#include <ghoti.io/lang-tang/language.h>
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
 #include <ghoti.io/lang-tang/value.h>
@@ -1056,6 +1057,107 @@ static uint64_t handle_bound_run(uint64_t iterations, double * elapsed) {
   uint64_t sink = run_source_with("use make_bound; m = make_bound(); n = 0; for (i = 0; i < 1000; i += 1) { n += m(); } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_handle_natives);
   have_expected_integer = 0;
   return sink;
+}
+
+/*
+ * The rest of the host API (story 4 of spec-tang-host-extensibility): a native
+ * that reads the host context (against run-native-call-1000), a `use` that finds
+ * its library in the language layer (against the same `use` of a library the
+ * execution holds), and print with an output sink attached (against print
+ * without one).
+ */
+static bool bench_read_context(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  const int64_t * context = (const int64_t *)gltang_call_host_context(call);
+  gltang_call_return_integer(call, context ? *context : 0);
+  return true;
+}
+
+static void setup_context_native(GLTANG_Execution * execution) {
+  static int64_t context = 1;
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "ctx", bench_read_context, NULL) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK
+      || gltang_execution_set_host_context(execution, &context) != GLTANG_OK) {
+    setup_failed("a native that reads the host context");
+  }
+  gltang_library_release(library);
+}
+
+static uint64_t host_context_call_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 1000;
+  uint64_t sink = run_source_with("use ctx; n = 0; for (i = 0; i < 1000; i += 1) { n += ctx(); } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_context_native);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static GLTANG_Library * bench_pages(void) {
+  GLTANG_Library * pages = NULL;
+  GLTANG_Library * root = NULL;
+  if (gltang_library_create("pages", &pages) != GLTANG_OK || gltang_library_add_integer(pages, "n", 3) != GLTANG_OK
+      || gltang_library_create(NULL, &root) != GLTANG_OK || gltang_library_add_library(root, pages) != GLTANG_OK) {
+    setup_failed("a library named pages");
+  }
+  gltang_library_release(pages);
+  return root;
+}
+
+static void setup_pages_in_execution(GLTANG_Execution * execution) {
+  GLTANG_Library * root = bench_pages();
+  if (gltang_execution_set_libraries(execution, root) != GLTANG_OK) {
+    setup_failed("the execution's library");
+  }
+  gltang_library_release(root);
+}
+
+#define PAGES_SOURCE "n = 0; for (i = 0; i < 200; i += 1) { use pages; n += pages.n; } n;"
+
+static uint64_t language_layer_use_run(uint64_t iterations, double * elapsed) {
+  GLTANG_Library * root = bench_pages();
+  if (gltang_language_set_library(root) != GLTANG_OK) {
+    setup_failed("the language layer");
+  }
+  gltang_library_release(root);
+  have_expected_integer = 1;
+  expected_integer = 600;
+  uint64_t sink = run_source_with(PAGES_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  (void)gltang_language_set_library(NULL);
+  return sink;
+}
+
+static uint64_t execution_library_use_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 600;
+  uint64_t sink = run_source_with(PAGES_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_pages_in_execution);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static bool bench_count_sink(void * user, const char * bytes, size_t length, GLTANG_String_Type type) {
+  (void)bytes;
+  (void)type;
+  *(size_t *)user += length;
+  return true;
+}
+
+static void setup_output_sink(GLTANG_Execution * execution) {
+  static size_t delivered;
+  if (gltang_execution_set_output_sink(execution, bench_count_sink, &delivered) != GLTANG_OK) {
+    setup_failed("an output sink");
+  }
+}
+
+#define PRINT_SOURCE "for (i = 0; i < 1000; i += 1) { print(\"line \"); print(i); } 0;"
+
+static uint64_t print_no_sink_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(PRINT_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+}
+
+static uint64_t print_with_sink_run(uint64_t iterations, double * elapsed) {
+  return run_source_with(PRINT_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_output_sink);
 }
 
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
@@ -2062,6 +2164,11 @@ static const Case cases[] = {
     {"handle-native-reads-20-rows-x100", handle_read_run, 1000u, 2u},
     {"handle-native-builds-20-rows-x20", handle_build_run, 1000u, 2u},
     {"handle-bound-native-call-1000", handle_bound_run, 3000u, 5u},
+    {"host-context-native-call-1000", host_context_call_run, 5000u, 5u},
+    {"host-layer-use-200", language_layer_use_run, 5000u, 5u},
+    {"host-execution-library-use-200", execution_library_use_run, 5000u, 5u},
+    {"host-print-2000-no-sink", print_no_sink_run, 2000u, 5u},
+    {"host-print-2000-with-sink", print_with_sink_run, 2000u, 5u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},

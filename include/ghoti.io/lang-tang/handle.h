@@ -161,6 +161,18 @@ GLTANG_API GLTANG_Result gltang_call_arg(
     GLTANG_NativeCall * call, size_t index, GLTANG_Handle * out);
 
 /**
+ * @brief The host context of the execution that is running this call: the
+ *   pointer given to ::gltang_execution_set_host_context, or NULL.
+ *
+ * It is the per-request state a host hangs on an execution, so one native or
+ * factory serves every execution and finds its own request here. The engine
+ * never reads, copies or frees it.
+ *
+ * @no_gc
+ */
+GLTANG_API void * gltang_call_host_context(const GLTANG_NativeCall * call);
+
+/**
  * @brief A handle to the value this native is bound to (`null` for one that is
  *   bound to nothing).
  *

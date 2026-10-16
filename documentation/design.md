@@ -56,7 +56,7 @@ The oracle is the ctang installed from that same tree.
 | `flex/tangScanner.l` | `flex/tangScanner.l` | The scanner: its states (script, template, quick print, comments, strings, dates) and every literal rule |
 | `src/ast/*.c`, `include/.../ast/*.h` | `src/ast/*.c`, `include/.../ast/*.h` | 31 node classes, each with `create`, `destroy`, `print`, `walk`, and `astNode` the base |
 | `src/tangLanguage.c` | `src/parse/parse.c` | Scanner setup, the parse, the rule that a failed parse is never an empty tree, `node_count` |
-| `src/unicodeString.c`, `unicodeString.h` | the same names | The string type, `create`, `create_and_adopt`, `destroy` |
+| `src/unicodeString.c`, `unicodeString.h` | the same names | The string type, `create`, `create_and_adopt`, `destroy`, and (story 4) `concat`, `substring`, `render`, `html_encode` |
 | `include/.../location.h`, `tangScanner.h` | the same names | The location type; the scanner's `YY_DECL` glue |
 | `src/allocator.c`, `allocator.h` | `src/core/allocator.c`, `allocator.h` | The cutil-counting allocator, as `gltang_allocator()` |
 | `src/tang.c` | `src/tang.c` | The command's flags; the rest is rewritten |
@@ -85,9 +85,11 @@ The names changed by one rule: `GTA_` became `GLTANG_`, `gta_` became `gltang_`,
 - **The redeclaration parse-error singletons** (function, identifier, global)
   were analysis errors and went with it; the out-of-memory singleton stays.
 - **`unicodeString`** keeps `create`, `create_and_adopt` and `destroy`.
-  Concatenation, substring, rendering and HTML encoding serve execution; they
-  and the four escape scanners (`htmlEscape`, `htmlEscapeAscii`,
-  `percentEncode`, `unescape`) come with the interpreter. A stray file-scope
+  Concatenation, substring, rendering and HTML encoding were first internal
+  ("they come with the interpreter"); story 4 of `spec-tang-host-extensibility`
+  made them public again (the ledger's D-056). The four escape scanners
+  (`htmlEscape`, `htmlEscapeAscii`, `percentEncode`, `unescape`) are not public:
+  the engine has its own encoder (`src/vm/string.c`). A stray file-scope
   object named `GCU_Type_Offset_Pair` and an exported helper named
   `gcu_unicode_string_get_grapheme_offsets` were not carried: the first was
   unused and the second was an exported symbol outside this library's prefix
@@ -914,6 +916,61 @@ handle.
 
 **Measured** (`notes/lang-tang/perf-history.md`, "Story 3: handle scopes, measured"). A native that never asks for a handle costs +0.72% instructions over the story-0 engine (`run-native-call-1000`; +0.9% in the A/B wall clock, inside its spread). A call that reads its bound value through a handle costs 1.17 to 1.22 times a scalar call (about 1,260 more instructions: a frame, two handle operations, a close). Building 20 lists of 20 rows through the handle API costs 6.8 us a list, 2.6 times less than handing the same list over as a description, which is the tool for plain data the host already holds. One existing case, `workaround-list-20-precompiled`, is +1.10% in instructions on a path with no handle code (allocator slow-path calls; not attributed, recorded); the wall-clock flags against the story-0 table are session drift and the A/B shows none.
 
+### The host context, the language layer, the output sink and the string helpers
+
+Four small pieces of the host API (`planning/tang-host-extensibility.md` 5.12;
+ledger D-053 to D-056).
+
+**The host context** is one pointer on the execution
+(`gltang_execution_set_host_context`) that the engine never reads, copies or
+frees. A native and a handle factory reach it through the call object
+(`gltang_call_host_context`); a value factory through the description it is
+handed (the in-run description copies the pointer; a description the host made
+itself answers NULL). The scalar `GLTANG_FactoryFn` has a fixed signature in a
+`free` header and cannot reach it: it is superseded by the handle factory, which
+can answer a scalar. The setter is refused as the others are (a started run,
+inside a host function). A snapshot does not carry it: it is the host's pointer to
+the host's request, and applying a snapshot to an execution leaves that
+execution's.
+
+**The language layer** (`language.h`, `stable`) is one sealed library held by the
+process, searched after the program's libraries and before the built-ins. It
+is a process-level slot because ctang's was (`GTA_Language.library`) and because
+a host registers the same functions for every program; the cost is one
+process-wide piece of mutable state, so it has a lock: a spin flag held for a
+load and a retain, or a swap and a release, and for nothing else. An execution
+takes its reference when the creation succeeds and keeps it for its life (it is
+the fourth layer of a `use`, named as layer 3 in a snapshot so that the index of
+the three that existed does not move). Replacing the layer changes nothing for
+a running execution, and a library is freed when the last execution that took it
+is destroyed, not when the host lets go.
+
+**The output sink** (`gltang_execution_set_output_sink`) delivers at the point
+the engine already decides a print is whole. A print writes into the buffer and
+sets `committed` when it finishes, and rolls back to `committed` when it fails,
+so nothing before `committed` can be taken back. The sink is given everything
+from the last delivered point to the end of the output, one call per tagged run,
+before `committed` moves; if it refuses (returns false) the print is rolled back
+and its value is `GLTANG_ERROR_HOST_FAILED`. Segments of a refused print that the
+sink had already been given stay given: delivery is never retracted, and the
+header says so. Only the main activation's buffer is delivered: a template call
+prints into a buffer of its own that becomes the value the caller receives, and
+that value reaches the sink when it is printed. The buffer is unchanged (the
+sink is "as well as"); a host that streams a very large page and does not want
+the buffer would need a mode that drops delivered bytes, which touches the
+snapshot, `output_raw` and the committed offsets, and was not built. Applying a
+snapshot moves the delivered point to the restored `committed`: what was printed
+before is the snapshot's, not this sink's. The sink runs as a host function does
+(the flag is set), so it cannot destroy or reconfigure the execution.
+
+**The string helpers** are `concat`, `substring`, `render` and `html_encode` on
+`GLTANG_Unicode_String` (`unicodeString.h`, `free`). `render` and `html_encode`
+use the engine's own encoder, so the bytes are the ones `output_render` gives.
+`concat` finds graphemes again across the join, as the language's `+` does, and
+puts each grapheme in the run it began in, so it does not copy the grapheme
+offsets of its inputs (ctang's did, and a combining mark at the start of the
+second string stayed a grapheme of its own).
+
 ### The seed sequence and the generator per context
 
 A `GLTANG_SeedSequence` holds a master seed and an atomic counter. Draw `k` is
@@ -1620,6 +1677,25 @@ breaks nothing as not caught. Observed:
 | 115 stored-container-aliased | a pushed container is stored itself | the copy test (`testHandles`) | the stored copy grew with the original |
 | 116 scope-serial-reused | every scope takes serial 1 | the stale-handle test (`testHandles`) | a new scope's serial equals the old |
 | 117 persistent-reported-through-a-copy | the collector is shown a copy of each persistent value | the persistent handle under relocation torture (`testHandles`; relocation arm only) | not seen without relocation |
+| 118 template-output-delivered | the delivery does not check that the buffer is the main activation's | the template output test (`testHost_context`) | a template's text arrives twice |
+| 119 delivered-point-not-advanced | a delivery does not record how far it got | the delivery test (`testHost_context`) | each print repeats everything before it |
+| 120 refused-print-not-rolled-back | a refused print stays in the buffer | the refusal test (`testHost_context`) | the buffer holds `abc` for a print that failed |
+| 121 language-layer-before-the-program | the layer is searched before the program's libraries | the precedence test (`testHost_context`) | the layer's `pages` hides the program's |
+| 122 language-layer-leaked | an execution never gives back the layer it took | the count of cutil allocations (`testHost_context`) | a replaced library is not freed |
+| 123 language-layer-read-afresh | a `use` reads the layer the process has now | the replacement test (`testHost_context`) | a replacement reaches a running program |
+| 124 language-layer-not-sealed | the layer is retained and not sealed | the readable-layer test (`testHost_context`) | `gltang_library_sealed` says false |
+| 125 host-context-shared | the context is one process-wide variable | the two-executions test (`testHost_context`) | two executions see the last one set |
+| 126 render-ignores-tags | every run is rendered as trusted | the render test (`testHost_context`) | `<` is not escaped in an html run |
+| 127 concat-loses-second-runs | the second string's runs are not put on the joined string | the concat test (`testHost_context`) | the html half renders as trusted |
+| 128 substring-one-too-many | a substring ends one grapheme late | the substring test (`testHost_context`) | the substring carries a grapheme it was not asked for |
+| 129 value-factory-without-context | the description a value factory fills has no context | the factory test (`testHost_context`) | the factory reads NULL |
+| 130 sink-may-reenter | the sink is called without the host-function flag | the re-entry test (`testHost_context`) | the sink destroys the execution under the run |
+| 131 snapshot-delivery-point | applying a snapshot leaves the delivered point at zero | the snapshot delivery test (`testHost_context`) | the old output is delivered again |
+| 132 refused-constant-print-not-rolled-back | a refused print of a constant (template text) stays in the buffer | the template refusal test (`testHost_context`) | the buffer holds the refused text |
+| 133 language-layer-unlocked | a reader loads and retains the layer without the spin flag | the threaded layer test under ThreadSanitizer (`make check-planted-tsan`; TSan only, not in the quick set) | a data race on the slot |
+| 134 snapshot-layer-3-is-the-built-ins | a snapshot's layer table maps the language layer to the built-ins | the snapshot-of-a-layer-member test (`testHost_context`) | a native held from the layer cannot be taken |
+| 135 language-layer-not-retained | an execution takes the layer without a reference | the library-freed-with-the-last-execution test (`testHost_context`) | a replaced layer is freed under a running program |
+| 136 delivered-before-the-print-is-whole | the sink is given a print before it is known to have finished | the failing-print sweep (`testHost_context`) | the sink holds bytes the buffer rolled back |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1627,12 +1703,12 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
+118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 136 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all hundred and fifteen but the relocation cases (10 is retired). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs all hundred and thirty-three but the relocation cases (10 is retired). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.

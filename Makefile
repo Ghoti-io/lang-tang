@@ -673,7 +673,7 @@ $(APP_DIR)/examples/web_server$(EXE_EXTENSION): force-flags
 endif
 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-stamps check-fp-contract check-aliasing test-nojit test-nodebug
-.PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest check-planted-relocate test-relocate test-relocate-run
+.PHONY: check-planted check-planted-quick check-planted-slow check-planted-selftest check-planted-tsan check-planted-relocate test-relocate test-relocate-run
 .PHONY: check-labels check-edges check-gates check-vscode check-backend-required check-oracle-absent bench test-tsan test-torture test-oracle fuzz-diff cli-test fuzz-replay fuzz-parse
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
@@ -837,6 +837,13 @@ check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store
 check-planted: ## Every planted defect that needs no relocation heap: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all
 
+check-planted-tsan: ## Planted defect 133 (the language layer read without its lock), caught by ThreadSanitizer and by nothing else (Linux)
+ifeq ($(OS_NAME), Linux)
+	@$(PLANTED_ENV) tools/check-planted-tsan.sh
+else
+	@printf 'check-planted-tsan: ThreadSanitizer builds are only supported on Linux\n' >&2; exit 1
+endif
+
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
@@ -899,7 +906,7 @@ endif
 #   under torture an allocation also collects, which only makes it slower.
 TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
-TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks testHost_context
 
 # With the JIT built, `make test` is two arms. The JIT arm is everything below,
 # and then the same unit suites once more with every execution tiering up at

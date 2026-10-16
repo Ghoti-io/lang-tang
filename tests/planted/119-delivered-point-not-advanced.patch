@@ -1,0 +1,15 @@
+# 119 the delivered point never advanced
+# defect: a delivery does not record how far it got, so every print gives the sink everything printed before it again
+# caught by: the delivery test (testHost_context)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -650,7 +650,7 @@
+   }
+   exec->in_host = outer_in_host;
+   if (taken) {
+-    exec->sink_delivered = to;
++    /* planted: the delivered point stays where it was */
+   }
+   return taken;
+ }

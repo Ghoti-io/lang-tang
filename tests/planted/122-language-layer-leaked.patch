@@ -1,0 +1,16 @@
+# 122 the language layer an execution took never released
+# defect: the reference an execution takes to the language layer is not given back at destroy, so a replaced library is never freed
+# caught by: the count of cutil allocations across a run (testHost_context)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -491,8 +491,7 @@
+   exec->root_count = exec->temp_count = 0;
+   gltang_library_release(exec->libraries);
+   exec->libraries = NULL;
+-  gltang_library_release(exec->language);
+-  exec->language = NULL;
++  exec->language = NULL; /* planted: the reference is not released */
+   gcu_allocator_free(exec->allocator, exec->name_storage);
+   exec->name_storage = NULL;
+   exec->name = NULL;

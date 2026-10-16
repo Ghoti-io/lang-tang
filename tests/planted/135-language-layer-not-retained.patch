@@ -1,0 +1,15 @@
+# 135 the language layer taken without a reference
+# defect: an execution keeps the layer pointer but takes no reference to it, so a host that replaces the layer frees a library a running program is using
+# caught by: the library-freed-with-the-last-execution test (testHost_context)
+#
+--- a/src/library/language.c
++++ b/src/library/language.c
+@@ -59,7 +59,7 @@
+ 
+ GLTANG_Library * gltang_language_library(void) {
+   lock();
+-  GLTANG_Library * held = gltang_library_retain(slot);
++  GLTANG_Library * held = slot; /* planted: no reference is taken */
+   unlock();
+   return held;
+ }

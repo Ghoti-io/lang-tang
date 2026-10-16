@@ -181,6 +181,7 @@ stable ones.
 | `library.h` | free | `GLTANG_Library`: a sealed, reference-counted table of members (values, described values, native functions, templates, sub-libraries, lazy factories) for `use`, and the call object a native function reads its arguments from |
 | `description.h` | stable | `GLTANG_ValueDescription` and `gltang_value_*`: a host-built value (null, boolean, integer, float, tagged string, array, map) in the host's memory, with limits, that a program reaches as a fresh copy: handed over by `gltang_library_add_value`, `gltang_library_add_value_factory` and `gltang_call_return_value` |
 | `handle.h` | stable | `GLTANG_Handle`: how a native function or a factory reads and builds the program's values (`gltang_handle_*`, `gltang_call_arg`, `gltang_call_return_handle`), strings with the tag of every segment, frames, persistent handles, natives bound to a value, libraries made at run time |
+| `language.h` | stable | the language layer: one process-level library every execution searches between the program's libraries and the built-ins (`gltang_language_set_library`) |
 | `valuekind.h` | stable | `GLTANG_ValueKind` (`value.h` includes it) |
 | `encoding.h` | stable | `GLTANG_String_Type`, the segment tag a string carries (`unicodeString.h` includes it) |
 | `seeds.h` | stable | `GLTANG_SeedSequence`: the master seed and atomic counter that every execution's `random.global` and `random.default` are seeded from |

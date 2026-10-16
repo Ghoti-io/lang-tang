@@ -244,6 +244,7 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
       if (gltang_vm_description_create_in_run(exec->allocator, &description) != GLTANG_OK) {
         return GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
       }
+      description->host_context = exec->host_context;
       const bool outer_in_host = exec->in_host;
       exec->in_host = true;
       bool available = member->value_factory(member->user, description);
@@ -304,15 +305,20 @@ GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock
   const char * dot = memchr(text, '.', length);
   size_t first = dot ? (size_t)(dot - text) : length;
   // The first name is looked up in the execution's libraries, then the
-  // program's, then the built-ins; the first that has it wins.
-  const GLTANG_Library * layers[3] = {
+  // program's, then the language layer, then the built-ins; the first that has
+  // it wins.
+  const GLTANG_Library * layers[4] = {
     exec->libraries,
     gltang_exec_current_program(exec)->libraries,
+    exec->language,
     gltang_library_builtins(),
   };
   const GLTANG_LibraryMember * member = NULL;
-  for (size_t i = 0; i < 3 && !member; ++i) {
-    member = gltang_library_find(layers[i], text, first);
+  for (size_t i = 0; i < 4 && !member; ++i) {
+    // Most layers are empty (no execution library, no language layer): not a call to say so.
+    if (layers[i]) {
+      member = gltang_library_find(layers[i], text, first);
+    }
   }
   if (!member) {
     return GLTANG_V_NULL;

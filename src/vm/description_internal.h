@@ -101,6 +101,7 @@ struct GLTANG_ValueDescription {
   size_t byte_capacity;
   size_t counted_bytes;                 ///< What the limit counts: the bytes and GLTANG_NODE_COST a node.
   uint32_t root;                        ///< 0: none, so `null`.
+  void * host_context;                  ///< An in-run description: the execution's host context.
 };
 
 /** @brief The nodes a description holds (the unused 0 is not one). */

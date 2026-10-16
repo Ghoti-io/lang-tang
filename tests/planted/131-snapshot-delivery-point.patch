@@ -1,0 +1,14 @@
+# 131 a restored snapshot delivering its old output again
+# defect: applying a snapshot does not move the delivered point, so the sink is given the output printed before the snapshot as well
+# caught by: the snapshot delivery test (testHost_context)
+#
+--- a/src/vm/snapshot.c
++++ b/src/vm/snapshot.c
+@@ -964,7 +964,6 @@
+     out->committed = p.out_committed;
+   }
+   // What was printed before the snapshot is the snapshot's: a sink sees only what comes after.
+-  exec->sink_delivered = out->committed;
+   if (p.segment_count) {
+     out->segments = p.segments;
+     out->segment_count = out->segment_capacity = p.segment_count;

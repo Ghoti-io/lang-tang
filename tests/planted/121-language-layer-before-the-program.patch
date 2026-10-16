@@ -1,0 +1,16 @@
+# 121 the language layer searched before the program's libraries
+# defect: a library of the language layer hides a program's own library of the same name
+# caught by: the precedence test (testHost_context)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -309,8 +309,8 @@
+   // it wins.
+   const GLTANG_Library * layers[4] = {
+     exec->libraries,
+-    gltang_exec_current_program(exec)->libraries,
+     exec->language,
++    gltang_exec_current_program(exec)->libraries,
+     gltang_library_builtins(),
+   };
+   const GLTANG_LibraryMember * member = NULL;

@@ -1,0 +1,15 @@
+# 124 the language layer not sealed
+# defect: the layer is retained but not sealed, so a host can go on adding members to a library every thread is reading
+# caught by: the readable-layer test (testHost_context)
+#
+--- a/src/library/language.c
++++ b/src/library/language.c
+@@ -48,7 +48,7 @@
+ }
+ 
+ GLTANG_Result gltang_language_set_library(GLTANG_Library * library) {
+-  GLTANG_Library * attached = gltang_library_attach(library);
++  GLTANG_Library * attached = gltang_library_retain(library); /* planted: not sealed */
+   lock();
+   GLTANG_Library * old = slot;
+   slot = attached;

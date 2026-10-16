@@ -197,6 +197,17 @@ GLTANG_API GLTANG_Result gltang_value_description_seal(
 GLTANG_API bool gltang_value_description_sealed(
     const GLTANG_ValueDescription * description);
 
+/**
+ * @brief The host context of the execution a description was made for: the
+ *   description a value factory (::gltang_library_add_value_factory) is handed.
+ *
+ * @param description The description.
+ * @return The pointer given to ::gltang_execution_set_host_context, or NULL
+ *   for a description the host made itself.
+ */
+GLTANG_API void * gltang_description_host_context(
+    const GLTANG_ValueDescription * description);
+
 /** @brief How many nodes the description holds so far; 0 for NULL. */
 GLTANG_API size_t gltang_value_description_nodes(
     const GLTANG_ValueDescription * description);

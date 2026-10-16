@@ -1,0 +1,14 @@
+# 134 a snapshot that names the language layer as the built-ins
+# defect: the layer table of a snapshot maps the language layer's index to the built-ins, so a native or a template held from the layer cannot be named, and a restore would find it nowhere
+# caught by: the snapshot-of-a-layer-member test (testHost_context)
+#
+--- a/src/vm/snapshot.c
++++ b/src/vm/snapshot.c
+@@ -94,7 +94,6 @@
+   switch (index) {
+     case 0: return exec->libraries;
+     case 1: return exec->program_count ? exec->programs[0].program->libraries : NULL;
+-    case 3: return exec->language;
+     default: return gltang_library_builtins();
+   }
+ }

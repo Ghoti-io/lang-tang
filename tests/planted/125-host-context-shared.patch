@@ -1,0 +1,37 @@
+# 125 one host context for every execution
+# defect: the context is kept in a process-wide variable and not in the execution, so two executions see the last one set
+# caught by: the two-executions test (testHost_context)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -648,16 +648,18 @@
+   return GLTANG_OK;
+ }
+ 
++static void * host_context_shared; /* planted */
+ GLTANG_Result gltang_execution_set_host_context(GLTANG_Execution * execution, void * context) {
+   if (!settable(execution)) {
+     return GLTANG_ERR_INVALID;
+   }
+   execution->host_context = context;
++  host_context_shared = context;
+   return GLTANG_OK;
+ }
+ 
+ void * gltang_execution_host_context(const GLTANG_Execution * execution) {
+-  return execution && !execution->destroyed ? execution->host_context : NULL;
++  return execution && !execution->destroyed ? host_context_shared : NULL;
+ }
+ 
+ GLTANG_Result gltang_execution_set_output_sink(GLTANG_Execution * execution, GLTANG_OutputSinkFn sink, void * user) {
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -224,7 +224,7 @@
+ }
+ 
+ void * gltang_call_host_context(const GLTANG_NativeCall * call) {
+-  return call && call->exec ? call->exec->host_context : NULL;
++  return call && call->exec ? gltang_execution_host_context(call->exec) : NULL;
+ }
+ 
+ GLTANG_Result gltang_call_bound(GLTANG_NativeCall * call, GLTANG_Handle * out) {

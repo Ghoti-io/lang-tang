@@ -1,0 +1,15 @@
+# 129 a value factory handed no host context
+# defect: the description a value factory fills does not carry the execution's context, so the factory cannot find its request
+# caught by: the factory test (testHost_context)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -244,7 +244,7 @@
+       if (gltang_vm_description_create_in_run(exec->allocator, &description) != GLTANG_OK) {
+         return GLTANG_NATIVE_POLL(exec, ALLOCATION_REFUSED, 0) != GLTANG_ST_OK ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
+       }
+-      description->host_context = exec->host_context;
++      /* planted: the description carries no context */
+       const bool outer_in_host = exec->in_host;
+       exec->in_host = true;
+       bool available = member->value_factory(member->user, description);

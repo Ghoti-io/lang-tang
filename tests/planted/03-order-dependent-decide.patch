@@ -4,7 +4,7 @@
 #
 --- a/src/vm/execution.c
 +++ b/src/vm/execution.c
-@@ -449,6 +449,34 @@
+@@ -529,6 +529,34 @@
    }
  }
  
@@ -39,10 +39,10 @@
  GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program * program, GLTANG_Execution ** out_execution) {
    if (!context || !program || !out_execution || !grcore_context_is_owner(context)) {
      return GLTANG_ERR_INVALID;
-@@ -535,6 +563,15 @@
-     gcu_allocator_free(allocator, exec);
-     return result;
+@@ -618,6 +646,15 @@
    }
+   // The language layer as it is now: kept for the execution's life.
+   exec->language = gltang_language_library();
 +  /* planted: two DECIDE handlers whose combined vote depends on the order
 +     they run in. B pauses unless A has already run in this poll, so in
 +     registration order nothing happens and under the phase shuffle B

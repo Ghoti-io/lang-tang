@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
+#include <ghoti.io/lang-tang/language.h>
 #include "vm_internal.h"
 #ifdef GLTANG_WITH_JIT
 #include "../jit/jit.h"
@@ -490,6 +491,8 @@ static void release_parts(GLTANG_Execution * exec) {
   exec->root_count = exec->temp_count = 0;
   gltang_library_release(exec->libraries);
   exec->libraries = NULL;
+  gltang_library_release(exec->language);
+  exec->language = NULL;
   gcu_allocator_free(exec->allocator, exec->name_storage);
   exec->name_storage = NULL;
   exec->name = NULL;
@@ -613,6 +616,8 @@ GLTANG_Result gltang_execution_create(GRCORE_Context * context, GLTANG_Program *
     gcu_allocator_free(allocator, exec);
     return result;
   }
+  // The language layer as it is now: kept for the execution's life.
+  exec->language = gltang_language_library();
 #ifdef GLTANG_WITH_JIT
   // Last, and never a reason to refuse the execution: without the JIT's state
   // and its registration the threshold stays 0 and the interpreter runs alone.
@@ -640,6 +645,27 @@ GLTANG_Result gltang_execution_set_libraries(GLTANG_Execution * execution, GLTAN
   GLTANG_Library * attached = gltang_library_attach(library);
   gltang_library_release(execution->libraries);
   execution->libraries = attached;
+  return GLTANG_OK;
+}
+
+GLTANG_Result gltang_execution_set_host_context(GLTANG_Execution * execution, void * context) {
+  if (!settable(execution)) {
+    return GLTANG_ERR_INVALID;
+  }
+  execution->host_context = context;
+  return GLTANG_OK;
+}
+
+void * gltang_execution_host_context(const GLTANG_Execution * execution) {
+  return execution && !execution->destroyed ? execution->host_context : NULL;
+}
+
+GLTANG_Result gltang_execution_set_output_sink(GLTANG_Execution * execution, GLTANG_OutputSinkFn sink, void * user) {
+  if (!settable(execution)) {
+    return GLTANG_ERR_INVALID;
+  }
+  execution->sink = sink;
+  execution->sink_user = user;
   return GLTANG_OK;
 }
 

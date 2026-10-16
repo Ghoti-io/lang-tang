@@ -1,0 +1,15 @@
+# 127 concat that drops the second string's tags
+# defect: the runs of the second string are not put on the joined string, so its text takes the first string's tag
+# caught by: the concat test (testHost_context)
+#
+--- a/src/unicodeString.c
++++ b/src/unicodeString.c
+@@ -232,7 +232,7 @@
+   // The runs: those of each non-empty input, put on the joined graphemes. Two
+   // empty strings join into an empty string of the second's tag.
+   joined->string_type->count = 0;
+-  if (!append_runs(joined->string_type, joined, string1, 0) || !append_runs(joined->string_type, joined, string2, string1->byte_length)) {
++  if (!append_runs(joined->string_type, joined, string1, 0)) { /* planted: string2's runs are lost */
+     gltang_unicode_string_destroy(joined);
+     return NULL;
+   }

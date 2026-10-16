@@ -1,0 +1,15 @@
+# 118 a template call's own output delivered to the sink
+# defect: the delivery does not check that the buffer is the main activation's, so what a template prints reaches the sink as it is printed and again as part of the print that uses its value
+# caught by: the template output test (testHost_context)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -626,7 +626,7 @@
+  */
+ static bool output_deliver(GLTANG_Execution * exec) {
+   GLTANG_OutBuf * out = exec->out;
+-  if (!exec->sink || out != &exec->main_act.out || out->length <= exec->sink_delivered) {
++  if (!exec->sink || out->length <= exec->sink_delivered) { /* planted: any activation's output */
+     return true;
+   }
+   const size_t from = exec->sink_delivered;

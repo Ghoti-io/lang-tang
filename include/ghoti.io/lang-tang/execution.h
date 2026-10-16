@@ -437,6 +437,65 @@ GLTANG_API GLTANG_Result gltang_execution_set_handle_limits(
     GLTANG_Execution * execution, size_t scope_handles, size_t persistent_handles);
 
 /**
+ * @brief Sets the execution's host context: a pointer the engine never reads.
+ *
+ * Every callback reaches it through its call object
+ * (::gltang_call_host_context, ::gltang_description_host_context), so that a
+ * native, a factory or a sink registered once serves every execution and finds
+ * its own request. It is not part of a snapshot: a snapshot applied to an
+ * execution leaves that execution's context as it is.
+ *
+ * @param execution The execution.
+ * @param context The pointer, or NULL for none.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_host_context(
+    GLTANG_Execution * execution, void * context);
+
+/** @brief The pointer given to ::gltang_execution_set_host_context, or NULL. */
+GLTANG_API void * gltang_execution_host_context(
+    const GLTANG_Execution * execution);
+
+/**
+ * @brief Receives the program's output as it is produced.
+ *
+ * Called, in order, once for each run of one tag in a print, after the print has
+ * finished building (so a print that fails inside the engine, or is cut off,
+ * delivers nothing; a print the sink itself refuses is the one exception, below).
+ * `bytes` are
+ * the raw, unencoded bytes of one run of one tag and are valid for the call
+ * only; `type` says how they are to be encoded (::gltang_execution_output_render
+ * encodes the whole output the same way). Runs on the thread that owns the
+ * context, inside the run, as a host function does: anything it calls on the
+ * execution is refused.
+ *
+ * @return true to go on. False refuses: the print is rolled back and its value
+ *   is the ::GLTANG_ERROR_HOST_FAILED error, and the run continues. Segments of
+ *   that print the sink had already been given stay given: delivery is never
+ *   retracted.
+ */
+typedef bool (*GLTANG_OutputSinkFn)(
+    void * user, const char * bytes, size_t length, GLTANG_String_Type type);
+
+/**
+ * @brief Attaches an output sink: the execution gives it each print's tagged
+ *   segments as they are produced, as well as keeping them in the output
+ *   buffer (::gltang_execution_output_raw), which is unchanged.
+ *
+ * Only the program's own output is delivered; what a template call prints is
+ * the value that call returns, and is delivered when that value is printed.
+ * Delivery starts at the first print after the sink is attached, and after a
+ * snapshot is applied it starts from the restored output.
+ *
+ * @param execution The execution.
+ * @param sink The sink, or NULL for none.
+ * @param user Handed to every call of `sink`.
+ * @return As ::gltang_execution_set_libraries.
+ */
+GLTANG_API GLTANG_Result gltang_execution_set_output_sink(
+    GLTANG_Execution * execution, GLTANG_OutputSinkFn sink, void * user);
+
+/**
  * @brief Caps the error list (default 1,024 entries).
  *
  * Entries past the cap are counted in ::gltang_execution_errors_dropped and not

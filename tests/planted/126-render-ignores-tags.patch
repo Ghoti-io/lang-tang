@@ -1,0 +1,15 @@
+# 126 render that encodes nothing
+# defect: render treats every run as trusted, so html, percent and javascript text reaches the output unescaped
+# caught by: the render test (testHost_context)
+#
+--- a/src/unicodeString.c
++++ b/src/unicodeString.c
+@@ -293,7 +293,7 @@
+   }
+   for (size_t i = 0; i < count; ++i) {
+     segments[i].offset = string->grapheme_offsets->data[GLTANG_UC_GET_OFFSET_FROM_TYPE_OFFSET_PAIR(string->string_type->data[i])].ui32;
+-    segments[i].type = (GLTANG_String_Type)GLTANG_UC_GET_TYPE_FROM_TYPE_OFFSET_PAIR(string->string_type->data[i]);
++    segments[i].type = GLTANG_UNICODE_STRING_TYPE_TRUSTED; /* planted: the tag is ignored */
+   }
+   if (!gltang_vm_render_segments(string->buffer, string->byte_length, segments, count, &rendered.buffer, &rendered.length)) {
+     rendered.buffer = NULL;

@@ -101,6 +101,8 @@ expect_fail 'labels/planted-free-encoding (the segment tag the stable API names 
   'encoding.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-encoding"
 expect_fail 'labels/planted-free-handle (the handle API labelled free)' \
   'handle.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-handle"
+expect_fail 'labels/planted-free-language (the language layer API labelled free)' \
+  'language.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-language"
 expect_fail 'labels/planted-free-valuekind (the value kind the handle API names labelled free)' \
   'valuekind.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-valuekind"
 expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \

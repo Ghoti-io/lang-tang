@@ -86,11 +86,15 @@ typedef struct LibraryPath {
   const char * names[MAX_LIBRARY_DEPTH];
 } LibraryPath;
 
-/** The three layers a `use` searches, in order. */
+
+/** The layers a `use` searches: the execution's (0), the program's (1), the built-ins (2) and the language layer (3). The index is a name in a snapshot, so a layer is added at the end; the order of search is another matter (libvalue.c). */
+#define LAYER_COUNT 4
+
 static const GLTANG_Library * layer(const GLTANG_Execution * exec, uint64_t index) {
   switch (index) {
     case 0: return exec->libraries;
     case 1: return exec->program_count ? exec->programs[0].program->libraries : NULL;
+    case 3: return exec->language;
     default: return gltang_library_builtins();
   }
 }
@@ -117,7 +121,7 @@ static bool path_down(const GLTANG_Library * library, const GLTANG_Library * tar
 
 /** Where `target` is, in the first layer that has it. */
 static bool locate_library(const GLTANG_Execution * exec, const GLTANG_Library * target, LibraryPath * path) {
-  for (uint64_t i = 0; i < 3; ++i) {
+  for (uint64_t i = 0; i < LAYER_COUNT; ++i) {
     path->layer = i;
     path->depth = 0;
     if (target && layer(exec, i) && path_down(layer(exec, i), target, path)) {
@@ -129,7 +133,7 @@ static bool locate_library(const GLTANG_Execution * exec, const GLTANG_Library *
 
 /** The library at the end of a path in the destination's layers, or NULL. */
 static const GLTANG_Library * walk_path(const GLTANG_Execution * exec, const LibraryPath * path) {
-  if (path->layer > 2 || path->depth > MAX_LIBRARY_DEPTH) {
+  if (path->layer >= LAYER_COUNT || path->depth > MAX_LIBRARY_DEPTH) {
     return NULL;
   }
   const GLTANG_Library * library = layer(exec, path->layer);
@@ -161,7 +165,7 @@ static const GLTANG_Library * owner_down(const GLTANG_Library * library, const G
 
 /** The library `member` belongs to, in any layer. */
 static const GLTANG_Library * find_owner(const GLTANG_Execution * exec, const GLTANG_LibraryMember * member) {
-  for (uint64_t i = 0; i < 3; ++i) {
+  for (uint64_t i = 0; i < LAYER_COUNT; ++i) {
     const GLTANG_Library * found = owner_down(layer(exec, i), member, 0);
     if (found) {
       return found;
@@ -190,7 +194,7 @@ static bool template_down(const GLTANG_Library * library, const GLTANG_Program *
 /** The template member whose program is `program`, in any layer. */
 static const GLTANG_LibraryMember * find_template(const GLTANG_Execution * exec, const GLTANG_Program * program) {
   const GLTANG_LibraryMember * member = NULL;
-  for (uint64_t i = 0; i < 3; ++i) {
+  for (uint64_t i = 0; i < LAYER_COUNT; ++i) {
     if (template_down(layer(exec, i), program, &member, 0)) {
       return member;
     }
@@ -233,7 +237,7 @@ static GRCORE_Result core_get_path(GRCORE_SnapshotReader * r, LibraryPath * path
   if (res == GRCORE_OK) {
     res = grcore_snapshot_reader_u64(r, &path->depth);
   }
-  if (res == GRCORE_OK && (path->layer > 2 || path->depth > MAX_LIBRARY_DEPTH)) {
+  if (res == GRCORE_OK && (path->layer >= LAYER_COUNT || path->depth > MAX_LIBRARY_DEPTH)) {
     res = GRCORE_ERR_CORRUPT;
   }
   for (uint64_t i = 0; res == GRCORE_OK && i < path->depth; ++i) {
@@ -258,7 +262,7 @@ static GRHEAP_Result image_get_path(GRHEAP_ImageReader * r, LibraryPath * path) 
   if (res == GRHEAP_OK) {
     res = grheap_image_reader_read(r, &path->depth, sizeof path->depth);
   }
-  if (res == GRHEAP_OK && (path->layer > 2 || path->depth > MAX_LIBRARY_DEPTH)) {
+  if (res == GRHEAP_OK && (path->layer >= LAYER_COUNT || path->depth > MAX_LIBRARY_DEPTH)) {
     res = GRHEAP_ERR_CORRUPT;
   }
   for (uint64_t i = 0; res == GRHEAP_OK && i < path->depth; ++i) {
@@ -959,6 +963,8 @@ GRCORE_Result gltang_vm_exec_restore(GRCORE_Context * context, void * value, GRC
     out->capacity = p.out_length + 1u;
     out->committed = p.out_committed;
   }
+  // What was printed before the snapshot is the snapshot's: a sink sees only what comes after.
+  exec->sink_delivered = out->committed;
   if (p.segment_count) {
     out->segments = p.segments;
     out->segment_count = out->segment_capacity = p.segment_count;

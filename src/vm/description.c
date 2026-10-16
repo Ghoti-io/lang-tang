@@ -110,6 +110,10 @@ void gltang_vm_description_destroy_in_run(GLTANG_ValueDescription * description)
   }
 }
 
+void * gltang_description_host_context(const GLTANG_ValueDescription * description) {
+  return description ? description->host_context : NULL;
+}
+
 GLTANG_ValueDescription * gltang_value_description_retain(GLTANG_ValueDescription * description) {
   if (!description || description->in_run) {
     return NULL;

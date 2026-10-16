@@ -618,6 +618,43 @@ static void output_rollback(GLTANG_OutBuf * out) {
   }
 }
 
+/**
+ * Gives the output sink what a print has just finished: the segments from the
+ * last delivered point to the end of the output, each as the bytes of one run of
+ * one tag. Only the main activation's output is delivered. Returns false if the
+ * sink refused; `sink_delivered` then still marks the start of this print.
+ */
+static bool output_deliver(GLTANG_Execution * exec) {
+  GLTANG_OutBuf * out = exec->out;
+  if (!exec->sink || out != &exec->main_act.out || out->length <= exec->sink_delivered) {
+    return true;
+  }
+  const size_t from = exec->sink_delivered;
+  const size_t to = out->length;
+  // The segment holding `from`: segments are contiguous and in order.
+  size_t first = out->segment_count;
+  while (first > 0 && out->segments[first - 1u].offset > from) {
+    --first;
+  }
+  first = first ? first - 1u : 0;
+  const bool outer_in_host = exec->in_host;
+  exec->in_host = true;
+  bool taken = true;
+  for (size_t i = first; taken && i < out->segment_count; ++i) {
+    size_t start = out->segments[i].offset > from ? out->segments[i].offset : from;
+    size_t end = i + 1u < out->segment_count ? out->segments[i + 1u].offset : to;
+    end = end > to ? to : end;
+    if (end > start) {
+      taken = exec->sink(exec->sink_user, out->bytes + start, end - start, out->segments[i].type);
+    }
+  }
+  exec->in_host = outer_in_host;
+  if (taken) {
+    exec->sink_delivered = to;
+  }
+  return taken;
+}
+
 GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
   // An error prints as nothing (a marker prints itself): it is swallowed here.
   gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_PRINTED, v, exec->act);
@@ -629,6 +666,10 @@ GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
     output_rollback(exec->out);
     return st != GLTANG_ST_OK ? gltang_vm_failure_value(exec, st) : gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
   }
+  if (!output_deliver(exec)) {
+    output_rollback(exec->out);
+    return gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+  }
   exec->out->committed = exec->out->length;
   return GLTANG_V_NULL;
 }
@@ -638,6 +679,10 @@ GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_Stri
   gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
   GLTANG_Status st = sink_block(&sink, s);
   if (st == GLTANG_ST_OK) {
+    if (!output_deliver(exec)) {
+      output_rollback(exec->out);
+      return gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+    }
     exec->out->committed = exec->out->length;
     return GLTANG_V_NULL;
   }

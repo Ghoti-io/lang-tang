@@ -1,0 +1,16 @@
+# 130 a sink that runs as ordinary engine code
+# defect: the sink is called without the host-function flag, so it can destroy or reconfigure the execution that is running it
+# caught by: the re-entry test (testHost_context)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -637,8 +637,7 @@
+     --first;
+   }
+   first = first ? first - 1u : 0;
+-  const bool outer_in_host = exec->in_host;
+-  exec->in_host = true;
++  const bool outer_in_host = exec->in_host; /* planted: the flag is not set */
+   bool taken = true;
+   for (size_t i = first; taken && i < out->segment_count; ++i) {
+     size_t start = out->segments[i].offset > from ? out->segments[i].offset : from;

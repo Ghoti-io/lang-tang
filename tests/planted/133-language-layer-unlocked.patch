@@ -1,0 +1,16 @@
+# 133 the language layer read without its lock
+# defect: a reader loads and retains the layer without the spin flag the writer holds, so a replacement can free a library between the load and the retain
+# caught by: ThreadSanitizer on the threaded layer test (testHost_context; the TSan arm only, run by the verification job on the EVO-X2)
+#
+--- a/src/library/language.c
++++ b/src/library/language.c
+@@ -58,8 +58,6 @@
+ }
+ 
+ GLTANG_Library * gltang_language_library(void) {
+-  lock();
+-  GLTANG_Library * held = gltang_library_retain(slot);
+-  unlock();
++  GLTANG_Library * held = gltang_library_retain(slot); /* planted: no lock */
+   return held;
+ }

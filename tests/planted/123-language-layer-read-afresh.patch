@@ -1,0 +1,23 @@
+# 123 the current language layer read at every use
+# defect: a use reads the layer the process has now and not the one the execution took when it was created, so a replacement changes a running program
+# caught by: the replacement test (testHost_context)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -299,6 +299,7 @@
+ // Resolving a use
+ // ---------------------------------------------------------------------------
+ 
++GLTANG_Library * gltang_language_library(void);
+ GLTANG_Value gltang_vm_resolve(GLTANG_Execution * exec, const GLTANG_StringBlock * path) {
+   const char * text = gltang_string_bytes(path);
+   size_t length = (size_t)path->byte_length;
+@@ -310,7 +311,7 @@
+   const GLTANG_Library * layers[4] = {
+     exec->libraries,
+     gltang_exec_current_program(exec)->libraries,
+-    exec->language,
++    gltang_language_library(), /* planted: the layer as it is now */
+     gltang_library_builtins(),
+   };
+   const GLTANG_LibraryMember * member = NULL;
