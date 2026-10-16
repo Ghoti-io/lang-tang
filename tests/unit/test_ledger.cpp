@@ -79,18 +79,44 @@ TEST(Ledger, TheRecordedDeparturesAreSeeded) {
 }
 
 TEST(Ledger, IsClosedExactlyWhenNoRowIsOpen) {
-  // After the host API (story 10) section 13.9, the last open row, is a
-  // recorded departure: the error is listed. The execution differential
-  // (story 11) found divergences and recorded each one (D-023 to D-030), and the float spec's first story added D-031, so
-  // the ledger is still closed.
+  // The divergence rows are all decided (D-001 was the last open one, recorded
+  // by story 10). The capability-removed rows (D-032 and after) are open until
+  // spec-tang-host-extensibility restores each capability, so the ledger is not
+  // closed and ctang does not retire (AD-3) while a capability it offered is
+  // missing. What this test guards: nothing but a capability-removed row is
+  // ever left open, and the ledger is closed exactly when none is.
   oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
   ASSERT_TRUE(ledger.valid());
   size_t open = 0;
   for (const auto & row : ledger.rows) {
-    open += row.status == "open";
+    if (row.status == "open") {
+      ++open;
+      EXPECT_EQ(row.category, "capability-removed") << row.id << " is open and is not a capability still to be restored";
+    }
   }
   EXPECT_EQ(ledger.closed(), open == 0);
-  EXPECT_EQ(open, 0u) << "D-001 was the last open row, and story 10 recorded it";
+}
+
+TEST(Ledger, EveryCapabilityRemovedRowSaysWhatCameBackAndWhere) {
+  // spec-tang-host-extensibility story 1: one row per host-visible capability
+  // ctang offered and lang-tang lacks. Each names the story that restores it
+  // (resolved-by H<n>), has no corpus file (nothing differs in a host-free
+  // script), and says in its summary what ctang had and where it is cited.
+  oracle::Ledger ledger = oracle::parse_ledger(oracle::read_text_file(kLedger), kCorpus);
+  ASSERT_TRUE(ledger.valid());
+  size_t rows = 0;
+  for (const auto & row : ledger.rows) {
+    if (row.category != "capability-removed") {
+      continue;
+    }
+    ++rows;
+    EXPECT_TRUE(row.status == "open" || row.status == "fixed") << row.id << " status " << row.status;
+    EXPECT_EQ(row.resolved_by.compare(0, 1, "H"), 0) << row.id << " is not resolved by a story of the host-extensibility spec";
+    EXPECT_TRUE(row.corpus.empty()) << row.id;
+    EXPECT_GT(row.summary.size(), 120u) << row.id << " does not say what ctang had and where it is cited";
+    EXPECT_NE(row.summary.find("ctang/"), std::string::npos) << row.id << " cites no ctang file";
+  }
+  EXPECT_EQ(rows, 25u) << "the inventory of planning/tang-host-extensibility.md section 3 has 25 capabilities to restore";
 }
 
 TEST(Ledger, TheDivergencesTheExecutionDifferentialFindsNameTheirFiles) {
@@ -167,6 +193,23 @@ TEST(Ledger, PlantedDuplicateIdFails) {
 TEST(Ledger, PlantedBadCategoryFails) {
   oracle::Ledger ledger = planted("| D-001 | whim | open | - | - | 9 | x |\n");
   EXPECT_TRUE(mentions(ledger, "category 'whim'"));
+}
+
+TEST(Ledger, PlantedCapabilityRemovedRowIsAcceptedAndKeepsTheLedgerOpen) {
+  // The category and the H<n> story reference are what story 1 of the
+  // host-extensibility spec added; an open row of that category is a
+  // capability not yet restored, and it keeps the ledger open.
+  oracle::Ledger ledger = planted("| D-001 | capability-removed | open | - | - | H5 | ctang/x had it and lang-tang does not, restored by story 5 of the spec |\n");
+  ASSERT_TRUE(ledger.valid()) << (ledger.errors.empty() ? "" : ledger.errors[0]);
+  EXPECT_FALSE(ledger.closed());
+  oracle::Ledger done = planted("| D-001 | capability-removed | fixed | - | - | H5, H6 | restored by stories 5 and 6 |\n");
+  ASSERT_TRUE(done.valid()) << (done.errors.empty() ? "" : done.errors[0]);
+  EXPECT_TRUE(done.closed());
+}
+
+TEST(Ledger, PlantedBadHostStoryReferenceFails) {
+  EXPECT_TRUE(mentions(planted("| D-001 | capability-removed | open | - | - | Hx | x |\n"), "resolved-by 'Hx'"));
+  EXPECT_TRUE(mentions(planted("| D-001 | capability-removed | open | - | - | soon | x |\n"), "resolved-by 'soon'"));
 }
 
 TEST(Ledger, PlantedBadStatusFails) {

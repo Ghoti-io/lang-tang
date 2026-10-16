@@ -1009,8 +1009,9 @@ verdict and requires the judge to name the file.
 The rows are the departures the spec lists: ctang's open section 13 items (9
 and 13), the per-context generator, budgets and the pause and unwind outcomes,
 error reporting, and everything the execution differential found (D-009 to
-D-015, D-017, D-023 to D-030). The ledger is closed when no row is `open`, and
-it is: its final state is in "Verification".
+D-015, D-017, D-023 to D-030). The ledger is closed when no row is `open`. It was
+at the end of milestone 1, and is not since the capability-removed rows were
+added (D-032 to D-056): see "The ledger, final" in "Verification".
 
 Two things the corpus found about ctang are worth recording here because they
 are properties of the language and not of the port: `\r` is not whitespace, so
@@ -1493,10 +1494,22 @@ its context (`Config::relocate`); everything else runs moved.
 
 ### The ledger, final
 
-29 rows: **26 recorded, 3 fixed, 0 open.** The ledger is closed. Categories of
-the recorded rows: 17 ctang defects, 5 limits, 3 error-reporting, 1 rng. ctang
-stays in `libraries.txt` and the oracle gate: whether it still needs to be the
-oracle is a later decision (AD-16 retirement).
+At the end of milestone 1: 29 rows, **26 recorded, 3 fixed, 0 open**, and the
+ledger was closed. Categories of the recorded rows: 17 ctang defects, 5 limits,
+3 error-reporting, 1 rng. ctang stays in `libraries.txt` and the oracle gate:
+whether it still needs to be the oracle is a later decision (AD-16 retirement).
+
+**Since 2026-10-16 the ledger is not closed.** The rows had since grown to 31
+(the float spec's D-031 among them), and D-032 to D-056 are a new category,
+`capability-removed`: one row for each host-visible capability that ctang
+offered and lang-tang lacks, found by comparing the two engines' host surfaces
+(`planning/tang-host-extensibility.md`, section 3). They are `open` until
+`spec-tang-host-extensibility` restores each one, and a row becomes `fixed` when
+its test passes. Because ctang retires only when the ledger is closed (spine
+AD-3), ctang stays while a capability it offered is missing. The milestone-1
+claim above that the ledger was closed was true of the divergences it
+compared; it did not compare what a host could do, which is how these were lost
+without a decision.
 
 ### What is not done
 
@@ -3176,11 +3189,13 @@ both engines, is a different thing and is described under "Verification".
 
 No library other than `math` and `random`, and in those no `next_int_range`,
 `next_float_range`, `next_gaussian`, `shuffle`, `sample` or `choose`: they stay
-`Not implemented`, as in ctang. No arrays or maps injected from the host (scalars,
-native functions, templates and libraries only), no template arguments, no
+`Not implemented`, as in ctang. A host cannot yet inject arrays, maps or its own
+types, or have a native take or return a container: ctang could, the rewrite
+dropped it without a decision, and `spec-tang-host-extensibility` restores it
+(ledger D-032 to D-056). No template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
-differential against ctang is described under "Verification"; the ledger is
-closed (no open row). No debugger in the library: the engine registers the frame
+differential against ctang is described under "Verification". The ledger is
+not closed while D-032 to D-056 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame
 protocol (the frame walk, scopes and variables read from a paused context, which
 name the right program for every frame) and polls at statements when a host asks
 ("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the

@@ -463,7 +463,7 @@ inline bool file_exists(const std::string & path) {
 // recognised and skipped. A malformed row is an error naming its line, and
 // does not stop the others being read, so one run reports every defect.
 inline Ledger parse_ledger(const std::string & text, const std::string & corpus_root) {
-  static const std::set<std::string> categories = {"ctang-defect", "limit", "error-reporting", "rng"};
+  static const std::set<std::string> categories = {"ctang-defect", "limit", "error-reporting", "rng", "capability-removed"};
   static const std::set<std::string> statuses = {"open", "recorded", "fixed"};
   Ledger ledger;
   std::istringstream in(text);
@@ -524,7 +524,7 @@ inline Ledger parse_ledger(const std::string & text, const std::string & corpus_
       err("id " + r.id + " is not unique");
     }
     if (!categories.count(r.category)) {
-      err(r.id + ": category '" + r.category + "' is not one of ctang-defect, limit, error-reporting, rng");
+      err(r.id + ": category '" + r.category + "' is not one of ctang-defect, limit, error-reporting, rng, capability-removed");
     }
     if (!statuses.count(r.status)) {
       err(r.id + ": status '" + r.status + "' is not one of open, recorded, fixed");
@@ -533,9 +533,9 @@ inline Ledger parse_ledger(const std::string & text, const std::string & corpus_
       err(r.id + ": ref '" + r.ref + "' is neither a section 13 number nor -");
     }
     bool resolved_ok = r.resolved_by == "-" || (!r.resolved_by.empty() &&
-        std::all_of(r.resolved_by.begin(), r.resolved_by.end(), [](unsigned char c) { return std::isdigit(c) || c == ',' || c == ' '; }));
+        std::all_of(r.resolved_by.begin(), r.resolved_by.end(), [](unsigned char c) { return std::isdigit(c) || c == ',' || c == ' ' || c == 'H'; }));
     if (!resolved_ok && !r.resolved_by.empty()) {
-      err(r.id + ": resolved-by '" + r.resolved_by + "' is not a story number");
+      err(r.id + ": resolved-by '" + r.resolved_by + "' is not a story number (a milestone-1 story, or H<n> for story n of spec-tang-host-extensibility)");
     }
     if (r.resolved_by.empty()) {
       err(r.id + ": resolved-by is empty");
