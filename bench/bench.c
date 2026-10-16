@@ -598,6 +598,123 @@ static uint64_t template_call_run(uint64_t iterations, double * elapsed) {
   return run_source_with("use t; n = 0; for (i = 0; i < 200; i += 1) { n += t().length; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_template);
 }
 
+/*
+ * The host-extensibility workarounds (step 0 of the workspace's
+ * planning/tang-host-extensibility.md). What a host does today because it
+ * cannot hand a template an array, a map or an object of its own, so that each
+ * capability that work restores has a measured "before" to compare with.
+ *
+ * A list of WORKAROUND_ITEMS links is rendered in C, one run of a scalar-only
+ * item template per item, the outputs joined in C. That is what Defiant's
+ * recent-posts widget does (defiant-core src/render/render.c, the loop over
+ * `taken`). Its unit is one whole list, and the clock covers everything the
+ * host does per item, because a context per item is the workaround's cost:
+ * the "-precompiled" case compiles the item template once, the "-compiled" one
+ * parses and compiles it for every item, as render.c does today.
+ */
+#define WORKAROUND_ITEMS 20
+
+static const char workaround_item_source[] =
+  "<% use title; use url; %><li><a href=\"<%= url %>\"><%= title %></a></li>";
+
+static const char * const workaround_titles[WORKAROUND_ITEMS] = {
+  "Home", "About us", "News & events", "Blog", "Products", "Services", "Support", "Contact",
+  "Careers", "Press", "Partners", "Investors", "Terms", "Privacy", "Accessibility", "Sitemap",
+  "Status", "Developers", "Community", "Search"};
+
+static uint64_t workaround_list(uint64_t iterations, double * elapsed, bool compile_each) {
+  GLTANG_Program * shared = compile_each ? NULL : compile_source(workaround_item_source, GLTANG_PARSE_TEMPLATE);
+  uint64_t sink = 0;
+  double start = now_ns();
+  for (uint64_t it = 0; it < iterations; it++) {
+    size_t total = 0;
+    for (size_t k = 0; k < WORKAROUND_ITEMS; k++) {
+      GLTANG_Program * program = compile_each ? compile_source(workaround_item_source, GLTANG_PARSE_TEMPLATE) : shared;
+      char url[32];
+      int url_length = snprintf(url, sizeof url, "/page/%zu", k);
+      GLTANG_Library * library = NULL;
+      if (gltang_library_create(NULL, &library) != GLTANG_OK
+          || gltang_library_add_string(library, "title", workaround_titles[k], strlen(workaround_titles[k]), GLTANG_UNICODE_STRING_TYPE_HTML) != GLTANG_OK
+          || gltang_library_add_string(library, "url", url, (size_t)url_length, GLTANG_UNICODE_STRING_TYPE_HTML_ATTRIBUTE) != GLTANG_OK) {
+        setup_failed("an item library");
+      }
+      Engine e;
+      engine_open(&e, program, GRCORE_UNLIMITED);
+      if (gltang_execution_set_libraries(e.execution, library) != GLTANG_OK) {
+        setup_failed("an item library attached");
+      }
+      gltang_library_release(library);
+      GRCORE_Outcome outcome;
+      if (grcore_run(e.context, gltang_execution_entry, e.execution, &outcome) != GRCORE_OK || outcome != GRCORE_OUTCOME_FINISHED) {
+        setup_failed("an item run");
+      }
+      char * text = NULL;
+      size_t length = 0;
+      if (gltang_execution_output_render(e.execution, &text, &length) != GLTANG_OK || length == 0) {
+        setup_failed("an item's output");
+      }
+      total += length;
+      sink += (uint64_t)(unsigned char)text[length - 1u];
+      gltang_buffer_free(text);
+      engine_close(&e);
+      if (compile_each) {
+        gltang_program_release(program);
+      }
+    }
+    sink += total;
+  }
+  *elapsed = now_ns() - start;
+  if (shared) {
+    gltang_program_release(shared);
+  }
+  return sink;
+}
+
+static uint64_t workaround_list_precompiled_run(uint64_t iterations, double * elapsed) {
+  return workaround_list(iterations, elapsed, false);
+}
+
+static uint64_t workaround_list_compiled_run(uint64_t iterations, double * elapsed) {
+  return workaround_list(iterations, elapsed, true);
+}
+
+/*
+ * An object emulated with nested libraries: `account` is a sub-library whose
+ * members are its fields, and `account.roles` a sub-library of booleans. The
+ * template reads three fields 200 times. Expected: (11 + 42 + 1) * 200.
+ */
+static void setup_account_libraries(GLTANG_Execution * execution) {
+  GLTANG_Library * root = NULL;
+  GLTANG_Library * account = NULL;
+  GLTANG_Library * roles = NULL;
+  if (gltang_library_create(NULL, &root) != GLTANG_OK
+      || gltang_library_create("account", &account) != GLTANG_OK
+      || gltang_library_create("roles", &roles) != GLTANG_OK
+      || gltang_library_add_string(account, "name", "Ann Example", 11, GLTANG_UNICODE_STRING_TYPE_HTML) != GLTANG_OK
+      || gltang_library_add_string(account, "email", "ann@example.com", 15, GLTANG_UNICODE_STRING_TYPE_HTML) != GLTANG_OK
+      || gltang_library_add_integer(account, "id", 42) != GLTANG_OK
+      || gltang_library_add_bool(roles, "admin", true) != GLTANG_OK
+      || gltang_library_add_bool(roles, "editor", false) != GLTANG_OK
+      || gltang_library_add_library(account, roles) != GLTANG_OK
+      || gltang_library_add_library(root, account) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, root) != GLTANG_OK) {
+    setup_failed("an account emulated with libraries");
+  }
+  gltang_library_release(roles);
+  gltang_library_release(account);
+  gltang_library_release(root);
+}
+
+static uint64_t workaround_account_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = (11 + 42 + 1) * 200;
+  uint64_t sink = run_source_with(
+      "use account; n = 0; for (i = 0; i < 200; i += 1) { n += account.name.length + account.id; if (account.roles.admin) { n += 1; } } n;",
+      iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_account_libraries);
+  have_expected_integer = 0;
+  return sink;
+}
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -1589,6 +1706,9 @@ static const Case cases[] = {
     {"run-use-member-200", use_member_run, 5000u, 5u},
     {"run-native-call-1000", native_call_run, 5000u, 5u},
     {"run-template-call-200", template_call_run, 2000u, 5u},
+    {"workaround-list-20-precompiled", workaround_list_precompiled_run, 500u, 1u},
+    {"workaround-list-20-compiled", workaround_list_compiled_run, 200u, 1u},
+    {"workaround-account-libraries-200", workaround_account_run, 5000u, 5u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},
