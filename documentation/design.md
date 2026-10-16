@@ -814,6 +814,8 @@ value (`use cfg.a.b`) materializes the whole member and reads the attributes of
 the copy, as a library member is read; the benchmark measures a path read so that
 a cost shows if it is one.
 
+**Measured** (`notes/lang-tang/perf-history.md`, "Story 2: host-described values, measured"). The 20-link list that took 95 us through 20 engines takes 17.8 us as one host array, building the description in the clock, and 15.5 us when it is built once. A description of 50,000 integers costs 0.47 ms to reach (a script-built array of the same size, 0.42 ms); a string element about 36 ns, an integer about 9 ns. A path read through a described value copies the whole member (10 us for a map holding 1,000 elements). On the existing cases the stop rule found one repair (the call object's cleanup cost each native call 91 instructions, +1.1%; out of line it is +0.64%) and five float-print micro-cases that are 12 to 15 ns slower at identical instruction counts, which is code placement and was not chased.
+
 **Snapshots.** A copy is plain heap data (arrays, maps, strings, numbers), so a
 snapshot of an execution that holds one needs nothing of the description, and
 `snapshot.c` names only natives, templates and libraries.
