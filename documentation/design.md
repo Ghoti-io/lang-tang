@@ -912,6 +912,8 @@ them are zero for a call that never asks for a handle, and the cleanup of a call
 is still two loads and a branch for one that sets no answer by description or
 handle.
 
+**Measured** (`notes/lang-tang/perf-history.md`, "Story 3: handle scopes, measured"). A native that never asks for a handle costs +0.72% instructions over the story-0 engine (`run-native-call-1000`; +0.9% in the A/B wall clock, inside its spread). A call that reads its bound value through a handle costs 1.17 to 1.22 times a scalar call (about 1,260 more instructions: a frame, two handle operations, a close). Building 20 lists of 20 rows through the handle API costs 6.8 us a list, 2.6 times less than handing the same list over as a description, which is the tool for plain data the host already holds. One existing case, `workaround-list-20-precompiled`, is +1.10% in instructions on a path with no handle code (allocator slow-path calls; not attributed, recorded); the wall-clock flags against the story-0 table are session drift and the A/B shows none.
+
 ### The seed sequence and the generator per context
 
 A `GLTANG_SeedSequence` holds a master seed and an atomic counter. Draw `k` is
