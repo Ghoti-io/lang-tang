@@ -602,7 +602,7 @@ resume_loop:
               S[sp - 1u] = kf;
               const GLTANG_Function * kfn = &program->functions[ktarget];
               SAVE();
-              grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
+              grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
               GRCORE_FrameRef kframe;
               GRCORE_Result kpushed = grcore_stack_push(stack, exec->engine, kfn->frame_slots, &kframe);
               if (kpushed != GRCORE_OK) {
@@ -657,7 +657,7 @@ resume_loop:
             }
             const GLTANG_Function * top = &member->program->functions[0];
             SAVE();
-            grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
+            grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
             // Before the callee's frame is pushed: what has been spent so far
             // belongs to the caller, so the fuel is flushed, and then the
             // callee's scope is opened at the top of the stack as it stands.
@@ -731,7 +731,7 @@ resume_loop:
           goto call_result;
         }
         SAVE();
-        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u});
+        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
         GRCORE_FrameRef callee_frame;
         GRCORE_Result pushed = grcore_stack_push(stack, exec->engine, cf->frame_slots, &callee_frame);
         if (pushed != GRCORE_OK) {

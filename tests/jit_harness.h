@@ -86,7 +86,7 @@ struct Script {
  private:
   static void handler(GRCORE_Context * context, void * value, GRCORE_PollCall *) {
     Script * self = static_cast<Script *>(value);
-    GRCORE_PollIdentity id = {0, 0};
+    GRCORE_PollIdentity id = {0, 0, 0};
     if (grcore_context_poll_identity(context, &id) == GRCORE_OK) {
       self->identities.push_back(id);
     }
@@ -211,7 +211,7 @@ inline Outcome run(const Scenario & sc, long threshold) {
   bool done = context.execute();
   while (!done && context.paused() && out.pauses.size() < sc.max_pauses) {
     GRCORE_Location where = grcore_context_pause_location(context.context);
-    GRCORE_PollIdentity id = {0, 0};
+    GRCORE_PollIdentity id = {0, 0, 0};
     (void)grcore_context_poll_identity(context.context, &id);
     out.pauses.push_back(std::string(where.file ? where.file : "?") + ":" + std::to_string(where.line) + "@" + std::to_string(id.function) + "/" +
         std::to_string(id.offset) + " fuel " + std::to_string(grcore_context_fuel_used(context.context)));

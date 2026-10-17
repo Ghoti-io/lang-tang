@@ -6,9 +6,9 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -116,7 +116,7 @@
-   }
-   (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){callee, 0});
+@@ -184,7 +184,7 @@
+   (void)grcore_stack_set_identity(stack, frame,
+       (GRCORE_PollIdentity){callee, 0, exec->engine});
    // The CALL's own fuel, now that the call is made.
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
 +  /* planted: the CALL's fuel is not added */

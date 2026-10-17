@@ -181,7 +181,8 @@ static uint32_t hook_push(void * context, void * callee_environment, uint64_t ca
   for (uint32_t i = parameters; i < cf->local_count; ++i) {
     S[H + i] = 0;
   }
-  (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){callee, 0});
+  (void)grcore_stack_set_identity(stack, frame,
+      (GRCORE_PollIdentity){callee, 0, exec->engine});
   // The CALL's own fuel, now that the call is made.
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
   ++exec->jit_stats.calls;

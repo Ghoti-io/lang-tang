@@ -1007,7 +1007,7 @@ static GLTANG_Result analyse(Ctx * c) {
 // ---------------------------------------------------------------------------
 
 static GRCORE_PollIdentity identity_at(const Ctx * c, uint32_t index) {
-  return (GRCORE_PollIdentity){c->fword, index};
+  return (GRCORE_PollIdentity){c->fword, index, c->exec->engine};
 }
 
 /**
@@ -1078,7 +1078,9 @@ static void guard(Ctx * c, GRJIT_Operand cond, uint32_t index, uint32_t depth) {
 /** A call to a helper that is not a GC point: `helper(exec)`. */
 static void call_exec_helper(Ctx * c, uint64_t helper) {
   GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->exec)};
-  B(grjit_builder_call(c->b, GRJIT_NO_VREG, helper, GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, args, 1, (GRCORE_PollIdentity){0, 0}, NULL, 0));
+  B(grjit_builder_call(c->b, GRJIT_NO_VREG, helper, GRJIT_CALL_NO_GC,
+      GRCORE_SITE_GC_POINT_CALL, args, 1, (GRCORE_PollIdentity){0, 0, 0},
+      NULL, 0));
 }
 
 /** The charge, the flush and the poll of the interpreter's POLL (and LINE). */
@@ -1317,7 +1319,7 @@ static void emit_native_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, const 
   bitcast(c, t[TMP_A], T[at]);
   GRJIT_Operand guard_args[2] = {V(t[TMP_A]), I((int64_t)(intptr_t)member)};
   B(grjit_builder_call(c->b, t[TMP_C], (uint64_t)(uintptr_t)gltang_jit_callee_is_native, GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, guard_args, 2,
-      (GRCORE_PollIdentity){0, 0}, NULL, 0));
+      (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
   GRJIT_BlockId good, bad;
   new_block(c, &good);
   new_block(c, &bad);

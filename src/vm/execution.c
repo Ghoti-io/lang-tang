@@ -376,7 +376,8 @@ static void descriptor_unwind(GRCORE_Context * context, const GRCORE_AbstractFra
 #define DESCRIPTOR_REVERSE NULL
 #endif
 
-const GRCORE_EngineDescriptor gltang_engine_descriptor = GRCORE_ENGINE_DESCRIPTOR_INIT(
+const GRCORE_EngineDescriptor gltang_engine_descriptor = {
+  .size = sizeof(GRCORE_EngineDescriptor),
   .name = "lang-tang",
   .slot_kind = descriptor_slot_kind,
   .locate = descriptor_locate,
@@ -387,7 +388,9 @@ const GRCORE_EngineDescriptor gltang_engine_descriptor = GRCORE_ENGINE_DESCRIPTO
   .unwind = descriptor_unwind,
   .convert = DESCRIPTOR_CONVERT,
   .reverse = DESCRIPTOR_REVERSE,
-);
+  .function_name = NULL,
+  .memory = {NULL, NULL, NULL},
+};
 
 // ---------------------------------------------------------------------------
 // Roots

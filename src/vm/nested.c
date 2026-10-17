@@ -87,7 +87,7 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   const size_t base = grcore_stack_frame_count(stack);
   if (caller.offset) {
     const uint64_t * slots = grcore_stack_slots(stack, caller);
-    (void)grcore_stack_set_identity(stack, caller, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset});
+    (void)grcore_stack_set_identity(stack, caller, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
   }
   GRCORE_FrameRef frame;
   GRCORE_Result pushed = grcore_stack_push(stack, exec->engine, callee->frame_slots, &frame);
