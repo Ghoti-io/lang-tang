@@ -971,6 +971,8 @@ puts each grapheme in the run it began in, so it does not copy the grapheme
 offsets of its inputs (ctang's did, and a combining mark at the start of the
 second string stayed a grapheme of its own).
 
+**Measured** (`notes/lang-tang/perf-history.md`, "Story 4 ... measured"). A native that reads the host context costs what one that returns an integer costs (0.96 times the scalar native call). A `use` that reaches a library of the language layer costs what a `use` of the execution's own library does. An output sink adds about 5% of the wall clock to a run that does little but print (+8% instructions: an indirect call and a constant-time search from the last segment for each print). On existing paths the cost is a layer's NULL test per `use` and about 105 instructions for each execution created and destroyed (the layer's lock, retain and release): `run-use-member-200` is +0.66% and `workaround-list-20-precompiled`, which makes 20 executions for one list, is +1.38%, over the 1% rule and recorded; a program that makes one execution for a request pays it once.
+
 ### The seed sequence and the generator per context
 
 A `GLTANG_SeedSequence` holds a master seed and an atomic counter. Draw `k` is
