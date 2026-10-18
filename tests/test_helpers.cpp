@@ -50,6 +50,10 @@ std::atomic<long> g_calls{0};
 std::atomic<long> g_fail_at{0};
 std::atomic<bool> g_fired{false};
 std::atomic<bool> g_tracking{false};
+// Make the allocator availability probe observable across the compiler's
+// malloc/free optimization. A thread-local slot also keeps concurrent probes
+// from exchanging and freeing one another's allocation.
+thread_local void * volatile g_availability_probe = nullptr;
 // Blocks handed out by the wrappers while tracking, and not yet freed. The set
 // is libstdc++'s, which allocates inside libstdc++ and so does not recurse.
 std::unordered_set<void *> & live_blocks() {
@@ -171,8 +175,10 @@ long calls() {
 
 bool available() {
   long before = g_calls;
-  void * block = gcu_malloc(1);
+  g_availability_probe = gcu_malloc(1);
   bool seen = g_calls != before;
+  void * block = g_availability_probe;
+  g_availability_probe = nullptr;
   gcu_free(block);
   return seen;
 }

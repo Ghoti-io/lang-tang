@@ -717,6 +717,13 @@ int gltang_vm_jit_test_discard(GLTANG_Execution * execution, uint64_t fword) {
   return 1;
 }
 
+/* For tests only: observe which program-qualified function owns a counted exit. */
+int gltang_vm_jit_test_function_deopts(GLTANG_Execution * execution, uint64_t fword) {
+  GLTANG_Jit * jit = execution ? execution->jit : NULL;
+  GLTANG_JitFn * f = jit ? gltang_jit_find_fn(execution, jit, fword, false) : NULL;
+  return f ? (int)f->deopts : -1;
+}
+
 /* For the tests only: the stray words (raw words where a value belongs) the failed rebuild left in the guest frames. Declared in vm/test_hooks.h. */
 uint64_t gltang_vm_jit_test_stray_words(GLTANG_Execution * execution) {
   return execution && execution->jit ? execution->jit->test_stray_words : 0;

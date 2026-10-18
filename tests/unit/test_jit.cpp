@@ -160,6 +160,31 @@ TEST(Jit, IntegerOverflowInsideCompiledCodeDeoptimizesAndTheInterpreterBoxesTheR
   EXPECT_GE(jit.stats.entries, 12u);
 }
 
+TEST(Jit, ATemplateFunctionDeoptimizesWithItsProgramQualifiedCallToken) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc;
+  sc.source = "use t; print(t());";
+  sc.script = true;
+  Part t;
+  t.name = "t";
+  t.source = "function f(a) { return a + 1; } print(f(2)); print(f(\"x\"));";
+  sc.parts.push_back(t);
+  int template_function_deopts = -1;
+  sc.after = [&](Context & context) {
+    const int count = gltang_vm_jit_test_function_deopts(context.execution, (uint64_t{1} << 32) | 1u);
+    if (count >= 0) {
+      template_function_deopts = count;
+    }
+  };
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  EXPECT_TRUE(jit.finished);
+  EXPECT_GE(jit.stats.entries, 2u);
+  EXPECT_GE(jit.stats.deopts, 1u);
+  EXPECT_GE(template_function_deopts, 1) << "the guard exit must belong to template program 1, function 1";
+  EXPECT_EQ(jit.stats.compile_failures, 0u);
+}
+
 TEST(Jit, AnOperandThatIsNotASmallIntegerDeoptimizesAtTheOperation) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;

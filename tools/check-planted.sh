@@ -169,7 +169,7 @@
 #   word in the conversion's root cell across a collection) and 47 with the failing-rebuild
 #   seam (raw words copied into the guest frame before a rebuild that is then refused).)
 #
-# Cases 13, 14, 15, 20, 27 and 46 (`--relocate`) are caught only by runtime-heap's relocation
+# Cases 13, 14, 15, 20, 27, 46 and 117 (`--relocate`) are caught only by runtime-heap's relocation
 # torture, which moves every unpinned object at every collection: a reference
 # that is visited and not updated is a defect nothing else can see, because the
 # collector never moves anything otherwise. They are built and run against the
@@ -188,7 +188,7 @@
 #   --quick     the cases that finish in about a minute (03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116; 10 is retired); `make test` runs these
 #   --slow      the torture cases (01, 02); `make test-torture` runs these
 #   --all       every case (the default); `make check-planted`
-#   --relocate  cases 13, 14, 15, 20, 27 and 46, against PLANTED_RELOC_PREFIX and
+#   --relocate  cases 13, 14, 15, 20, 27, 46 and 117, against PLANTED_RELOC_PREFIX and
 #               PLANTED_RELOC_LIBDIR (a relocation runtime-heap); `make
 #               check-planted-relocate` runs these, and `make test-relocate`
 #               calls that
@@ -205,6 +205,11 @@
 # pkg-config path is the caller's, as for every make in this library.
 
 set -u
+# Every explicit --gtest_filter below selects its intended detector. Inherited
+# sharding, repetition, or disabled-test settings cannot narrow a planted
+# control (or turn a zero-test control into an apparent pass).
+unset GTEST_FILTER GTEST_TOTAL_SHARDS GTEST_SHARD_INDEX GTEST_SHARD_STATUS_FILE
+unset GTEST_REPEAT GTEST_ALSO_RUN_DISABLED_TESTS
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
@@ -223,10 +228,6 @@ esac
 # Cases whose defect is in code only a JIT=yes build contains.
 JIT_ONLY="08-jit-wrong-tag 09-jit-skipped-fuel 15-push-reads-args-first 16-push-omits-call-fuel 17-depth-test-off-by-one 18-deopt-skips-caller-identities 19-deopt-ignores-failed-rebuild 20-poll-helper-copies-the-guest-frame-back 21-compile-hook-does-not-refuse 22-remembered-exit-counts 23-call-passes-the-entry-flag-as-one 24-discard-destroys-the-code-directly 25-native-record-not-closed 26-native-depth-miscount 27-arguments-not-pinned 28-stale-stack-over-a-nested-activation 29-unwind-status-read-as-ok 30-member-load-by-name-not-charged 31-deep-push-refused 32-float-add-one-ulp-off-in-the-jit-arm 33-float-subnormal-flushed-in-the-jit-arm 34-float-nan-where-a-number-belongs-in-the-jit-arm 35-pool-boxes-not-reported-as-roots 36-reservation-short-by-one 37-raw-word-in-the-root-cell-across-a-collection 38-reverse-with-no-type-test 39-pop-does-not-retract 40-unwind-converts 41-box-at-every-slow-poll 42-merge-conflict-ignored 43-float-constant-through-32-bits 44-pool-not-let-go-at-host-return 45-failed-push-keeps-the-extension 46-pool-box-reported-through-a-copy 47-failed-rebuild-leaves-raw-words-in-the-guest-frame 48-float-divide-guard-tests-the-dividend 49-integer-operand-converted-unsigned 50-unbox-with-no-kind-test 51-ge-and-le-as-the-negation-of-lt-and-gt 52-as-int-upper-bound-inclusive 53-integer-quotient-not-range-guarded 54-result-slot-written-before-the-second-guard 55-mixed-subtraction-operands-swapped 56-float-operation-adds-no-fuel 57-arithmetic-on-raw-operands-is-an-exit 58-integer-converted-from-its-tagged-word 59-unary-minus-is-zero-minus-x 60-unbox-with-no-pointer-test 61-as-int-lower-bound-too-wide 62-nan-divisor-read-as-zero 63-modulo-zero-divisor-guard-removed 64-neg-compare-cast-mod-div-add-no-fuel 65-bench-reference-one-off 66-every-push-looks-the-callee-up 67-every-extension-is-recorded 68-bench-integer-reference-one-off 69-bench-steady-expectation-one-off 70-bench-family-expectation-one-off 71-bench-compiled-row-is-interpreted 72-bench-discard-expectation-wrong 73-expected-exit-counts-toward-the-limit 74-static-decline-ignores-the-loop 75-static-decline-ignores-a-real-exit 76-bench-expected-exit-count-wrong 77-bench-decline-not-expected 78-bench-counted-exit-count-wrong 79-static-decline-ignores-a-normal-return 80-exit-sites-from-the-functions-record 81-bench-exit-kinds-sum-omits-remembered 82-bench-declined-callee-entries-ignored 83-every-compiled-call-looks-the-callee-up"
 
-if [ -z "$LIBDIR" ]; then
-  printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
-  exit 2
-fi
 PREFIX_ARG=""
 if [ -n "$PREFIX" ]; then
   PREFIX_ARG="PREFIX=$PREFIX"
@@ -234,6 +235,7 @@ fi
 
 MODE=all
 SELFTEST=0
+SELECTION_SELFTEST=0
 NAMED=""
 for arg in "$@"; do
   case "$arg" in
@@ -242,10 +244,15 @@ for arg in "$@"; do
     --all) MODE=all ;;
     --relocate) MODE=relocate ;;
     --selftest) SELFTEST=1 ;;
+    --selftest-selection) SELECTION_SELFTEST=1 ;;
     -*) printf 'check-planted: unknown option %s\n' "$arg" >&2; exit 2 ;;
     *) NAMED="$NAMED $arg" ;;
   esac
 done
+if [ -z "$LIBDIR" ] && [ "$SELECTION_SELFTEST" -ne 1 ]; then
+  printf 'check-planted: set PLANTED_LIBDIR to the directory the dependencies'"'"' shared libraries are in, and PLANTED_PREFIX to the PREFIX they were installed with (make check-planted does both)\n' >&2
+  exit 2
+fi
 
 # The cases that need a runtime-heap that moves objects.
 RELOCATE_CASES="13-temporaries-through-a-copy 14-array-storage-through-a-copy 15-push-reads-args-first 20-poll-helper-copies-the-guest-frame-back 27-arguments-not-pinned 46-pool-box-reported-through-a-copy 117-persistent-reported-through-a-copy"
@@ -452,6 +459,49 @@ run_test() {
   esac
 }
 
+# A passing control must have executed and passed all selected Google Test
+# cases. The
+# benchmark-smoke plants are the only non-GTest run_test branches.
+completed_selected_cases() {
+  case "$1" in
+    65-*|68-*|69-*|70-*|71-*|72-*|76-*|77-*|78-*|81-*|82-*) return 0 ;;
+  esac
+  printf '%s\n' "$2" | awk '
+    /^\[=+\] [1-9][0-9]* tests? from [1-9][0-9]* test suites? ran\./ {
+      completed = $2; completed_lines++
+    }
+    /^\[[[:space:]]*PASSED[[:space:]]*\] [1-9][0-9]* tests?\./ {
+      passed = $4; passed_lines++
+    }
+    /^\[[[:space:]]*SKIPPED[[:space:]]*\]/ { skipped_lines++ }
+    END {
+      exit !(completed_lines == 1 && passed_lines == 1 &&
+             completed > 0 && completed == passed && skipped_lines == 0)
+    }
+  '
+}
+
+if [ "$SELECTION_SELFTEST" -eq 1 ]; then
+  good='[==========] 2 tests from 1 test suite ran.
+[  PASSED  ] 2 tests.'
+  zero='[==========] 0 tests from 0 test suites ran.
+[  PASSED  ] 0 tests.'
+  all_skipped='[==========] 2 tests from 1 test suite ran.
+[  SKIPPED ] 2 tests, listed below:'
+  partial_skipped='[==========] 2 tests from 1 test suite ran.
+[  PASSED  ] 1 test.
+[  SKIPPED ] 1 test, listed below:'
+  if ! completed_selected_cases selftest "$good" ||
+     completed_selected_cases selftest "$zero" ||
+     completed_selected_cases selftest "$all_skipped" ||
+     completed_selected_cases selftest "$partial_skipped"; then
+    printf 'check-planted: selection selftest failed\n' >&2
+    exit 1
+  fi
+  printf 'check-planted: selection selftest passed\n'
+  exit 0
+fi
+
 name_of_test() {
   case "$1" in
     01-*|02-*) echo "testExecute_complex under torture and verify" ;;
@@ -639,6 +689,9 @@ run_case() {
           if [ "$status" -ne 0 ]; then
             printf '  FAIL: with the defect in place and relocation off, %s still failed (exit %s), so relocation is not what found it: %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")" >&2
             rc=1
+          elif ! completed_selected_cases "$case_name" "$out"; then
+            printf '  FAIL: relocation-off control selected no completed Google Test cases\n' >&2
+            rc=1
           else
             printf '  and passes with relocation off: relocation is the instrument\n'
           fi
@@ -656,6 +709,9 @@ run_case() {
   status=$?
   if [ "$status" -ne 0 ]; then
     printf '  CONTROL FAILED: %s fails without the defect (exit %s): %s\n' "$(name_of_test "$case_name")" "$status" "$(failing_line "$out")" >&2
+    rc=1
+  elif ! completed_selected_cases "$case_name" "$out"; then
+    printf '  CONTROL FAILED: %s selected no completed Google Test cases\n' "$(name_of_test "$case_name")" >&2
     rc=1
   else
     printf '  control passes\n'
@@ -677,6 +733,10 @@ make_copy() {
 failures=0
 
 if [ "$SELFTEST" = 1 ]; then
+  if ! "$0" --selftest-selection; then
+    printf '  FAIL: selected-case pass/skip control selftest failed\n' >&2
+    exit 1
+  fi
   make_copy
   printf 'check-planted --selftest\n'
   # The unpatched copy must build for the rest to mean anything.

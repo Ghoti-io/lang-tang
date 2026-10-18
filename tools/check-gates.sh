@@ -144,8 +144,8 @@ printf 'make options\n'
 # dependencies are stubs, so that the one under test is the first one missing.
 pcdir="$work/pc"
 mkdir -p "$pcdir"
-for m in cutil unicode runtime-core runtime-heap; do
-  printf 'Name: %s\nDescription: stub\nVersion: 0\nCflags: -I/nonexistent\nLibs: -lnone\n' "$m" > "$pcdir/ghoti.io-$m-0.pc"
+for module in ghoti.io-cutil-0 ghoti.io-unicode-0 ghoti.io-runtime-core-0 ghoti.io-runtime-heap-0; do
+  printf 'Name: %s\nDescription: stub\nVersion: 0\nCflags: -I/nonexistent\nLibs: -lnone\n' "$module" > "$pcdir/$module.pc"
 done
 mk() { env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL -u PREFIX -u JIT PKG_CONFIG_PATH="$pcdir" make -C "$ROOT" -n all WITH_DEBUG=no PC_INSTALL_PATH="$pcdir" "$@"; }
 expect_fail 'make/JIT=maybe is refused' 'JIT must be yes or no' mk JIT=maybe
@@ -237,7 +237,8 @@ printf 'int stub_cutil(void);\nint stub_unicode(void);\nint stub_core(void);\nin
 printf 'int stub_text(void) { return 9; }\n' > "$work/text.c"
 printf 'int stub_chron(void) { return 10; }\n' > "$work/chron.c"
 printf 'int stub_regex(void) { return 11; }\n' > "$work/regex.c"
-printf 'int stub_debug(void);\nint stub_text(void);\nint stub_chron(void);\nint stub_regex(void);\nint stub_cutil(void);\nint stub_self(void);\nint main(void) { return stub_debug() + stub_text() + stub_chron() + stub_regex() + stub_cutil() + stub_self(); }\n' > "$work/host_ok.c"
+printf 'int stub_security(void) { return 12; }\n' > "$work/security.c"
+printf 'int stub_debug(void);\nint stub_text(void);\nint stub_chron(void);\nint stub_regex(void);\nint stub_security(void);\nint stub_cutil(void);\nint stub_self(void);\nint main(void) { return stub_debug() + stub_text() + stub_chron() + stub_regex() + stub_security() + stub_cutil() + stub_self(); }\n' > "$work/host_ok.c"
 printf 'int stub_jit(void);\nint stub_self(void);\nint main(void) { return stub_jit() + stub_self(); }\n' > "$work/host_bad.c"
 printf 'int stub_debug(void);\nint stub_self(void);\nint main(void) { return stub_debug() + stub_self(); }\n' > "$work/other_bad.c"
 printf 'int stub_text(void);\nint planted_text(void) { return stub_text(); }\n' > "$work/planted_text.c"
@@ -276,9 +277,10 @@ built=1
   $CC $SHFLAGS -o "$stubs/libghoti.io-text-0.$SHEXT" "$work/text.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-chron-0.$SHEXT" "$work/chron.c" &&
   $CC $SHFLAGS -o "$stubs/libghoti.io-regex-0.$SHEXT" "$work/regex.c" &&
+  $CC $SHFLAGS -o "$stubs/libghoti.io-security-0.$SHEXT" "$work/security.c" &&
   $CC -o "$work/host-ok/tang$EXE" "$work/host_ok.c" \
     -L"$stubs" -Wl,--no-as-needed -l:libghoti.io-runtime-debug-0.$SHEXT -l:libghoti.io-text-0.$SHEXT \
-    -l:libghoti.io-chron-0.$SHEXT -l:libghoti.io-regex-0.$SHEXT -l:libghoti.io-cutil-0.$SHEXT \
+    -l:libghoti.io-chron-0.$SHEXT -l:libghoti.io-regex-0.$SHEXT -l:libghoti.io-security-0.$SHEXT -l:libghoti.io-cutil-0.$SHEXT \
     -l:libghoti.io-lang-tang-0.$SHEXT &&
   cp "$work/host-ok/tang$EXE" "$work/host-ok/web_server$EXE" &&
   $CC -o "$work/host-bad/tang$EXE" "$work/host_bad.c" \
@@ -304,7 +306,7 @@ else
   expect_fail 'links/planted-jit' 'lang-tang -> runtime-jit' "$E" --links "$work/planted-jit"
   expect_pass 'links/planted-jit with JIT=yes (the shared object may link runtime-jit)' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-jit"
   expect_fail 'links/planted-tang with JIT=yes (only runtime-jit is added)' 'lang-tang -> tang' env GLTANG_EDGES_JIT=yes "$E" --links "$work/planted-tang"
-  expect_pass 'links/host tang (runtime-debug, text and what text needs are allowed in the tang command)' \
+  expect_pass 'links/host tang (runtime-debug, text and its dependencies are allowed in the tang command)' \
     "$E" --links "$work/host-ok/tang$EXE"
   expect_pass 'links/host web_server (the same, in the web-server example)' "$E" --links "$work/host-ok/web_server$EXE"
   expect_fail 'links/a host may not link anything else (the tang command linking the JIT)' 'lang-tang -> runtime-jit' \

@@ -29,12 +29,33 @@
 
 #ifdef _WIN32
 
+#include <process.h>
+#include <windows.h>
+
+#include <string>
+
 // The session is played with fork, pipes, poll and /proc/self/exe, and the
 // command's --dap needs the descriptor transport, which is a stub on Windows
 // (runtime-debug's transport.h). What the command does there instead (a message
 // and exit status 7) is checked by tests/cli-test.sh.
 TEST(TangDap, NeedsTheDescriptorTransportAndSoIsNotRunOnWindows) {
   GTEST_SKIP() << "fork, pipes and poll; --dap is unsupported on Windows (see cli-test.sh)";
+}
+
+TEST(TangDap, WindowsCommandRejectsUnsupportedDapTransport) {
+  char self[MAX_PATH];
+  const DWORD length = GetModuleFileNameA(nullptr, self, MAX_PATH);
+  ASSERT_GT(length, 0u);
+  ASSERT_LT(length, static_cast<DWORD>(MAX_PATH));
+
+  std::string tang(self, length);
+  const size_t slash = tang.find_last_of("\\/");
+  ASSERT_NE(slash, std::string::npos);
+  tang.replace(slash + 1, std::string::npos, "tang.exe");
+
+  const char * const args[] = {
+      tang.c_str(), "--dap", "-s", "-e", "print(1);", nullptr};
+  EXPECT_EQ(_spawnv(_P_WAIT, tang.c_str(), args), 7);
 }
 
 #else  // !_WIN32

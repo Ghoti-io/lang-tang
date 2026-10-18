@@ -95,6 +95,7 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
     (void)grcore_activation_leave(stack, record);
     return gltang_vm_native_refused_value(exec, pushed);
   }
+  (void)grcore_stack_set_guest_function(stack, frame, (uint32_t)target);
   {
     // The push is a GC point and may have moved the stack: the slots are read afresh,
     // and the arguments come from the pinned copies.

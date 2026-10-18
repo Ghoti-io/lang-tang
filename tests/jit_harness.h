@@ -128,6 +128,7 @@ struct Scenario {
   bool script = false;                   ///< Attach a Script, with `on_poll` below.
   std::function<void(Script &, GRCORE_Context *, uint64_t)> on_poll;
   std::function<void(Context &)> before;  ///< Called after the context is made and before the run.
+  std::function<void(Context &)> after;   ///< Called after the run, while its JIT records are still live.
   size_t max_pauses = 4000;
 };
 
@@ -248,6 +249,9 @@ inline Outcome run(const Scenario & sc, long threshold) {
   out.polls = script.polls;
   out.identities = script.identities;
   out.stats = context.jit_stats();
+  if (sc.after) {
+    sc.after(context);
+  }
   out.native_depth = grcore_context_depth(context.context, GRCORE_DEPTH_NATIVE);
   out.memory_peak = grcore_context_memory_peak(context.context);
   out.stack_moves = grcore_stack_move_count(grcore_context_stack(context.context));

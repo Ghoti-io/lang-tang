@@ -79,6 +79,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
       exec->state = GLTANG_EXECUTION_FINISHED;
       return GRCORE_STEP_FINISHED;
     }
+    (void)grcore_stack_set_guest_function(stack, frame, 0);
     S = grcore_stack_slots(stack, frame);
     S[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(0, 0);
     S[GLTANG_F_PC] = 0;
@@ -612,6 +613,7 @@ resume_loop:
                 r = exec->roots[GLTANG_ROOT_OOM];
                 goto call_result;
               }
+              (void)grcore_stack_set_guest_function(stack, kframe, (uint32_t)ktarget);
               {
                 uint64_t * caller = grcore_stack_slots(stack, frame);
                 uint64_t * callee_slots = grcore_stack_slots(stack, kframe);
@@ -683,6 +685,7 @@ resume_loop:
               r = exec->roots[GLTANG_ROOT_OOM];
               goto call_result;
             }
+            (void)grcore_stack_set_guest_function(stack, callee_frame, 0);
             act->scope_id = scope.id;
             act->policy = member->policy;
             gltang_vm_activation_enter(exec, act, fidx, (uint32_t)(pc - 1u));
@@ -743,6 +746,9 @@ resume_loop:
           r = exec->roots[GLTANG_ROOT_OOM];
           goto call_result;
         }
+        // Poll identity is an opaque program-qualified token. Pairing a later
+        // compiled frame uses the actual function index of this guest frame.
+        (void)grcore_stack_set_guest_function(stack, callee_frame, (uint32_t)target);
         {
           // The push may have moved the stack: both frames are read afresh.
           uint64_t * caller = grcore_stack_slots(stack, frame);

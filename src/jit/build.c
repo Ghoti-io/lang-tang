@@ -1956,6 +1956,9 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     B(grjit_builder_set_natives(c->b, exec->jit->natives));
   }
   B(grjit_builder_set_token(c->b, c->fword));
+  // The call token includes the program index; runtime-core's guest-frame
+  // function ID is the function index within that program.
+  B(grjit_builder_set_guest_function(c->b, GLTANG_FN_INDEX(c->fword)));
   for (uint32_t k = 0; k < c->params; ++k) {
     B(grjit_builder_param(c->b, GRJIT_TYPE_REF, &c->local[k]));
   }

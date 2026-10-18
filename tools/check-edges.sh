@@ -16,7 +16,7 @@
 # served (story 13): src/tang.c (the `tang` command) and examples/web_server.c.
 # They may include runtime-debug and text, and only the `tang` binary and the
 # web_server example binary may have them in their NEEDED list - and, because
-# text requires them, chron and regex with them. The allowance is by file, not
+# text requires them, chron, regex and security with them. The allowance is by file, not
 # by directory: an include of the debugger in any other file, a different
 # example included, is the edge this gate exists to catch. tests/ is not
 # scanned at all (it is where the oracle may include ctang), so a test runner
@@ -95,7 +95,7 @@ is_jit_source() {
 # What a host may include or link as well. The link set is the include set and
 # what text requires (its own NEEDED entries are chron and regex).
 HOST_INCLUDES='runtime-debug|text'
-HOST_LINKS='runtime-debug|text|chron|regex'
+HOST_LINKS='runtime-debug|text|chron|regex|security'
 # The hosts, by path under the root for an include and by file name for a
 # program. Nothing else is one.
 is_host_source() {
@@ -251,7 +251,7 @@ $t"
     if [ "$status" -ne 0 ]; then
       exit 1
     fi
-    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library (the tang and web_server programs may also link runtime-debug and text; runtime-jit only with JIT=yes; this run: JIT=%s)\n' \
+    printf 'check-edges: %d shared objects or programs, every Ghoti library they link is cutil, unicode, runtime-core, runtime-heap or this library (the tang and web_server programs may also link runtime-debug, text, and text dependencies chron, regex and security; runtime-jit only with JIT=yes; this run: JIT=%s)\n' \
       "$count" "$JIT_MODE"
     ;;
 

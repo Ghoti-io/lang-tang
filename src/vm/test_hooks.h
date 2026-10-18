@@ -98,6 +98,9 @@ void gltang_vm_set_slot_failure_unchecked(GLTANG_Execution * execution, uint64_t
 /** Discards a compiled function now (see the eighth counted exit); 1 if it was compiled. */
 int gltang_vm_jit_test_discard(GLTANG_Execution * execution, uint64_t fword);
 
+/** Counted deoptimizations charged to this exact program-qualified function; -1 if it has no JIT record. */
+int gltang_vm_jit_test_function_deopts(GLTANG_Execution * execution, uint64_t fword);
+
 /** Marks a function never-compile (its record's raw-float count goes to zero). */
 int gltang_vm_jit_test_mark_never(GLTANG_Execution * execution, uint64_t fword);
 uint64_t gltang_vm_jit_test_stray_words(GLTANG_Execution * execution);

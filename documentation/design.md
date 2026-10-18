@@ -1151,6 +1151,12 @@ carries its activation's depth. The engine descriptor's `locate`, `inspect` and
 scope interface and the poll identity `(function word, offset)` decode both, so a
 frame walk, a pause and the debugger name `(program, function, offset)` correctly
 for every frame, and a frame reads the variables of its own activation. The
+runtime-core guest-frame function ID is a separate 32-bit field: Tang sets it
+to the low 32 bits of the function word at every interpreter and native re-entry
+frame push. Compiled code carries the complete program-qualified word as its
+call token and declares the low 32 bits as its guest function ID; rebuild pairs
+compiled and guest frames through that ID. A poll updates the opaque function
+word and offset, but does not substitute for setting the guest function ID.
 fp/sp/slot pointers and the activation pointers are reloaded after every GC point
 exactly as before (the moving stack shows it), and everything per call lives in an
 **activation record in the execution** - its result, its variables, its output,

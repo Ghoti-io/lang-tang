@@ -251,8 +251,12 @@ ifeq ($(filter-out $(DEPLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
 SKIP_DEP_CHECK := 1
 endif
 
-# The name carries $(BRANCH). ghoti.io-cutil never matches the installed file.
-CUTIL_PC ?= ghoti.io-cutil$(BRANCH)
+# Dependencies remain on their current major while this library's branch may
+# advance independently. Preserve the debug suffix and allow explicit overrides.
+DEPENDENCY_RELEASE_BRANCH := $(patsubst %-debug,%,$(BRANCH))
+DEPENDENCY_BUILD_SUFFIX := $(if $(filter %-debug,$(BRANCH)),-debug,)
+CUTIL_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+CUTIL_PC ?= ghoti.io-cutil$(CUTIL_BRANCH)
 CUTIL_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(CUTIL_PC) 2>/dev/null)
 CUTIL_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(CUTIL_PC) 2>/dev/null)
 ifeq ($(strip $(CUTIL_CFLAGS)),)
@@ -263,7 +267,8 @@ endif
 INCLUDE += $(CUTIL_CFLAGS)
 
 # unicode: grapheme boundaries and UTF-8 validation for the string type.
-UNICODE_PC ?= ghoti.io-unicode$(BRANCH)
+UNICODE_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+UNICODE_PC ?= ghoti.io-unicode$(UNICODE_BRANCH)
 UNICODE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(UNICODE_PC) 2>/dev/null)
 UNICODE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(UNICODE_PC) 2>/dev/null)
 ifeq ($(strip $(UNICODE_CFLAGS)),)
@@ -275,7 +280,8 @@ INCLUDE += $(UNICODE_CFLAGS)
 
 # runtime-core and runtime-heap: the engine runs on the frame protocol and the
 # collector (AD-8, AD-11). Hard errors that name the fix, like the others.
-RCORE_PC ?= ghoti.io-runtime-core$(BRANCH)
+RCORE_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+RCORE_PC ?= ghoti.io-runtime-core$(RCORE_BRANCH)
 RCORE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RCORE_PC) 2>/dev/null)
 RCORE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RCORE_PC) 2>/dev/null)
 ifeq ($(strip $(RCORE_CFLAGS)),)
@@ -285,7 +291,8 @@ endif
 endif
 INCLUDE += $(RCORE_CFLAGS)
 
-RHEAP_PC ?= ghoti.io-runtime-heap$(BRANCH)
+RHEAP_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+RHEAP_PC ?= ghoti.io-runtime-heap$(RHEAP_BRANCH)
 RHEAP_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RHEAP_PC) 2>/dev/null)
 RHEAP_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RHEAP_PC) 2>/dev/null)
 ifeq ($(strip $(RHEAP_CFLAGS)),)
@@ -300,7 +307,8 @@ INCLUDE += $(RHEAP_CFLAGS)
 # for JIT=yes, so a JIT=no library neither includes nor links it, and
 # tools/check-edges.sh checks that by file and by NEEDED entry for both arms.
 ifeq ($(JIT),yes)
-RJIT_PC ?= ghoti.io-runtime-jit$(BRANCH)
+RJIT_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+RJIT_PC ?= ghoti.io-runtime-jit$(RJIT_BRANCH)
 RJIT_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RJIT_PC) 2>/dev/null)
 RJIT_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RJIT_PC) 2>/dev/null)
 ifeq ($(strip $(RJIT_CFLAGS)),)
@@ -317,18 +325,20 @@ JIT_CFLAGS :=
 endif
 INCLUDE += $(JIT_CFLAGS)
 
-# runtime-debug and text: for the two hosts, the `tang` command (src/tang.c)
+# runtime-debug, text and its transitive dependencies: for the two hosts, the `tang` command (src/tang.c)
 # and the web-server example (examples/web_server.c), and for nothing else
 # (AD-2, story 13). They are not in INCLUDE or DEP_LIBS, so the shared and the
 # static library link neither, and tools/check-edges.sh checks that by file and
-# by NEEDED entry. text is listed because runtime-debug reads JSON with it; the
-# debugger's own .pc file requires it, and it is a hard error to be without
-# either, like every other dependency. WITH_DEBUG=no is the way to build the
+# by NEEDED entry. text is listed because runtime-debug reads JSON with it; its
+# pkg-config dependencies (chron, regex and security) can therefore appear in
+# the hosts' NEEDED lists too. The debugger's own .pc file requires text, and
+# it is a hard error to be without either, like every other dependency. WITH_DEBUG=no is the way to build the
 # library and its unit tests on a machine without them: the two hosts then
 # refuse to build, by name, instead of building without --dap.
 WITH_DEBUG ?= yes
 ifeq ($(WITH_DEBUG),yes)
-RDEBUG_PC ?= ghoti.io-runtime-debug$(BRANCH)
+RDEBUG_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+RDEBUG_PC ?= ghoti.io-runtime-debug$(RDEBUG_BRANCH)
 RDEBUG_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(RDEBUG_PC) 2>/dev/null)
 RDEBUG_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(RDEBUG_PC) 2>/dev/null)
 ifeq ($(strip $(RDEBUG_CFLAGS)),)
@@ -336,7 +346,8 @@ ifndef SKIP_DEP_CHECK
 $(error ghoti.io-runtime-debug was not found by pkg-config. The tang command and the web-server example use it. Run ./bootstrap.sh at the root of the workspace - two levels up, the directory holding libs/ - to build and install the suite into a local prefix, then pass the same PREFIX here - or point PKG_CONFIG_PATH at the directory holding its .pc file - or pass WITH_DEBUG=no to build the library and its tests without the two hosts. There is deliberately no sibling-checkout fallback.)
 endif
 endif
-TEXT_PC ?= ghoti.io-text$(BRANCH)
+TEXT_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+TEXT_PC ?= ghoti.io-text$(TEXT_BRANCH)
 TEXT_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(TEXT_PC) 2>/dev/null)
 TEXT_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(TEXT_PC) 2>/dev/null)
 ifeq ($(strip $(TEXT_CFLAGS)),)
@@ -374,7 +385,8 @@ endif
 # against (AD-16). It is linked into one runner under tests/oracle/ and nowhere
 # else; ORACLE_PC names its package so that the gate can be seen to fail when
 # it is missing. $(BRANCH) as for every other dependency.
-ORACLE_PC ?= ghoti.io-tang$(BRANCH)
+ORACLE_BRANCH ?= $(if $(filter -dev,$(DEPENDENCY_RELEASE_BRANCH)),-dev,-0)$(DEPENDENCY_BUILD_SUFFIX)
+ORACLE_PC ?= ghoti.io-tang$(ORACLE_BRANCH)
 ORACLE_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags $(ORACLE_PC) 2>/dev/null)
 ORACLE_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs $(ORACLE_PC) 2>/dev/null)
 
@@ -813,7 +825,7 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs all eighty-two (the relocation cases, 13, 14, 15, 20, 27 and 46, need a relocation heap and run in the relocation arm).
+# part of `make test-torture`; `make check-planted` runs all eighty-two (the relocation cases, 13, 14, 15, 20, 27, 46 and 117, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
@@ -847,7 +859,7 @@ endif
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted-relocate: ## Planted defects 13, 14, 15, 20, 27 and 46 (a reference visited and not updated, or not pinned), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
+check-planted-relocate: ## Planted defects 13, 14, 15, 20, 27, 46 and 117 (a reference visited and not updated, or not pinned), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
 ifndef RELOCATE_PREFIX
 	@printf 'check-planted-relocate: RELOCATE_PREFIX is needed (the prefix of a runtime-heap built with RELOCATE=yes)\n' >&2; exit 1
 else
@@ -919,24 +931,28 @@ TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile
 NOJIT_GATES := check-symbols check-aliasing check-stamps check-fp-contract check-labels check-edges check-gates check-vscode check-oracle-absent examples cli-test fuzz-replay
 JIT_THRESHOLD_ENV := GLTANG_TEST_JIT_THRESHOLD=1
 
-test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) ## Build and run the tests
+.PHONY: check-gtest-full
+check-gtest-full: ## Prove full-suite selection and zero-test rejection
+	@tools/run-gtest-full.sh --selftest
+
+test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(BENCH_EXECUTABLES) $(TEST_GATES) check-gtest-full ## Build and run the tests
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf '\n### Running %s ###\n\n' "$$test_name"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 || exit 1; \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $$test_exe || exit 1; \
 	done
 ifndef GLTANG_NESTED_ARM
 	@for mode in "GRHEAP_TORTURE=1 GRHEAP_VERIFY=1" "GLTANG_TEST_MOVING_STACK=1"; do \
 		for t in $(TORTURE_BOUNDED); do \
 			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
-			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $(APP_DIR)/$$t$(EXE_EXTENSION) || exit 1; \
 		done; \
 	done
 ifeq ($(JIT),yes)
 	@for mode in "$(JIT_THRESHOLD_ENV)" "$(JIT_THRESHOLD_ENV) GLTANG_TEST_MOVING_STACK=1" "$(JIT_THRESHOLD_ENV) GRHEAP_TORTURE=1 GRHEAP_VERIFY=1"; do \
 		for t in $(TORTURE_BOUNDED); do \
 			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
-			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $(APP_DIR)/$$t$(EXE_EXTENSION) || exit 1; \
 		done; \
 	done
 endif
@@ -999,7 +1015,7 @@ else
 			*) ln -s "$$pc" "$$shadow/share/pkgconfig/" ;; \
 		esac; \
 	done; \
-	if PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$$shadow/share/pkgconfig" pkg-config --exists ghoti.io-runtime-debug-0 2>/dev/null; then \
+	if PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$$shadow/share/pkgconfig" pkg-config --exists $(RDEBUG_PC) 2>/dev/null; then \
 		printf 'test-nodebug: runtime-debug is still visible; the arm would prove nothing\n' >&2; exit 1; \
 	fi; \
 	env PKG_CONFIG_PATH= $(MAKE) --no-print-directory test WITH_DEBUG=no GLTANG_NESTED_ARM=1 GLTANG_NODEBUG_ARM=1 \
@@ -1046,7 +1062,7 @@ test-relocate-run: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 		case "$$mode" in *GRHEAP_TORTURE*) suites="$(TORTURE_BOUNDED) testRelocate";; *) suites="$(TEST_NAMES)";; esac; \
 		for t in $$suites; do \
 			printf '\n### %s with %s ###\n\n' "$$t" "$$mode"; \
-			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(APP_DIR)/$$t$(EXE_EXTENSION) --gtest_brief=1 || exit 1; \
+			env $$mode LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $(APP_DIR)/$$t$(EXE_EXTENSION) || exit 1; \
 		done; \
 	done
 	@printf '\nThe relocation arm is clean.\n'
@@ -1056,7 +1072,7 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) ## Run tests, one line per 
 	printf '\n%-30s %8s %10s %s\n' "Test Suite" "Tests" "Time" "Status"; \
 	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
-		output=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1 2>&1); \
+		output=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $$test_exe 2>&1); \
 		exit_code=$$?; \
 		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
 		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
@@ -1090,7 +1106,7 @@ test-valgrind: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) ## Run the tests under V
 ifeq ($(OS_NAME), Linux)
 	@for test_exe in $(TEST_EXECUTABLES); do \
 		printf '\n### Valgrind %s ###\n\n' "$$(basename $$test_exe)"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1 || exit 1; \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh valgrind $(VALGRIND_FLAGS) $$test_exe || exit 1; \
 	done
 else
 	@printf 'Valgrind is only available on Linux\n' >&2; exit 1
@@ -1102,7 +1118,7 @@ ifeq ($(OS_NAME), Linux)
 	printf '\n%-30s %8s %10s %s\n' "Test Suite (Valgrind)" "Tests" "Time" "Status"; \
 	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
-		output=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1 2>&1); \
+		output=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh valgrind $(VALGRIND_FLAGS) $$test_exe 2>&1); \
 		exit_code=$$?; \
 		num_tests=$$(echo "$$output" | grep -oP '\[\s*=+\s*\]\s*\K\d+(?=\s+tests?)' | head -1); \
 		time_ms=$$(echo "$$output" | grep -oP '\(\K\d+(?=\s*ms\s*total\))' | head -1); \
@@ -1212,7 +1228,7 @@ $(ASAN_APP_DIR)/testTang_dap$(EXE_EXTENSION): | $(APP_DIR)/tang$(EXE_EXTENSION)
 endif
 
 ASAN_TEST_EXECUTABLES := $(addprefix $(ASAN_APP_DIR)/,$(addsuffix $(EXE_EXTENSION),$(TEST_NAMES)))
-ASAN_RUNTIME := $(shell $(CC) -print-file-name=libasan.so 2>/dev/null)
+ASAN_RUNTIME := $(shell $(CXX) -print-file-name=libasan.so 2>/dev/null)
 # How the sanitized test programs are started. GCC's runtime is a shared
 # libasan.so, which has to be preloaded because the libraries under test are
 # loaded by a program that was not linked against it. clang links its own
@@ -1221,10 +1237,10 @@ ASAN_RUNTIME := $(shell $(CC) -print-file-name=libasan.so 2>/dev/null)
 # anything else (this workstation's desktop sets LD_PRELOAD), makes the runtime
 # abort with "ASan runtime does not come first". So with clang the preload is
 # emptied instead of set.
-ifneq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
-ASAN_PRELOAD = LD_PRELOAD=
+ifneq ($(findstring clang,$(shell $(CXX) --version 2>/dev/null)),)
+ASAN_PRELOAD = GTEST_FULL_TEST_LD_PRELOAD= LD_PRELOAD=
 else
-ASAN_PRELOAD = LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}"
+ASAN_PRELOAD = GTEST_FULL_TEST_LD_PRELOAD="$(ASAN_RUNTIME)$${LD_PRELOAD:+:$$LD_PRELOAD}" LD_PRELOAD=
 endif
 
 test-asan: $(ASAN_TEST_EXECUTABLES) ## Build with ASan+UBSan and run the tests
@@ -1232,7 +1248,7 @@ test-asan: $(ASAN_TEST_EXECUTABLES) ## Build with ASan+UBSan and run the tests
 		printf '\n### ASan+UBSan %s ###\n\n' "$$(basename $$test_exe)"; \
 		$(ASAN_PRELOAD) \
 		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
-			$$test_exe --gtest_brief=1 || exit 1; \
+			tools/run-gtest-full.sh $$test_exe || exit 1; \
 	done
 	@printf '\nASan+UBSan suite clean.\n'
 
@@ -1244,7 +1260,7 @@ test-torture: $(ASAN_TORTURE_EXECUTABLES) check-planted-slow ## ASan+UBSan with 
 		GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 GLTANG_TEST_MOVING_STACK=1 \
 		$(ASAN_PRELOAD) \
 		LD_LIBRARY_PATH="$(ASAN_APP_DIR):$(LIB_INSTALL_PATH)/$(SUITE)" \
-			$$test_exe --gtest_brief=1 || exit 1; \
+			tools/run-gtest-full.sh $$test_exe || exit 1; \
 	done
 	@printf '\nASan+UBSan torture suite clean.\n'
 
@@ -1334,7 +1350,7 @@ test-tsan: $(TSAN_TEST_EXECUTABLES) ## Build with TSan and run the tests (Linux 
 ifeq ($(OS_NAME), Linux)
 	@for test_exe in $(TSAN_TEST_EXECUTABLES); do \
 		printf '\n### TSan %s ###\n\n' "$$(basename $$test_exe)"; \
-		$(TSAN_RUN_ENV) $$test_exe --gtest_brief=1 || exit 1; \
+		$(TSAN_RUN_ENV) tools/run-gtest-full.sh $$test_exe || exit 1; \
 	done
 	@printf '\nTSan suite clean.\n'
 else
@@ -1371,7 +1387,7 @@ oracle-present:
 	@if ! PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --exists $(ORACLE_PC) 2>/dev/null; then \
 		printf 'test-oracle: ctang (pkg-config package %s) was not found, and the oracle differential does not skip.\n' "$(ORACLE_PC)" >&2; \
 		printf 'Run ./bootstrap.sh at the root of the workspace to install ctang, then pass the same PREFIX here,\n' >&2; \
-		printf 'or point PKG_CONFIG_PATH at the directory holding ghoti.io-tang-0.pc.\n' >&2; \
+		printf 'or point PKG_CONFIG_PATH at the directory holding %s.pc.\n' "$(ORACLE_PC)" >&2; \
 		exit 1; \
 	fi
 
@@ -1433,9 +1449,9 @@ test-oracle: ## Skipped on Windows
 else
 test-oracle: oracle-present $(ORACLE_RUNNER) $(ORACLE_TEST) $(FUZZDIFF_TEST) ## Compare lang-tang with ctang over the corpus and a fixed batch of generated programs (fails, never skips, without ctang)
 	@printf '\n### Oracle differential ###\n\n'
-	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(ORACLE_TEST) --gtest_brief=1
+	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $(ORACLE_TEST)
 	@printf '\n### Differential fuzz run, fixed batch ###\n\n'
-	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1
+	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) LD_LIBRARY_PATH="$(TEST_LD_PATH)" tools/run-gtest-full.sh $(FUZZDIFF_TEST)
 endif
 
 # A campaign: FUZZ_DIFF_COUNT programs from seed FUZZ_DIFF_SEED, both modes
@@ -1446,8 +1462,16 @@ fuzz-diff: oracle-present $(ORACLE_RUNNER) $(FUZZDIFF_TEST) ## Differential fuzz
 		printf 'fuzz-diff: set FUZZ_DIFF_COUNT, for example: make fuzz-diff FUZZ_DIFF_COUNT=2000 FUZZ_DIFF_SEED=1\n' >&2; exit 1; \
 	fi
 	@printf '\n### Differential fuzz campaign: %s programs from seed %s (and %s call graphs, interpreted and compiled) ###\n\n' "$(FUZZ_DIFF_COUNT)" "$(FUZZ_DIFF_SEED)" "$(if $(FUZZ_DIFF_CALL_GRAPHS),$(FUZZ_DIFF_CALL_GRAPHS),300)"
-	@GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) FUZZ_DIFF_COUNT=$(FUZZ_DIFF_COUNT) FUZZ_DIFF_SEED=$(FUZZ_DIFF_SEED) FUZZ_DIFF_CALL_GRAPHS=$(FUZZ_DIFF_CALL_GRAPHS) \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=1 --gtest_filter=FuzzDiff.Campaign:FuzzDiff.CallGraphs*
+	@output=$$(env -u GTEST_FILTER -u GTEST_TOTAL_SHARDS -u GTEST_SHARD_INDEX \
+		-u GTEST_SHARD_STATUS_FILE -u GTEST_REPEAT -u GTEST_ALSO_RUN_DISABLED_TESTS \
+		GLTANG_ORACLE_RUNNER=$(abspath $(ORACLE_RUNNER)) FUZZ_DIFF_COUNT=$(FUZZ_DIFF_COUNT) \
+		FUZZ_DIFF_SEED=$(FUZZ_DIFF_SEED) FUZZ_DIFF_CALL_GRAPHS=$(FUZZ_DIFF_CALL_GRAPHS) \
+		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $(FUZZDIFF_TEST) --gtest_brief=0 --gtest_color=no \
+		--gtest_filter='FuzzDiff.Campaign:FuzzDiff.CallGraphs*' 2>&1); \
+		rc=$$?; printf '%s\n' "$$output"; \
+		[ $$rc -eq 0 ] && [ "$$(printf '%s\n' "$$output" | grep -c '^\[ RUN      \] FuzzDiff\.')" -eq 2 ] && \
+		[ "$$(printf '%s\n' "$$output" | grep -c '^\[==========\] 2 tests from .* ran\.')" -eq 1 ] && \
+		printf '%s\n' "$$output" | grep -q '^\[  PASSED  \] 2 tests\.' || exit 1
 
 ####################################################################
 # Fuzzing
