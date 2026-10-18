@@ -311,7 +311,10 @@ target_of() {
 run_test() {
   case "$1" in
     01-*|02-*)
-      (cd "$WORK" && env GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testExecute_complex --gtest_brief=1) ;;
+      # The deep-print test deliberately skips under torture because building
+      # its million-allocation nest would collect at every allocation. Exclude
+      # only that named test; every selected control must still run and pass.
+      (cd "$WORK" && env GRHEAP_TORTURE=1 GRHEAP_VERIFY=1 LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testExecute_complex --gtest_brief=1 --gtest_filter='*-Print.ADeeplyNestedContainerIsPrintedOnAThreadWithASmallStack') ;;
     03-*|05-*|selftest)
       (cd "$WORK" && env LD_LIBRARY_PATH="$LDPATH" timeout 170 ./build/linux/$TREE/apps/testObserver --gtest_brief=1) ;;
     08-*)
