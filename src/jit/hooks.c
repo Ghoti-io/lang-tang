@@ -308,91 +308,74 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
   bool any = false;
 
   // The walk, before the rebuild (which clears the record's compiled state): which
-  // frame is innermost and why we left it, and the identity of every caller's
-  // guest frame, which the interpreter sets at a call (`grcore_stack_set_identity`)
-  // and the rebuild does not.
+  // frame is innermost and why we left it. The rebuild gives every rebuilt guest
+  // frame its compiled frame's identity, so the hook does not.
   GRCORE_CompiledWalk walk;
   GRCORE_CompiledFrame fr;
   if (grcore_compiled_walk_begin(context, &walk) == GRCORE_OK) {
-    GRCORE_FrameRef g = grcore_stack_top(stack);
-    size_t g_idx = frame_count ? frame_count - 1u : 0;
-    size_t record = 0;
-    while (grcore_compiled_walk_next(&walk, &fr) == GRCORE_CWALK_FRAME) {
-      if (any && fr.record != record) {
-        break;  // a run under a nested activation: the rebuild below does not cover it
-      }
+    if (grcore_compiled_walk_next(&walk, &fr) == GRCORE_CWALK_FRAME) {
       const size_t idx = fr.base_frames - 1u + (fr.run_length - 1u - fr.run_depth);
-      if (!any) {
-        any = true;
-        record = fr.record;
-        innermost_fword = fr.identity.function;
-        if (native_cause) {
-          if (native_status == GRJIT_NATIVE_UNWIND) {
-            ++exec->jit_stats.native_status_unwinds;
+      any = true;
+      innermost_fword = fr.identity.function;
+      if (native_cause) {
+        if (native_status == GRJIT_NATIVE_UNWIND) {
+          ++exec->jit_stats.native_status_unwinds;
+        }
+        else {
+          ++exec->jit_stats.native_status_deopts;
+        }
+      }
+      if (unwinding) {
+        // An unwind pops frames without converting them: every compiled frame of
+        // this run is inside the scope that is unwinding (compiled code opens
+        // none), so the rebuild skips them all and only marks the record rebuilt.
+        keep = fr.base_frames - 1u;
+      }
+      if (cause == 0u) {
+        // The sites are those of the code that ran, found by the address the frame stopped
+        // at (the registry keeps a retired range's handle for as long as a frame can return
+        // into it), not the function's record, whose code is gone if the function was
+        // discarded while this record was open (a nested run's eighth exit).
+        GRCORE_CodeRange ran;
+        const GLTANG_JitCode * jc = grcore_code_lookup(context, (uintptr_t)fr.return_address, &ran) && ran.code ? grcore_code_payload(ran.code) : NULL;
+        if (expected_site_at(jc, fr.identity.offset)) {
+          // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
+          // code, so it does not count toward the discard limit (and is counted, with the
+          // others, by the entry once the rebuild has succeeded).
+          expected = true;
+          counts = false;
+        }
+        else if (native_site_at(jc, fr.identity.offset)) {
+          // An exit at a library call or member load: the callee value was not the
+          // native the site names (counts, like the guest call's), or the native
+          // stack would have run out before the call (does not).
+          if (jit->refusal == GLTANG_REFUSAL_NATIVE_GUARD) {
+            ++exec->jit_stats.native_call_exits_guard;
+            counts = true;
           }
           else {
-            ++exec->jit_stats.native_status_deopts;
-          }
-        }
-        if (unwinding) {
-          // An unwind pops frames without converting them: every compiled frame of
-          // this run is inside the scope that is unwinding (compiled code opens
-          // none), so the rebuild skips them all and only marks the record rebuilt.
-          keep = fr.base_frames - 1u;
-        }
-        if (cause == 0u) {
-          // The sites are those of the code that ran, found by the address the frame stopped
-          // at (the registry keeps a retired range's handle for as long as a frame can return
-          // into it), not the function's record, whose code is gone if the function was
-          // discarded while this record was open (a nested run's eighth exit).
-          GRCORE_CodeRange ran;
-          const GLTANG_JitCode * jc = grcore_code_lookup(context, (uintptr_t)fr.return_address, &ran) && ran.code ? grcore_code_payload(ran.code) : NULL;
-          if (expected_site_at(jc, fr.identity.offset)) {
-            // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
-            // code, so it does not count toward the discard limit (and is counted, with the
-            // others, by the entry once the rebuild has succeeded).
-            expected = true;
+            ++exec->jit_stats.native_exits_stack;
             counts = false;
           }
-          else if (native_site_at(jc, fr.identity.offset)) {
-            // An exit at a library call or member load: the callee value was not the
-            // native the site names (counts, like the guest call's), or the native
-            // stack would have run out before the call (does not).
-            if (jit->refusal == GLTANG_REFUSAL_NATIVE_GUARD) {
-              ++exec->jit_stats.native_call_exits_guard;
-              counts = true;
-            }
-            else {
-              ++exec->jit_stats.native_exits_stack;
-              counts = false;
-            }
+        }
+        else if (call_site_at(jc, fr.identity.offset)) {
+          // An exit at a call site. Whoever refused recorded why, and none of
+          // these counts toward a discard limit except the callee-value guard.
+          counts = false;
+          if (idx + 1u < frame_count) {
+            ++exec->jit_stats.call_exits_native_stack;
           }
-          else if (call_site_at(jc, fr.identity.offset)) {
-            // An exit at a call site. Whoever refused recorded why, and none of
-            // these counts toward a discard limit except the callee-value guard.
-            counts = false;
-            if (idx + 1u < frame_count) {
-              ++exec->jit_stats.call_exits_native_stack;
-            }
-            else if (jit->refusal == GLTANG_REFUSAL_CALLEE_GUARD) {
-              ++exec->jit_stats.call_exits_callee_guard;
-              counts = true;
-            }
-            else if (jit->refusal == GLTANG_REFUSAL_PUSH) {
-              ++exec->jit_stats.call_exits_push_refused;
-            }
-            else {
-              ++exec->jit_stats.call_exits_remembered;
-            }
+          else if (jit->refusal == GLTANG_REFUSAL_CALLEE_GUARD) {
+            ++exec->jit_stats.call_exits_callee_guard;
+            counts = true;
+          }
+          else if (jit->refusal == GLTANG_REFUSAL_PUSH) {
+            ++exec->jit_stats.call_exits_push_refused;
+          }
+          else {
+            ++exec->jit_stats.call_exits_remembered;
           }
         }
-      }
-      while (g_idx > idx) {
-        g = grcore_stack_caller(stack, g);
-        --g_idx;
-      }
-      if (idx + 1u < frame_count) {
-        (void)grcore_stack_set_identity(stack, g, fr.identity);
       }
     }
   }

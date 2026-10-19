@@ -7,12 +7,12 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -304,7 +304,7 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
-           // An unwind pops frames without converting them: every compiled frame of
-           // this run is inside the scope that is unwinding (compiled code opens
-           // none), so the rebuild skips them all and only marks the record rebuilt.
--          keep = fr.base_frames - 1u;
-+          (void)fr.base_frames;  /* planted: keep stays SIZE_MAX, and everything is rebuilt */
-         }
-         if (cause == 0u) {
-           // The sites are those of the code that ran, found by the address the frame stopped
+@@ -329,7 +329,7 @@
+         // An unwind pops frames without converting them: every compiled frame of
+         // this run is inside the scope that is unwinding (compiled code opens
+         // none), so the rebuild skips them all and only marks the record rebuilt.
+-        keep = fr.base_frames - 1u;
++        (void)fr.base_frames;  /* planted: keep stays SIZE_MAX, and everything is rebuilt */
+       }
+       if (cause == 0u) {
+         // The sites are those of the code that ran, found by the address the frame stopped

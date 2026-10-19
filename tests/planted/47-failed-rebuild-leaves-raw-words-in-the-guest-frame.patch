@@ -10,17 +10,31 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -311,6 +311,16 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
-       if (idx + 1u < frame_count) {
-         (void)grcore_stack_set_identity(stack, g, fr.identity);
+@@ -377,6 +377,30 @@
+           }
+         }
        }
-+      if (jit->test_fail_rebuild && fr.site && fr.site->frame_state_count <= GLTANG_JIT_MAX_SLOTS) {
-+        /* planted: the words, raw ones too, go into the guest slots first */
-+        uint64_t planted_words[GLTANG_JIT_MAX_SLOTS];
-+        if (grcore_deopt_read(fr.site, (const void *)fr.frame_base, planted_words, fr.site->frame_state_count) == GRCORE_OK) {
-+          uint64_t * guest_slots = grcore_stack_slots(stack, g);
-+          for (size_t w = 0; w < fr.site->frame_state_count; ++w) {
-+            guest_slots[w] = planted_words[w];
++      if (jit->test_fail_rebuild) {
++        /* planted: every frame's words, raw ones too, go into its guest slots first */
++        GRCORE_CompiledWalk planted_walk;
++        GRCORE_CompiledFrame pf;
++        GRCORE_FrameRef g = grcore_stack_top(stack);
++        size_t g_idx = frame_count - 1u;
++        if (grcore_compiled_walk_begin(context, &planted_walk) == GRCORE_OK) {
++          while (grcore_compiled_walk_next(&planted_walk, &pf) == GRCORE_CWALK_FRAME && pf.record == fr.record) {
++            const size_t pidx = pf.base_frames - 1u + (pf.run_length - 1u - pf.run_depth);
++            while (g_idx > pidx) {
++              g = grcore_stack_caller(stack, g);
++              --g_idx;
++            }
++            uint64_t planted_words[GLTANG_JIT_MAX_SLOTS];
++            if (pf.site && pf.site->frame_state_count <= GLTANG_JIT_MAX_SLOTS &&
++                grcore_deopt_read(pf.site, (const void *)pf.frame_base, planted_words, pf.site->frame_state_count) == GRCORE_OK) {
++              uint64_t * guest_slots = grcore_stack_slots(stack, g);
++              for (size_t w = 0; w < pf.site->frame_state_count; ++w) {
++                guest_slots[w] = planted_words[w];
++              }
++            }
 +          }
 +        }
 +      }
