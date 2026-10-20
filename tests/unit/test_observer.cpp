@@ -930,8 +930,12 @@ TEST(Observer, ACompiledPrintThatPollsInsideShowsTheInterpretersFrameAtThePrint)
 #ifdef GLTANG_WITH_JIT
 TEST(Observer, ACompiledValueOperationThatPollsInsideShowsTheInterpretersFrameAtTheOperation) {
   // The value programs alone, interpreter against compiled code (plain and with a moving
-  // stack), and the run is not blind: the operations ran compiled, and a scope ran out inside
-  // one of them.
+  // stack): at every poll, the frames the walk shows (depth, poll identity, location, slots,
+  // scopes and variables), and the output, result and errors. A compiled frame's identity in the
+  // walk is its call site's, from the frame state, so this sees the interpreter standing at an
+  // operation, or not, but not the identity a compiled helper writes into the frame header,
+  // which grcore_context_poll_identity reads: that is testJit_templates' long-operations test.
+  // The run is not blind: the operations ran compiled, and a scope ran out inside one of them.
   GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
   uint64_t value_calls = 0, unwinds = 0;
   for (const Case & c : value_cases()) {
@@ -943,7 +947,9 @@ TEST(Observer, ACompiledValueOperationThatPollsInsideShowsTheInterpretersFrameAt
     unwinds += jit.jit.native_status_unwinds;
   }
   if (jit_backend_present()) {
-    EXPECT_GT(value_calls, 100u) << "the value operations ran in compiled code";
+    // Measured over value_cases() as they stand: the count changes with the programs or with which
+    // operations compile, and either is a change to look at.
+    EXPECT_EQ(value_calls, 152u) << "the value operations ran in compiled code";
     EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled value operation";
   }
 }

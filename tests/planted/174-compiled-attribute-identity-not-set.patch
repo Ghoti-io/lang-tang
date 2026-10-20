@@ -1,0 +1,18 @@
+# 174 the compiled attribute of a value does not set the frame's poll identity to its own
+# defect: the value `ATTR` helper does not stand the guest frame at the operation, so a poll inside a
+#   long retag or render reads the identity of whatever stood last
+# caught by: the long operations test, its retag and render of 20480 bytes, which compares the
+#   identity of every poll with the interpreter's (testJit_templates, JitTemplates.ALongConcatenation*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -266,8 +266,7 @@
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
+   ++exec->jit_stats.value_calls;
+-  // A retag (`.html` and the others) and `.render` poll inside, at the `ATTR`.
+-  stand_at_the_op(exec, context);
++  /* planted: the frame is not stood at the attribute */
+   return finished(exec, attribute(exec, container, constant), false);
+ }
+ 

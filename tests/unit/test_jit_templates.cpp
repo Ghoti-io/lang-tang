@@ -885,7 +885,7 @@ TEST(JitTemplates, AConcatenationInALoopRunsCompiledWithTheInterpretersOutputAnd
   GLTANG_REQUIRE_JIT_BACKEND();
   // Strings, a string and an integer (converted as printing it would), and arrays.
   Scenario sc = scenario(
-      "function f(n) { s = \"\"; a = null; i = 0; while (i < n) { s = s + \"<li>\" + i + \"</li>\"; i = i + 1; } return s; }\n"
+      "function f(n) { s = \"\"; i = 0; while (i < n) { s = s + \"<li>\" + i + \"</li>\"; i = i + 1; } return s; }\n"
       "function g(x, y) { return x + y; }\n"
       "use t; a = t.items(2); b = g(a, a); x = f(30); print(x); print(f(3)); print(b.size); print(g(\"n=\", 3.5));\n");
   sc.before = add_items_library;
@@ -894,40 +894,63 @@ TEST(JitTemplates, AConcatenationInALoopRunsCompiledWithTheInterpretersOutputAnd
   ASSERT_FALSE(HasFailure());
   EXPECT_NE(jit.raw.find("<li>29</li><li>0</li><li>1</li><li>2</li>4n=3.5"), std::string::npos) << jit.raw;
   EXPECT_EQ(jit.stats.deopts, 0u) << "no concatenation left compiled code";
-  EXPECT_GE(jit.stats.value_calls, 33u * 4u) << "each iteration's two constants and three `+`, and g's";
+  // f's calls: its "" once and, at each of the 33 iterations, its two constants and three `+`
+  // (5 * 33 + 2); g's two `+`. The top level runs interpreted: it is statically declined, since its
+  // one end is the box exit of the raw 3.5 passed to g, so its constants and `.size` are not here.
+  EXPECT_EQ(jit.stats.value_calls, 5u * 33u + 2u + 2u);
+  EXPECT_EQ(jit.stats.functions_declined_expected, 1u) << "the top level";
   EXPECT_EQ(jit.fuel, plain.fuel);
 }
 
 TEST(JitTemplates, ALongConcatenationAndALongSlicePollAsOftenAndAScopeThatRunsOutInsideOneStopsAtTheSamePoll) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // 20480 bytes, then a concatenation of 40961 and slices of a string (by a step, reversed) and of
-  // an array, each past the pacing interval, inside compiled functions: every poll inside them
-  // is compared with its identity, and the pacing polls counted by native.
+  // 20480 bytes, then a concatenation of 40961, slices of a string (by a step, reversed) and of an
+  // array, a retag and a render of the 20480 bytes, and the index of one grapheme of 6001 bytes (a
+  // base and three thousand combining marks), each past the pacing interval, inside compiled
+  // functions: every poll inside them is compared with its identity (the frame header's, which the
+  // helpers and the interpreter each stand at the operation), the position each run ends with is
+  // compared, and the pacing polls are counted by native.
   {
+    std::string grapheme = "e";
+    for (int k = 0; k < 3000; ++k) {
+      grapheme += "\xcc\x81";  // U+0301, combining acute accent
+    }
     Scenario sc = scenario(
         "function cat(s) { r = s + \"|\" + s; return r; }\n"
         "function sl(s, a) { b = s[::-1]; c = s[1:20000:3]; d = a[::2]; return b.length + c.length + d.size; }\n"
+        "function tag(s) { h = s.html; r = h.render; return h.length + r.length; }\n"
+        "function ix(g) { c = g[0]; return c.byte_length + g.length; }\n"
         "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\n"
+        "g = \"" + grapheme + "\";\n"
         "use t; a = t.items(1)[0].row * 3000;\n"
-        "x = cat(s); print(x.length); y = sl(s, a); print(y);\n");
+        "x = cat(s); print(x.length); y = sl(s, a); print(y); print(\",\"); print(tag(s)); print(\",\"); print(ix(g));\n");
     sc.before = add_items_library;
-    std::vector<uint64_t> concat, string_slice, array_slice;
+    std::vector<uint64_t> concat, string_slice, array_slice, retag, render, substring;
     sc.after = [&](Context & context) {
       concat.push_back(native_polls(context, "STRING_CONCAT"));
       string_slice.push_back(native_polls(context, "STRING_SLICE"));
       array_slice.push_back(native_polls(context, "ARRAY_SLICE"));
+      retag.push_back(native_polls(context, "STRING_RETAG"));
+      render.push_back(native_polls(context, "STRING_RENDER"));
+      substring.push_back(native_polls(context, "STRING_SUBSTRING"));
     };
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_position(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure());
-    EXPECT_EQ(jit.raw, "40961" + std::to_string(20480 + 6667 + 3000));
+    EXPECT_EQ(jit.raw, "40961" + std::to_string(20480 + 6667 + 3000) + "," + std::to_string(2 * 20480) + "," + std::to_string(6001 + 1));
     ASSERT_EQ(concat.size(), 2u);
     EXPECT_EQ(concat[0], concat[1]);
     EXPECT_EQ(string_slice[0], string_slice[1]);
     EXPECT_EQ(array_slice[0], array_slice[1]);
+    EXPECT_EQ(retag[0], retag[1]);
+    EXPECT_EQ(render[0], render[1]);
+    EXPECT_EQ(substring[0], substring[1]);
     EXPECT_GE(concat[1], 10u);
     EXPECT_GE(string_slice[1], 10u);
     EXPECT_GE(array_slice[1], 1u);
+    EXPECT_GE(retag[1], 1u) << "the retag polled inside its compiled call";
+    EXPECT_GE(render[1], 1u) << "the render polled inside its compiled call";
+    EXPECT_GE(substring[1], 1u) << "the index of the long grapheme polled inside its compiled call";
     EXPECT_EQ(jit.stats.functions_discarded, 0u);
     // The top level's one exit is its array repeat (`* 3000`, an array operand of `*`).
     EXPECT_EQ(jit.stats.deopts, 1u);
@@ -971,7 +994,10 @@ TEST(JitTemplates, ARetagAndARenderInCompiledCodeKeepTheInterpretersSegmentsAndT
   EXPECT_EQ(jit.rendered, plain.rendered);
   EXPECT_NE(jit.rendered.find("&lt;b&gt;&amp;"), std::string::npos) << jit.rendered;
   EXPECT_EQ(jit.stats.deopts, 0u);
-  EXPECT_GE(jit.stats.value_calls, 2u * 9u);
+  // Each call of h: `.html`, `.render`, the four retags of z, `.byte_length` (7 attributes), the
+  // constant "<i>" and three "/" (4 constants), and 1 + 3 + 6 `+` (10): 21. The top level's two
+  // string constants: 2.
+  EXPECT_EQ(jit.stats.value_calls, 2u * 21u + 2u);
 }
 
 TEST(JitTemplates, ValueOperationErrorsAreTheInterpretersWithTheirOrigins) {
@@ -1011,10 +1037,12 @@ TEST(JitTemplates, ValueOperationErrorsAreTheInterpretersWithTheirOrigins) {
 
 TEST(JitTemplates, AHostDefinedOperandOfAValueOperationIsARealExitBeforeTheOperation) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // The custom dispatch is host-extensibility story 10's: until then each of these leaves
-  // compiled code before the operation, with nothing of it done, and the interpreter asks the
-  // type (a type with no operations: the interpreter's answer). Each exit counts toward the
-  // discard limit, as a guard's does, and is not taken for a native-stack exit.
+  // A host type's operation is a host callback (an activation record, a handle scope, `in_host`,
+  // and possible re-entry), which spec-template-compiled does not run from inside a compiled
+  // helper; compiling that dispatch is spec-tang-host-extensibility story 10's. Until then each of
+  // these leaves compiled code before the operation, with nothing of it done, and the
+  // interpreter runs it (a type with no operations: the interpreter's answer). Each exit counts
+  // toward the discard limit, as a guard's does, and is not taken for a native-stack exit.
   Boxes boxes;
   struct Case {
     const char * name;
@@ -1067,6 +1095,9 @@ TEST(JitTemplates, ARawFloatBesideAStringConstantIsTheDesignedBoxExitAndBesideAV
       {"a string constant on the left", "x = 1.5 * 2.0; return \"x\" + x;", 2, 0},
       {"a string constant on the right", "x = 1.5 * 2.0; return x + \"x\";", 2, 0},
       {"a string from a variable", "t = \"x\"; x = 1.5 * 2.0; return t + x;", 0, 2},
+      // `label + f`, the label a concatenation: its producer is no `CONST`, so the `+` is float
+      // arithmetic and the unbox of the label is the counted guard exit (design.md, raw floats).
+      {"label + f", "label = \"n=\" + i; x = 1.5 * 2.0; return label + x;", 0, 2},
       {"an index by a raw float", "t = \"abc\"; x = 0.5 * 2.0; return t[x];", 2, 0},
       {"a slice by a raw float", "t = \"abc\"; x = 0.5 * 2.0; return t[x:];", 2, 0},
   };
@@ -1080,6 +1111,36 @@ TEST(JitTemplates, ARawFloatBesideAStringConstantIsTheDesignedBoxExitAndBesideAV
     EXPECT_EQ(jit.stats.exits_counted, c.counted) << c.name;
     EXPECT_EQ(jit.stats.functions_declined_expected, 0u) << c.name;
   }
+}
+
+TEST(JitTemplates, ANumberOperatorTheInterpreterRunsSlowAndCompiledCodeInlineLeavesThePollIdentityAlone) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The interpreter runs `*` (and `/`, `%`, float arithmetic) through gltang_vm_op_binary;
+  // compiled code computes it inline and does not stand its frame there. A poll that reads the
+  // frame's identity without setting it (the memory budget refusing the string constant's
+  // allocation, made by a call that stands nowhere) must read the same on both tiers, so the
+  // interpreter must not stand at an operator whose operands are numbers either
+  // (gltang_vm_binary_may_pace). Swept over memory budgets from below the run's need to above it.
+  Scenario sc = scenario("x = 7; y = x * 3; w = x / 2 + x % 3; s = \"abcdefghijklmnopqrstuvwxyz0123456789\"; print(s); print(y + w);\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  ASSERT_TRUE(measured.finished);
+  Outcome compiled = run(sc, 1);
+  EXPECT_EQ(compiled.stats.deopts, 0u);
+  EXPECT_EQ(compiled.stats.value_calls, 1u) << "the string constant, made in compiled code";
+  std::set<std::string> kinds;
+  size_t refused_polls = 0;
+  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain, jit;
+    expect_same(tight, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << "memory " << budget;
+    kinds.insert(plain.key());
+    refused_polls += plain.polls > measured.polls ? 1u : 0u;
+  }
+  EXPECT_GE(kinds.size(), 2u) << "the sweep crossed the budget the constant needs";
+  EXPECT_GE(refused_polls, 1u) << "some budget made the refusal poll, whose identity was compared";
 }
 
 TEST(JitTemplates, WhereNativesCannotBeCalledTheValueOperationsStayExitsAndTheOutputIsTheSame) {

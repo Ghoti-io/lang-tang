@@ -2,7 +2,7 @@
 # defect: the helper compiled code calls for `+` past the small-integer path does not add the
 #   operation's cost to the pending fuel
 # caught by: the concatenation in a loop, whose fuel is compared with the interpreter's
-#   (testJit_templates)
+#   (testJit_templates, JitTemplates.AConcatenationInALoop*)
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
@@ -13,5 +13,5 @@
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADD];
 +  /* planted: no fuel for the `+` */
    ++exec->jit_stats.value_calls;
-   // A long concatenation polls inside (its pacing), at the `+`.
-   stand_at_the_op(exec, context);
+   // A long concatenation polls inside (its pacing), at the `+`; a sum of two numbers stands
+   // nowhere, as the interpreter's does not (gltang_vm_binary_may_pace, the one predicate).

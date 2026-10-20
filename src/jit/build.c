@@ -41,7 +41,7 @@
  * point; the value operations, a string `CONST`, `+` past the small-integer path, `INDEX`,
  * `SLICE` and the `ATTR` of any other value, as calls of the interpreter's own functions
  * through the same table, behind a test that no operand is a host-defined value (an exit:
- * its type is the interpreter's to ask); and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
+ * the type's operation is a host callback, which no compiled helper runs yet); and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
  * that are no GC point, `STORE_GLOBAL` as the interpreter's plain store, and `HALT` as a
  * return of the halted word (jit.h), after which the interpreter runs `HALT`'s body. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
@@ -383,7 +383,7 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
       return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
     case GLTANG_OP_SLICE: {
       const int32_t parts = (int32_t)((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u));
-      for (int32_t p = d - 1 - parts; p >= 0 && p < d; ++p) {
+      for (int32_t p = d - 1 - parts > 0 ? d - 1 - parts : 0; p < d; ++p) {
         if (c->sk[p] == KIND_F64) {
           return true;
         }
@@ -1538,8 +1538,12 @@ static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
 
 /**
  * Leaves compiled code, before the operation at `i` and with nothing of it done, when the
- * operand at stack position `pos` is a host-defined value: its type's operation is the
- * interpreter's to call (the custom dispatch is host-extensibility story 10's). The word must
+ * operand at stack position `pos` is a host-defined value. The vm functions the helpers call
+ * would hand it to its type themselves; the reason is what that is: the type's operation is a
+ * host callback (an activation record, a handle scope, `in_host`, and a callback that may later
+ * re-enter guest code), which spec-template-compiled does not run from inside a compiled
+ * helper. Compiling that dispatch is spec-tang-host-extensibility story 10's
+ * (planning/specs/spec-tang-host-extensibility/stories.yaml, id "10"). The word must
  * be a non-null pointer (tag 0) before its kind is read; any other word goes on. The exit is
  * a real one and counts toward the discard limit (the deopt hook reads the refusal).
  */

@@ -1,0 +1,25 @@
+# 177 `apply_kinds` has no entry for INDEX and SLICE
+# defect: the effect of an index and a slice on the kinds is not known, so the analysis takes either
+#   for a defect of the compiler (an internal error) and the function is not compiled
+# caught by: the opcode policy over both kind tables (testJit_floats,
+#   JitFloats.EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline). A wrong entry instead of a
+#   missing one (the container's position off by one) is not planted: the position it would leave
+#   unset holds a value word on every path (a raw container or part is the box exit before it), so
+#   no test can tell it from the right one.
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -514,12 +514,7 @@
+     case GLTANG_OP_CALL:
+       set_stack_kind(c, (uint32_t)d - 1u - a, KIND_REF);
+       break;
+-    case GLTANG_OP_INDEX:  // the container is replaced by the element, a value word
+-      set_stack_kind(c, (uint32_t)d - 2u, KIND_REF);
+-      break;
+-    case GLTANG_OP_SLICE:  // the container is replaced by the slice, a value word
+-      set_stack_kind(c, (uint32_t)d - 1u - ((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u)), KIND_REF);
+-      break;
++    /* planted: no entry for INDEX and SLICE */
+     // Instructions with no effect on a kind: they pop, jump or leave.
+     case GLTANG_OP_POLL:
+     case GLTANG_OP_LINE:

@@ -423,9 +423,12 @@ resume_loop:
         // A long concatenation or repetition polls inside (its pacing), and so may a host-defined
         // type's operation: the frame there stands at the operation, the state and identity
         // compiled code's call of `+` carries, and that a guard exit before any of them leaves
-        // in the rebuilt frame.
-        SAVE_AT_OP();
-        STAND_AT_OP();
+        // in the rebuilt frame. Two numbers are computed inline by compiled code, which stands
+        // nowhere, so neither does the interpreter (gltang_vm_binary_may_pace).
+        if (gltang_vm_binary_may_pace(x, y)) {
+          SAVE_AT_OP();
+          STAND_AT_OP();
+        }
         {
           GLTANG_Value r = gltang_vm_op_binary(exec, op, x, y);
           if (r == GLTANG_V_UNWIND) {

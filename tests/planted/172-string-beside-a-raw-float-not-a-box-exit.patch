@@ -2,7 +2,7 @@
 # defect: `reads_raw` no longer takes `"x" + f`, with f raw, as a concatenation, so compiled code
 #   tries float arithmetic, whose unbox of the string is a guard exit that counts
 # caught by: the raw float beside a string constant, its expected and counted exits
-#   (testJit_templates)
+#   (testJit_templates, JitTemplates.ARawFloatBeside*)
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c

@@ -213,7 +213,8 @@ static GRJIT_NativeResult thunk_print_const(void * context, uint64_t block) {
 // collector keeps it; the vm functions hold what they need across their own allocations
 // (the temporaries), as they do for the interpreter, and only `ATTR`, which makes its name
 // first, holds its container here. An operand that is a host-defined value never arrives:
-// compiled code tests for one before the call and leaves.
+// compiled code tests for one before the call and leaves, because the type's operation is a
+// host callback, which these helpers do not run (spec-tang-host-extensibility story 10).
 
 static GRJIT_NativeResult thunk_const(void * context, uint64_t index, uint64_t site) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
@@ -234,8 +235,11 @@ static GRJIT_NativeResult thunk_add(void * context, uint64_t a, uint64_t b) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADD];
   ++exec->jit_stats.value_calls;
-  // A long concatenation polls inside (its pacing), at the `+`.
-  stand_at_the_op(exec, context);
+  // A long concatenation polls inside (its pacing), at the `+`; a sum of two numbers stands
+  // nowhere, as the interpreter's does not (gltang_vm_binary_may_pace, the one predicate).
+  if (gltang_vm_binary_may_pace(a, b)) {
+    stand_at_the_op(exec, context);
+  }
   return finished(exec, gltang_vm_op_binary(exec, GLTANG_OP_ADD, a, b), false);
 }
 

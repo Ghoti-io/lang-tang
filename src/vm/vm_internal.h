@@ -692,6 +692,18 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v);
 bool gltang_vm_truthy(GLTANG_Value v);
 bool gltang_vm_is_error(GLTANG_Value v);
 bool gltang_vm_is_number(GLTANG_Value v);
+/**
+ * @brief Whether a binary operator on `a` and `b` may poll inside (its pacing, or a host type's
+ *   operation): when an operand is not a number (a string, a container, a host-defined value, null,
+ *   an error...). The interpreter stands its frame at the operator (pc, sp, poll identity) exactly
+ *   then, and so does compiled code's `+` helper; on two numbers neither does, because compiled code
+ *   computes them inline (or calls `+`'s helper, for a sum outside the range) and stands nowhere, so
+ *   a later poll that reads the frame's identity without setting it (a memory refusal) reads the
+ *   same on both tiers. The one predicate for both, so they cannot drift.
+ */
+static inline bool gltang_vm_binary_may_pace(GLTANG_Value a, GLTANG_Value b) {
+  return !gltang_vm_is_number(a) || !gltang_vm_is_number(b);
+}
 bool gltang_vm_is_container(GLTANG_Value v);
 int64_t gltang_vm_int(GLTANG_Value v);
 double gltang_vm_float(GLTANG_Value v);

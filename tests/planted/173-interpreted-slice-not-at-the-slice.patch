@@ -2,8 +2,9 @@
 # defect: the interpreter's `SLICE` neither records its position in the frame nor sets the frame's
 #   poll identity before the slice, so a poll inside a long slice sees another frame than compiled
 #   code's call of it, which stands at the slice
-# caught by: the long concatenation and slice test, which compares the identity of every poll
-#   (testJit_templates; the JIT arm only, since the interpreter alone has nothing to differ from)
+# caught by: the long operations test, which compares the identity of every poll with compiled
+#   code's (testJit_templates, JitTemplates.ALongConcatenation*; the JIT arm only, since the
+#   interpreter alone has nothing to differ from)
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c

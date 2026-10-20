@@ -2,7 +2,7 @@
 # defect: compiled code calls the helper of `ATTR`, `INDEX`, `SLICE` and `+` with a host-defined
 #   operand, instead of leaving for the interpreter before the operation
 # caught by: the host-defined operand of each value operation, whose counted exits and helper
-#   calls are exact (testJit_templates)
+#   calls are exact (testJit_templates, JitTemplates.AHostDefinedOperand*)
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c

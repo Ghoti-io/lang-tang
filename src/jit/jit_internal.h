@@ -126,7 +126,7 @@ typedef enum GLTANG_JitRefusal {
   GLTANG_REFUSAL_PUSH,         ///< The push was refused: depth, memory, an argument error.
   GLTANG_REFUSAL_CALLEE_GUARD, ///< The callee value was not the function the site names.
   GLTANG_REFUSAL_NATIVE_GUARD, ///< The callee value was not the library native the site names.
-  GLTANG_REFUSAL_OPERAND_GUARD ///< An operand of a value operation compiled as a call (`+`, `INDEX`, `SLICE`, `ATTR`) is a host-defined value, whose type the interpreter asks.
+  GLTANG_REFUSAL_OPERAND_GUARD ///< An operand of a value operation compiled as a call (`+`, `INDEX`, `SLICE`, `ATTR`) is a host-defined value, whose type's operation (a host callback) no compiled helper runs yet.
 } GLTANG_JitRefusal;
 
 /**

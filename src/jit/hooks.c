@@ -351,9 +351,10 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
             counts = true;
           }
           else if (jit->refusal == GLTANG_REFUSAL_OPERAND_GUARD) {
-            // A value operation's operand is a host-defined value: its type's operation
-            // is the interpreter's to call (host-extensibility story 10 compiles it). A
-            // real exit, so it counts, as any guard does.
+            // A value operation's operand is a host-defined value, whose type's operation is a
+            // host callback that no compiled helper runs from inside compiled code yet
+            // (spec-tang-host-extensibility story 10 compiles that dispatch). A real exit, so
+            // it counts, as any guard does.
             counts = true;
           }
           else {

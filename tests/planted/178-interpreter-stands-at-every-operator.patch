@@ -1,0 +1,18 @@
+# 178 the interpreter stands at every binary operator, numbers too
+# defect: the interpreter's slow path of a binary operator stands its frame at the operator whatever
+#   its operands, where compiled code computes two numbers inline and stands nowhere, so a later poll
+#   that reads the frame's identity without setting it (a memory refusal) reads another identity
+# caught by: the memory sweep after `*`, `/` and `%` of small integers, which compares the identity
+#   of every poll (testJit_templates, JitTemplates.ANumberOperator*)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -425,7 +425,7 @@
+         // compiled code's call of `+` carries, and that a guard exit before any of them leaves
+         // in the rebuilt frame. Two numbers are computed inline by compiled code, which stands
+         // nowhere, so neither does the interpreter (gltang_vm_binary_may_pace).
+-        if (gltang_vm_binary_may_pace(x, y)) {
++        if (true) {  /* planted: numbers too */
+           SAVE_AT_OP();
+           STAND_AT_OP();
+         }
