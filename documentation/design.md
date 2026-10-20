@@ -1848,6 +1848,7 @@ breaks nothing as not caught. Observed:
 | 153 print-leaves-its-operand | the `PRINT` thunk's value is discarded, so the slot keeps the operand | the loop of prints (`testJit_templates`) | the function returns 99, not null |
 | 154 long-text-printed-without-pacing | the `PRINT_CONST` thunk prints in pieces through sinks of their own, none reaching the pacing interval | the large-print test (`testJit_templates`) | no pacing poll, less fuel, and the scope that must run out inside the text does not |
 | 155 print-position-not-stored | the call site stores no position before a print | the refused delivery and the large print (`testJit_templates`) | the error's origin is another line; the polls' identities differ |
+| 158 clear-result-skips-its-fuel | the compiled `CLEAR_RESULT` adds no cost | the template whose first operation is text (`testJit_templates`) | the fuel differs from the interpreter's |
 | 156 interpreted-print-not-at-the-print | the interpreter's prints leave the frame where the last poll left it | the frame differential over the output programs (`testObserver`, `Observer.ACompiledPrint*`) | the poll identity, `pc` and `sp` of a poll inside a long print differ from compiled code's |
 | 157 compiled-print-not-at-the-print | the print thunks leave the guest frame's identity at the last poll | the large-print test (`testJit_templates`) | the identity of a poll inside the print differs |
 
@@ -1857,14 +1858,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 157 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 157 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 158 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and thirty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs the hundred and forty-eight that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2371,8 +2372,9 @@ They are now calls of the interpreter's own functions, so there is one implement
 takes the value, and `print_const`, which takes the constant's string block), which call
 `gltang_vm_op_print` and `gltang_vm_print_constant`; `CLEAR_RESULT` is a call that is no GC point to
 `gltang_jit_clear_result`, which is `gltang_vm_set_result(exec, null, false)` (it enters a lost result
-in the error list, which is the execution's own memory, and nothing it does polls or touches the heap,
-so a frame state and a stack map would describe nothing it needs). Output, its capture, the rollback of
+in the error list, which is the execution's own memory, and sets the logged flag in the error object, a
+plain word; it neither allocates in the heap nor polls, so it is not a GC point and needs no frame state
+or stack map). Output, its capture, the rollback of
 a print that fails, the sink and its delivery (with `in_host` set, as interpreted), the pacing of a
 long print (`sink_pace`, a runtime poll per `GLTANG_POLL_BYTES`) and the error a failed print makes are
 therefore the interpreter's. Each thunk charges its operation's cost once, as the `use` thunk does, and

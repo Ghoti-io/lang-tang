@@ -12,5 +12,5 @@
 -  if (top.offset) {
 +  if (top.offset && false) {  /* planted: the frame is not stood at the print */
      const uint64_t * slots = grcore_stack_slots(stack, top);
+     // A live top frame: the setter cannot refuse it.
      (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
-   }

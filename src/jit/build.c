@@ -280,6 +280,7 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_PRINT:
       return c->natives_on;
     case GLTANG_OP_PRINT_CONST:
+      // compile.c emits PRINT_CONST only with const_string's index, so the test is a fail-safe.
       return c->natives_on && string_constant(c, a);
     case GLTANG_OP_CLEAR_RESULT:
       return true;
@@ -1393,6 +1394,7 @@ static void emit_print(Ctx * c, uint32_t i, uint32_t d) {
 
 /** `PRINT_CONST k`: the interpreter's print of the constant's text; it pushes nothing, and its value is discarded as the interpreter discards it. */
 static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  // The block is the program's (gcu_calloc'd by compile.c, freed with the program, never in the heap), and the execution holds the program while its code runs.
   GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->program->constants[a].block)};
   emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d);
 }

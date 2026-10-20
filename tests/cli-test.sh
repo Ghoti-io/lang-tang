@@ -141,6 +141,10 @@ if "$TANG" --jit-threshold 1 -e '1' >/dev/null 2>&1; then
     check "--native-stack $budget: the output is the interpreted run's" "20000" \
       "$("$TANG" --jit-threshold 1 --native-stack "$budget" --depth 100000 -e "$rec")"
   done
+  # The prints of a compiled loop are compiled (spec-template-compiled story 1).
+  printloop='function f(n) { i = 0; while (i < n) { r = print(i); i = i + 1; } return i; } f(5);'
+  compiled_prints="$(field_of "compiled prints" "$(jit_line -e "$printloop")")"
+  check "--jit-stats: the prints of a compiled loop are compiled" "yes" "$([ "${compiled_prints:-0}" -gt 0 ] && echo yes || echo "no ($compiled_prints)")"
 fi
 status "--native-stack without a number exits 2" 2 "$TANG" --native-stack
 status "--native-stack with a word exits 2" 2 "$TANG" --native-stack many -e 1

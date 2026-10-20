@@ -288,9 +288,9 @@ void gltang_jit_note_callee_guard(GLTANG_Execution * exec);
 void gltang_jit_note_native_guard(GLTANG_Execution * exec);
 /**
  * @brief `CLEAR_RESULT` from compiled code: the interpreter's own
- *   `gltang_vm_set_result(exec, null, false)`. No GC point and no poll: a lost result it
- *   replaces is entered in the error list, which is the execution's own memory and not
- *   the heap, and nothing it does polls.
+ *   `gltang_vm_set_result(exec, null, false)`. It neither allocates in the heap nor polls,
+ *   so it is not a GC point: a lost result it replaces is entered in the error list (the
+ *   execution's own memory) and marked logged in its error object's flags, a plain word.
  */
 void gltang_jit_clear_result(GLTANG_Execution * exec);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */

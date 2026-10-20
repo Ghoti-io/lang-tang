@@ -6,7 +6,7 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -183,8 +183,21 @@
+@@ -184,8 +184,21 @@
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
    ++exec->jit_stats.output_calls;
    stand_at_the_print(exec, context);

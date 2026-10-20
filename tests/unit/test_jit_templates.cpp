@@ -32,7 +32,8 @@
 // declaration (a global store is not compiled): that exit is `kMain` in every count
 // below. A template's function 0 leaves at its `HALT`, which story 2 compiles.
 //
-// Each can fail, and has been seen to: tests/planted/152 to 156.
+// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158 here, and 156 in
+// testObserver (the frame differential over the output programs).
 
 #include "exec_harness.h"
 #include "jit_harness.h"
@@ -176,10 +177,12 @@ TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOut
     ASSERT_EQ(paced.size(), 2u);
     EXPECT_EQ(paced[0], paced[1]);
     EXPECT_GE(paced[1], 1u);
-    EXPECT_TRUE(jit.raw == "[]") << "the scope ran out inside the text, which was rolled back: " << jit.raw.size() << " bytes";
+    EXPECT_EQ(jit.raw, "[]") << "the scope ran out inside the text, which was rolled back";
     EXPECT_NE(jit.errors.find(std::to_string((int)GLTANG_ERROR_HOW_SCOPE_LIMIT) + ":"), std::string::npos) << jit.errors;
-    EXPECT_GE(jit.stats.native_status_unwinds, 1u) << "the unwind left compiled code from inside the print";
-    EXPECT_GE(jit.stats.output_calls, 1u);
+    // The template's one compiled operation that ran is its long text, and the unwind came out of it.
+    EXPECT_EQ(jit.stats.output_calls, 1u);
+    EXPECT_EQ(jit.stats.native_status_unwinds, 1u) << "the unwind left compiled code from inside the print";
+    EXPECT_EQ(jit.stats.native_status_deopts, 0u);
   }
   // The same text with no scope limit: polls compared one by one, every one inside the print.
   {
@@ -193,7 +196,7 @@ TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOut
     ASSERT_EQ(paced.size(), 2u);
     EXPECT_EQ(paced[0], paced[1]);
     EXPECT_GE(paced[1], 4u);
-    EXPECT_TRUE(jit.raw == "[" + std::string(20000, 'x') + "tail]") << jit.raw.size() << " bytes";
+    EXPECT_EQ(jit.raw, "[" + std::string(20000, 'x') + "tail]");
   }
 }
 
@@ -300,15 +303,35 @@ TEST(JitTemplates, APrintOfAHostDefinedValueAppendsNothingAsInterpreted) {
 
 TEST(JitTemplates, WhereNativesCannotBeCalledAPrintStaysAnExitAndTheOutputIsTheSame) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  Scenario sc = scenario("function f(n) { i = 0; while (i < n) { print(i); i = i + 1; } return i; }\nf(5);\nf(5);\n");
-  sc.natives_off = true;
-  Outcome plain, jit;
-  expect_same(sc, &plain, &jit);
-  ASSERT_FALSE(HasFailure());
-  EXPECT_EQ(jit.raw, "0123401234");
-  EXPECT_EQ(jit.stats.output_calls, 0u);
-  EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call left at its first print, as before the prints were compiled";
-  EXPECT_EQ(jit.stats.exits_counted, kMain + 2u);
+  // A print of a value and of a string literal (PRINT_CONST): both stay exits.
+  {
+    Scenario sc = scenario("function f(n) { i = 0; while (i < n) { r = print(i); print(\",\"); i = i + 1; } return i; }\nf(5);\nf(5);\n");
+    sc.natives_off = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "0,1,2,3,4,0,1,2,3,4,");
+    EXPECT_EQ(jit.raw, plain.raw);
+    EXPECT_EQ(jit.stats.output_calls, 0u);
+    EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call left at its first print, as before the prints were compiled";
+    EXPECT_EQ(jit.stats.exits_counted, kMain + 2u);
+  }
+  // A template whose code clears its result before its first text: CLEAR_RESULT is a plain
+  // call and compiles even here, and the text is the exit.
+  {
+    Scenario sc = scenario("<% while (false) { } %>text<% while (false) { } %>more", Mode::Template);
+    sc.natives_off = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "textmore");
+    EXPECT_EQ(jit.raw, plain.raw);
+    EXPECT_EQ(jit.stats.functions_compiled, 1u);
+    EXPECT_EQ(jit.stats.output_calls, 0u);
+    EXPECT_GE(jit.stats.result_clears, 1u) << "the clear before the text ran compiled";
+    EXPECT_EQ(jit.stats.deopts, 1u) << "the one exit is the first text";
+    EXPECT_EQ(jit.stats.exits_counted, 1u);
+  }
 }
 
 #else  // JIT=no
@@ -321,7 +344,20 @@ TEST(JitTemplates, WithoutTheJitPrintsRunInTheInterpreterAndNothingIsCompiled) {
   ASSERT_TRUE(context.execute());
   EXPECT_EQ(context.raw(), "01234");
   GLTANG_JitStats st = context.jit_stats();
-  EXPECT_EQ(st.output_calls + st.result_clears + st.functions_compiled, 0u);
+  EXPECT_EQ(st.output_calls, 0u);
+  EXPECT_EQ(st.result_clears, 0u);
+  EXPECT_EQ(st.functions_compiled, 0u);
+  // A template, whose text clears its result: still nothing compiled or counted.
+  Compiled text("head<% if (1 < 2) { %>yes<% } %>tail", Mode::Template, "nojit-template.tang");
+  ASSERT_TRUE(text.ok());
+  Context tcontext(text.program);
+  ASSERT_TRUE(tcontext.ok());
+  ASSERT_TRUE(tcontext.execute());
+  EXPECT_EQ(tcontext.raw(), "headyestail");
+  GLTANG_JitStats tst = tcontext.jit_stats();
+  EXPECT_EQ(tst.output_calls, 0u);
+  EXPECT_EQ(tst.result_clears, 0u);
+  EXPECT_EQ(tst.functions_compiled, 0u);
 }
 
 #endif

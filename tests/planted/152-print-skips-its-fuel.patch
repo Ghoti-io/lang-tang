@@ -4,7 +4,7 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -170,7 +170,7 @@
+@@ -171,7 +171,7 @@
  
  static GRJIT_NativeResult thunk_print(void * context, uint64_t value) {
    GLTANG_Execution * exec = gltang_vm_execution_of(context);

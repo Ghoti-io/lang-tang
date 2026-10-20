@@ -57,7 +57,7 @@ run() {
   rc=$?
 }
 
-for suite in Jit Jit_calls Profile Retention Observer; do
+for suite in Jit Jit_calls Jit_templates Profile Retention Observer; do
   exe="$apps/test$suite$ext"
   [ -x "$exe" ] || fail "$exe is not built"
   run "$exe" no
@@ -66,7 +66,7 @@ $out"
 done
 
 if [ "$gated" != yes ]; then
-  for suite in Jit Jit_calls Profile Retention Observer; do
+  for suite in Jit Jit_calls Jit_templates Profile Retention Observer; do
     run "$apps/test$suite$ext" yes
     [ "$rc" -eq 0 ] || fail "on a target without a backend the forced run of test$suite must pass or skip, and it failed:
 $out"
@@ -103,6 +103,7 @@ $(printf '%s\n' "$failed" | grep -vxF "$wanted" | sed 's/^/    /')"
 counted=0
 check_named "$apps/testJit$ext" "$unit/test_jit.cpp"
 check_named "$apps/testJit_calls$ext" "$unit/test_jit_calls.cpp"
+check_named "$apps/testJit_templates$ext" "$unit/test_jit_templates.cpp"
 want_count="$counted"
 
 for suite in Profile Retention Observer; do
@@ -111,4 +112,4 @@ for suite in Profile Retention Observer; do
 $out"
 done
 
-printf 'check-backend-required: ok: backend forced off, the %s tier-up tests that use the macro fail by name, and testProfile, testRetention and testObserver each fail; as built, all five pass\n' "$want_count"
+printf 'check-backend-required: ok: backend forced off, the %s tier-up tests that use the macro fail by name, and testProfile, testRetention and testObserver each fail; as built, all six pass\n' "$want_count"

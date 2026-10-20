@@ -164,6 +164,7 @@ static void stand_at_the_print(GLTANG_Execution * exec, void * context) {
   GRCORE_FrameRef top = grcore_stack_top(stack);
   if (top.offset) {
     const uint64_t * slots = grcore_stack_slots(stack, top);
+    // A live top frame: the setter cannot refuse it.
     (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
   }
 }

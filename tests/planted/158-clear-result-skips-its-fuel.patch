@@ -1,0 +1,15 @@
+# 158 the compiled CLEAR_RESULT charges no fuel
+# defect: the emission of `CLEAR_RESULT` does not add the operation's cost
+# caught by: the template whose first operation is text, whose fuel is compared with the interpreter's (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1572,7 +1572,7 @@
+       emit_print_const(c, i, d, a);
+       break;
+     case GLTANG_OP_CLEAR_RESULT:
+-      add_fuel(c, cost);
++      /* planted: the clear's cost is not charged */
+       call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_clear_result);
+       break;
+ 
