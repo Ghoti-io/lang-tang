@@ -1389,11 +1389,25 @@ TEST(JitTemplates, ACastToStringOfALargeArrayPollsAsOftenAtTheSameFramesAndADeep
   // the CAST), and their count by native. Nesting an array in itself past the value-depth limit
   // (`a = [a]`: the stored `a` is copied by ADOPT, in compiled code) is the interpreter's
   // `Recursion limit` error, which the cast to string then renders, in both tiers.
+  //
+  // Scaled under heavy instruments (torture, verify, relocation, a moving stack, Valgrind: a
+  // collection and a full verify at every allocation), where the plain sizes took 537 s under
+  // torture and verify and 1.8 h under relocation: the first array is built by doubling to 2048
+  // strings rather than by 3000 appends (quadratic allocations), the copied array has 2047
+  // elements rather than 8191, and each still renders or copies past the pacing interval more than
+  // twice (`paced >= 2` below). The deep array is skipped there: building one past the depth limit
+  // copies the whole chain at every level (a container stored into a literal is copied, ADOPT), so
+  // its allocations are quadratic in the 2048 levels it needs, and no smaller nesting reaches the
+  // limit. The plain run, and the JIT-threshold arm, keep every block at its full size.
+  const bool heavy = tt::heavy_instruments();
   {
-    Scenario sc = scenario(
-        "function big(n) { a = []; i = 0; while (i < n) { a = a + [\"item\"]; i = i + 1; } return a; }\n"
-        "function show(a) { s = a as string; return s.length; }\n"
-        "x = big(3000); print(show(x)); print(\",\"); print(show(x));\n");
+    Scenario sc = scenario(heavy
+        ? "function big(n) { a = [\"item\"]; i = 0; while (i < n) { a = a + a; i = i + 1; } return a; }\n"
+          "function show(a) { s = a as string; return s.length; }\n"
+          "x = big(11); print(show(x)); print(\",\"); print(show(x));\n"
+        : "function big(n) { a = []; i = 0; while (i < n) { a = a + [\"item\"]; i = i + 1; } return a; }\n"
+          "function show(a) { s = a as string; return s.length; }\n"
+          "x = big(3000); print(show(x)); print(\",\"); print(show(x));\n");
     std::vector<uint64_t> paced;
     sc.after = [&](Context & context) { paced.push_back(native_polls(context, "RENDER_TO_STRING")); };
     Outcome plain, jit;
@@ -1410,7 +1424,7 @@ TEST(JitTemplates, ACastToStringOfALargeArrayPollsAsOftenAtTheSameFramesAndADeep
   {
     Scenario sc = scenario(
         "function hold(a) { h = [a, 1]; return h[0].size; }\n"
-        "a = []; for (k = 0; k < 13; k += 1) { a = a + a + [\"item\"]; }\n"
+        "a = []; for (k = 0; k < " + std::string(heavy ? "11" : "13") + "; k += 1) { a = a + a + [\"item\"]; }\n"
         "print(hold(a)); print(\",\"); print(hold(a));\n");
     std::vector<uint64_t> paced;
     sc.after = [&](Context & context) { paced.push_back(native_polls(context, "DEEP_COPY")); };
@@ -1420,8 +1434,11 @@ TEST(JitTemplates, ACastToStringOfALargeArrayPollsAsOftenAtTheSameFramesAndADeep
     ASSERT_EQ(paced.size(), 2u);
     EXPECT_EQ(paced[0], paced[1]);
     EXPECT_GE(paced[1], 2u) << "the copy polled inside its compiled call";
-    EXPECT_EQ(jit.raw, "8191,8191");
+    EXPECT_EQ(jit.raw, heavy ? "2047,2047" : "8191,8191");
     EXPECT_EQ(jit.stats.deopts, 0u);
+  }
+  if (heavy) {
+    return;  // the deep array: quadratic under heavy instruments (above); the plain run covers it
   }
   {
     Scenario sc = scenario(
