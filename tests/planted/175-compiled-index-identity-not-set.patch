@@ -1,18 +1,18 @@
-# 175 the compiled index does not set the frame's poll identity to its own
-# defect: the `INDEX` helper does not stand the guest frame at the operation, so a poll inside the
-#   substring of a long grapheme reads the identity of whatever stood last
+# 175 the compiled index does not stand while it runs
+# defect: the `INDEX` helper does not say that its operation stands, so a poll inside the substring
+#   of a long grapheme writes no identity and reads whatever the guest frame was left with
 # caught by: the long operations test, its index of a 6001-byte grapheme, which compares the identity
 #   of every poll with the interpreter's (testJit_templates, JitTemplates.ALongConcatenation*)
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -246,8 +246,7 @@
+@@ -251,8 +251,7 @@
    GLTANG_Execution * exec = gltang_vm_execution_of(context);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_INDEX];
    ++exec->jit_stats.value_calls;
 -  // A string's grapheme is a substring, paced by its bytes.
--  stand_at_the_op(exec, context);
-+  /* planted: the frame is not stood at the index */
-   return finished(exec, gltang_vm_op_index(exec, container, index), false);
- }
- 
+-  exec->standing = true;
++  /* planted: the index does not stand */
+   GLTANG_Value result = gltang_vm_op_index(exec, container, index);
+   exec->standing = false;
+   return finished(exec, result, false);

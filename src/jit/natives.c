@@ -158,16 +158,17 @@ static GLTANG_Value attribute(GLTANG_Execution * exec, GLTANG_Value container, u
   return value;
 }
 
-static void stand_at_the_op(GLTANG_Execution * exec, void * context);
-
 static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
   ++exec->jit_stats.member_loads;
-  // The interpreter's ATTR stands at the operation whatever its operand (story 3): a native
-  // called after it that polls reads that identity, on both tiers.
-  stand_at_the_op(exec, context);
-  return finished(exec, attribute(exec, container, constant), false);
+  // The interpreter's ATTR stands at the operation whatever its operand, so a poll inside a
+  // library's `.name` (a refused allocation of its name or of the member it makes) reads the
+  // `ATTR` on both tiers.
+  exec->standing = true;
+  GLTANG_Value result = attribute(exec, container, constant);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 // The output operations (spec-template-compiled story 1): `PRINT` and `PRINT_CONST`
@@ -176,39 +177,35 @@ static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_
 // re-enters guest code: the sink runs inside with `in_host` set, as it does for the
 // interpreter, and may not re-enter.
 
-/**
- * The guest frame of the compiled caller stands at the operation, as the interpreter's
- * frame does while its print, concatenation, slice or attribute runs: the identity a poll
- * inside it (its pacing) reads is the operation's own (compiled code stored the offset
- * before the call).
+/*
+ * An operation that may poll partway stands while its function runs, as the interpreter's does:
+ * `exec->standing` is set before the call and cleared after it. A poll inside it (its pacing, a
+ * refused allocation) first writes the guest frame's poll identity, the compiled caller's frame at
+ * the offset compiled code stored before the call (gltang_vm_native_poll), so the identity a poll
+ * inside reads is the operation's own. An operation that does not poll writes nothing.
  */
-static void stand_at_the_op(GLTANG_Execution * exec, void * context) {
-  GRCORE_Stack * stack = gltang_jit_stack_of(exec->jit, context);
-  GRCORE_FrameRef top = grcore_stack_top(stack);
-  if (top.offset) {
-    const uint64_t * slots = grcore_stack_slots(stack, top);
-    // A live top frame: the setter cannot refuse it.
-    (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
-  }
-}
 
 static GRJIT_NativeResult thunk_print(void * context, uint64_t value) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
   ++exec->jit_stats.output_calls;
-  stand_at_the_op(exec, context);
+  exec->standing = true;
   // The operand is in the call's frame state, as it is on the interpreter's operand
   // stack while its PRINT runs: the value is replaced by the result, null or an error.
-  return finished(exec, gltang_vm_op_print(exec, value), false);
+  GLTANG_Value result = gltang_vm_op_print(exec, value);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 static GRJIT_NativeResult thunk_print_const(void * context, uint64_t block) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
   ++exec->jit_stats.output_calls;
-  stand_at_the_op(exec, context);
+  exec->standing = true;
   // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
-  return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
+  GLTANG_Value result = gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 // The value operations (spec-template-compiled story 3). Each charges its operation's fuel,
@@ -243,9 +240,11 @@ static GRJIT_NativeResult thunk_add(void * context, uint64_t a, uint64_t b) {
   // A long concatenation polls inside (its pacing), at the `+`; a sum of two numbers stands
   // nowhere, as the interpreter's does not (gltang_vm_binary_may_pace, the one predicate).
   if (gltang_vm_binary_may_pace(a, b)) {
-    stand_at_the_op(exec, context);
+    exec->standing = true;
   }
-  return finished(exec, gltang_vm_op_binary(exec, GLTANG_OP_ADD, a, b), false);
+  GLTANG_Value result = gltang_vm_op_binary(exec, GLTANG_OP_ADD, a, b);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 static GRJIT_NativeResult thunk_index(void * context, uint64_t container, uint64_t index) {
@@ -253,19 +252,23 @@ static GRJIT_NativeResult thunk_index(void * context, uint64_t container, uint64
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_INDEX];
   ++exec->jit_stats.value_calls;
   // A string's grapheme is a substring, paced by its bytes.
-  stand_at_the_op(exec, context);
-  return finished(exec, gltang_vm_op_index(exec, container, index), false);
+  exec->standing = true;
+  GLTANG_Value result = gltang_vm_op_index(exec, container, index);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 static GRJIT_NativeResult thunk_slice(void * context, uint64_t flags, uint64_t container, uint64_t p0, uint64_t p1, uint64_t p2) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_SLICE];
   ++exec->jit_stats.value_calls;
-  stand_at_the_op(exec, context);
+  exec->standing = true;
   // The parts present, in the order the operand stack holds them (compiled code passes a
   // zero for each absent one, which the slice never reads); it copies them before it allocates.
   const GLTANG_Value parts[3] = {p0, p1, p2};
-  return finished(exec, gltang_vm_op_slice(exec, container, (unsigned)flags, parts), false);
+  GLTANG_Value result = gltang_vm_op_slice(exec, container, (unsigned)flags, parts);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 static GRJIT_NativeResult thunk_value_attr(void * context, uint64_t container, uint64_t constant) {
@@ -273,8 +276,10 @@ static GRJIT_NativeResult thunk_value_attr(void * context, uint64_t container, u
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
   ++exec->jit_stats.value_calls;
   // A retag (`.html` and the others) and `.render` poll inside, at the `ATTR`.
-  stand_at_the_op(exec, context);
-  return finished(exec, attribute(exec, container, constant), false);
+  exec->standing = true;
+  GLTANG_Value result = attribute(exec, container, constant);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 // The value-building operations (spec-template-compiled story 4), each its operation's fuel and
@@ -287,9 +292,11 @@ static GRJIT_NativeResult thunk_cast(void * context, uint64_t value, uint64_t ty
   // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
   // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.
   if (type == GLTANG_CAST_TYPE_STRING) {
-    stand_at_the_op(exec, context);
+    exec->standing = true;
   }
-  return finished(exec, gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type), false);
+  GLTANG_Value result = gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 /**
@@ -331,8 +338,10 @@ static GRJIT_NativeResult thunk_adopt(void * context, uint64_t value) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
   ++exec->jit_stats.value_calls;
-  stand_at_the_op(exec, context);
-  return finished(exec, gltang_vm_op_adopt(exec, value), false);
+  exec->standing = true;
+  GLTANG_Value result = gltang_vm_op_adopt(exec, value);
+  exec->standing = false;
+  return finished(exec, result, false);
 }
 
 /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */

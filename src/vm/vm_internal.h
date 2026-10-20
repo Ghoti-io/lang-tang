@@ -523,6 +523,13 @@ struct GLTANG_Execution {
   // Where the instruction being executed is, for errors and for natives.
   uint32_t current_function;
   uint32_t current_offset;
+  /// An operation that may poll partway (a print, a concatenation, a slice, a retag, a cast to
+  /// string, a copying `ADOPT`, ...) is running, on either tier: a runtime poll inside it first sets
+  /// the top guest frame's poll identity to that frame's function and `current_offset`, which is
+  /// the operation's (gltang_vm_native_poll). Set and cleared around the operation's call; nothing
+  /// else is stored for an operation that does not poll. A nested run clears it for its own frames
+  /// and puts it back (nested.c).
+  bool standing;
   uint64_t pending_fuel;        ///< Charged to the context at the next poll.
   uint32_t native_status;       ///< What the last native call asked of compiled code (GLTANG_NATIVE_STATUS_*); set by the shared wrapper, read by the compiled call's thunk.
   bool native_gc_seam;          ///< Test seam: the shared wrapper collects once its record is open (entering a nested activation is a GC point, AD-17).

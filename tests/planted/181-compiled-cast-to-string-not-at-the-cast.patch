@@ -1,19 +1,20 @@
-# 181 the compiled cast to string does not set the frame's poll identity to the cast's own
-# defect: the cast helper does not stand the guest frame at the CAST, so a poll inside a long
-#   rendering reads the identity of whatever stood last (the twin of 183, which is the interpreter's)
+# 181 the compiled cast to string does not stand while it runs
+# defect: the cast helper does not say that a cast to string stands, so a poll inside a long
+#   rendering writes no identity and reads whatever the guest frame was left with (the twin of 183,
+#   which is the interpreter's)
 # caught by: the cast to string of a large array, which compares the identity of every poll with the
 #   interpreter's (testJit_templates, JitTemplates.ACastToStringOfALargeArray*)
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -285,9 +285,7 @@
+@@ -291,9 +291,7 @@
    ++exec->jit_stats.value_calls;
    // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
    // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.
 -  if (type == GLTANG_CAST_TYPE_STRING) {
--    stand_at_the_op(exec, context);
+-    exec->standing = true;
 -  }
-+  /* planted: the frame is not stood at the cast to string */
-   return finished(exec, gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type), false);
- }
- 
++  /* planted: the cast to string does not stand */
+   GLTANG_Value result = gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type);
+   exec->standing = false;
+   return finished(exec, result, false);

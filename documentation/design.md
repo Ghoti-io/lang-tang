@@ -1862,21 +1862,20 @@ breaks nothing as not caught. Observed:
 | 167 halted-word-names-the-wrong-halt | the halted word names the instruction after the `HALT` | the template call that ends a run (`testJit_templates`) | the position the run ends with differs from the interpreter's |
 | 168 attribute-operand-not-held | the `ATTR` thunks read their own copy of the container after making the name | the template of attributes, elements and concatenations under relocation torture (`testJit_templates`, `make check-planted-relocate`; with relocation off the same build passes) | the run's output, result and errors differ from the interpreter's |
 | 169 custom-operand-guard-removed | compiled code calls the value operations' thunks with a host-defined operand | the host-defined operand of each value operation (`testJit_templates`) | f's counted exits are 0, not 3 |
-| 170 compiled-slice-identity-not-set | the `SLICE` thunk leaves the guest frame's identity where the last operation stood | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs |
+| 170 compiled-slice-identity-not-set | the `SLICE` thunk does not stand, so a poll inside it writes no identity | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs |
 | 171 concatenation-skips-its-fuel | the `+` thunk adds no cost | the concatenation in a loop (`testJit_templates`) | the fuel differs from the interpreter's |
 | 172 string-beside-a-raw-float-not-a-box-exit | `reads_raw` never takes `"x" + f` for the box exit | the raw float beside a string constant (`testJit_templates`) | no expected exit, and a counted one in its place |
-| 173 interpreted-slice-not-at-the-slice | the interpreter's `SLICE` leaves the frame where the last poll left it | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs from compiled code's |
-| 174 compiled-attribute-identity-not-set | the value `ATTR` thunk leaves the guest frame's identity where the last operation stood | the long operations' retag and render (`testJit_templates`) | the identity of a poll inside the retag differs |
-| 175 compiled-index-identity-not-set | the `INDEX` thunk leaves the guest frame's identity where the last operation stood | the long operations' grapheme index (`testJit_templates`) | the identity of a poll inside the substring differs |
+| 173 interpreted-slice-not-at-the-slice | the interpreter's `SLICE` neither saves its position nor stands | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs from compiled code's |
+| 174 compiled-attribute-identity-not-set | the value `ATTR` thunk does not stand | the long operations' retag and render (`testJit_templates`) | the identity of a poll inside the retag differs |
+| 175 compiled-index-identity-not-set | the `INDEX` thunk does not stand | the long operations' grapheme index (`testJit_templates`) | the identity of a poll inside the substring differs |
 | 176 add-tests-only-its-left-operand | the slow path of a compiled `+` tests only its left operand for a host-defined value | the host-defined operand's "right of +" row (`testJit_templates`) | f's counted exits are 0, not 3, and the helper is called |
 | 177 apply-kinds-misses-index-and-slice | `apply_kinds` has no entry for `INDEX` and `SLICE` | the opcode policy over both kind tables (`testJit_floats`) | the two opcodes flow on with no known effect on the kinds |
-| 178 interpreter-stands-at-every-operator | the interpreter stands at a binary operator on two numbers too | the memory sweep after number operators (`testJit_templates`) | the identity of the refusal's poll differs from compiled code's |
 | 179 literal-elements-not-live | a literal's elements are left out of the frame state of its allocating call and stored from plain-word copies | the literal of fresh strings under torture, verify and a moving stack (`testJit_templates`) | the strings read back differ from the interpreter's |
 | 180 out-of-range-constant-cast-folded | a cast to int of a float constant is folded whatever its range | the corpus scripts of out-of-range constant casts (`testJit_templates`) | the output and error list differ from the interpreter's |
-| 181 compiled-cast-to-string-not-at-the-cast | the `CAST` thunk does not stand the guest frame at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs |
+| 181 compiled-cast-to-string-not-at-the-cast | the `CAST` thunk does not stand at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs |
 | 182 adopt-does-not-copy | the `ADOPT` thunk hands back the container itself | the literals in a loop (`testJit_templates`) | the held row shows the caller's later change |
 | 183 interpreted-cast-to-string-not-at-the-cast | the interpreter's `CAST` does not stand at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs from compiled code's |
-| 184 compiled-adopt-not-at-the-adopt | the `ADOPT` thunk does not stand the guest frame at the `ADOPT` | the copying `ADOPT` of a large array (`testJit_templates`) | the identity of a poll inside the copy differs |
+| 184 compiled-adopt-not-at-the-adopt | the `ADOPT` thunk does not stand | the copying `ADOPT` of a large array (`testJit_templates`) | the identity of a poll inside the copy differs |
 | 185 interpreted-adopt-not-at-the-adopt | the interpreter's `ADOPT` does not stand at a copy | the copying `ADOPT` of a large array (`testJit_templates`) | the identity of a poll inside the copy differs from compiled code's |
 | 186 adopt-copies-no-map | compiled `ADOPT` takes only an array for a container | the literals in a loop (`testJit_templates`) | the held map shows the caller's later change |
 | 187 cast-skips-its-fuel | the `CAST` thunk adds no cost | the template of casts and literals (`testJit_templates`) | the fuel differs from the interpreter's |
@@ -1890,6 +1889,10 @@ breaks nothing as not caught. Observed:
 | 195 bench-template-top-level-entry-forgotten | the template policy leaves out the top level's entry at a threshold of one | `bench --smoke --only steady-template-rows-compiled-per-row`: entries into compiled code exactly | the harness aborts |
 | 196 bench-template-box-exit-counted | the template policy takes a designed box exit for an exit that counts | `bench --smoke --only steady-template-float-print-compiled-warm-call`: expected and counted exits exactly | the harness aborts |
 | 197 bench-template-discard-cap-off-by-one | the template policy expects a template whose exits count to be entered nine times before its discard, not eight | `bench --smoke --only steady-template-float-label-compiled-warm-call`: entries and counted exits exactly | the harness aborts |
+| 198 poll-inside-an-operation-reports-the-last-poll | the runtime poll does not write the identity of the operation that stands, on either tier | the poll identities located to their lines, each tier on its own (`testJit_templates`, `JitTemplates.APollInsideALongOperation*`) | no poll's identity names the concatenation's line (the tiers still agree) |
+| 199 compiled-print-stands-past-its-call | the `PRINT_CONST` thunk does not clear `exec->standing` | the large-print test (`testJit_templates`) | a later poll in an operation that does not stand writes an identity the interpreter's frame never holds |
+| 200 entry-extends-no-single-raw-float | the entry extends the reservation only for a function with more than one raw float at a site | the reservation's capacity across compiled calls and a nested entry (`testJit_floats`) | the capacity at the caller's polls differs, or a rebuild is refused |
+| 201 entry-reads-no-single-argument | the entry reads the guest frame's parameters only for a function with more than one | the fuel-parity test (`testJit`) | a one-parameter function runs compiled with null for its argument |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1901,10 +1904,10 @@ breaks nothing as not caught. Observed:
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 197 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 201 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and eighty-six that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the hundred and eighty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2438,7 +2441,7 @@ identity, which the interpreter then printed under). The interpreter's two print
 at the print before they call (`SAVE_AT_OP` and `grcore_stack_set_identity`, what its `USE`, `ATTR` and
 native `CALL` do for the state), and the thunks set the guest frame's identity from the stored position,
 because a reader of the frame header (`grcore_context_poll_identity`) sees the guest frame and not the
-walk. Neither changes what a program prints, its fuel or its polls; it changes the frame a poll inside
+walk (since story 4b both write the identity only when a poll happens inside the print, below). Neither changes what a program prints, its fuel or its polls; it changes the frame a poll inside
 a print sees, in both tiers, to the print's own. The frame differential over the output programs
 (`output_cases`, testObserver) and the identity of every poll in `testJit_templates` are the gates
 (planted 156 and 157); 156 is in the interpreter, and only the JIT arm can see it.
@@ -2550,7 +2553,8 @@ widened: making these free is the same work as printing an unboxed float, and go
 the interpreter now stands its frame at the operation before it calls (`SAVE_AT_OP` and `STAND_AT_OP`:
 `pc`, `sp` and the poll identity) for `INDEX`, `SLICE`, every `ATTR` and the slow path of a binary
 operator with an operand that is not a number, and the thunks set the guest frame's identity from the
-stored position (`stand_at_the_op`, the library `ATTR`'s thunk too). The binary operators are stood at,
+stored position (`stand_at_the_op`, the library `ATTR`'s thunk too; since story 4b, on both tiers, the
+identity is written only by a poll inside the operation, below). The binary operators are stood at,
 not only `+`: a guard exit before `*` (an array repeated, a long string repeated) leaves the rebuilt
 frame at the operation, and the interpreter's repetition then polls inside under that identity, which
 the interpreted run must show as well. Two numbers are not (`gltang_vm_binary_may_pace`, the one
@@ -2567,7 +2571,7 @@ a render and a long grapheme's index, each polling inside its compiled call). Th
 (`testObserver`, `value_cases()`) compares the frames the walk shows, where a compiled frame's
 identity is its call site's: it sees the interpreter's standing but not a compiled helper's.
 
-Planted 168 to 178 gate it: the attribute's container not held (relocation), the host-defined operand
+Planted 168 to 178 gated it (178 is retired by story 4b, below): the attribute's container not held (relocation), the host-defined operand
 test removed, or made on the left of `+` only, a compiled slice, attribute or index that does not set
 the frame's identity, a concatenation that charges no fuel, `"x" + f` not taken as the designed box
 exit, the interpreter's slice not standing at the slice or standing at every operator, numbers too,
@@ -2644,6 +2648,79 @@ out-of-range constant cast folded anyway and the fold's bounds one off either wa
 `ADOPT`, not standing at the operation, an `ADOPT` that does not copy, or does not take a map for a
 container, a cast that charges no fuel, an array fill that stores into a refused allocation's value, and
 a refused map key skipped rather than made the literal's out-of-memory error.
+
+**An operation's position only at a poll, and a cheaper entry (spec-template-compiled story 4b).**
+Story 5's first measurement found compiled template calls slower than interpreted ones and the
+interpreter slower than before the spec, and callgrind of the warm template row put the difference in
+two places: the poll identity both tiers wrote before every operation that may poll partway (the
+interpreter's `STAND_AT_OP`, the thunks' `stand_at_the_op`, each a call of runtime-core's
+`grcore_stack_set_identity`, and in the thunks also of `grcore_stack_top` and `grcore_stack_slots`,
+about 265 instructions a compiled print and 117 an interpreted one), and the entry into compiled code,
+which a short template pays on every call.
+
+*Position only at a poll.* An operation that may poll partway (a print, a concatenation or repetition
+past the small-integer path, `INDEX`, `SLICE`, every `ATTR`, a cast to string, a copying `ADOPT`) now
+only says that it stands: `exec->standing` is set before its call and cleared after it, in the
+interpreter (`STAND_AT_OP` and `STOOD`, and `unwound` for a call that unwound) and in its thunk. The
+runtime poll (`gltang_vm_native_poll`, which every pacing poll, refused allocation and host-callback poll
+goes through) writes the identity when, and only when, a poll happens inside a standing operation: the
+top guest frame, which is the operation's (the interpreter's frame, or the guest frame of the compiled
+function calling the thunk), at `current_offset`, which the interpreter's `SYNC` and compiled code's
+call site (`emit_site`) have set to the operation. It is written once per operation (the flag is
+cleared), since nothing else writes that frame's identity while the operation runs. A nested run (a
+host callback inside the operation re-entering guest code) saves and clears the flag for its own frames
+and puts it back (`nested.c`), so a poll inside the nested run never writes the caller's identity over
+its own frame. An operation that does not poll stores nothing beyond the frame state it already
+stored. The interpreter's `SAVE_AT_OP` (two plain stores of `pc` and `sp` into its own frame, which
+the frame differential reads at a poll) stays: it costs no call, and the walk reads it where compiled
+code's frame state is the call site's.
+
+What a poll sees changes in one way. A stood operation used to leave its identity in the frame after
+it, so a later poll that reads the identity without writing it (the memory budget refusing an
+allocation in an operation that does not stand) read the last operation stood at; now it reads the last
+identity written (the last guest poll, a call, or a poll inside a stood operation), on both tiers
+alike. That residue is what made story 3 stand at the library `ATTR` too ("a native called after a
+library's `.name` polls under whatever stood last") and what planted 178 (the interpreter standing at an
+operator of two numbers) was seen by; neither defect can now show at a later poll. The library `ATTR`
+still stands, for a poll inside its own call. Output, fuel, the number of polls and every frame at every
+poll are unchanged across tiers (the frame differential, the template and script corpora at threshold
+1, and the identity of every poll compared in `testJit_templates`), and a new test locates every poll's
+identity to its line on each tier on its own, which a comparison of the tiers cannot do: a poll inside
+an operation that reported the last poll before it on both tiers would agree (planted 198).
+
+*The entry.* Per entry from the interpreter, `gltang_jit_enter` paid, besides the call: the stack
+looked up through runtime-core (`grcore_context_stack`, now the execution's cached `gltang_jit_stack_of`,
+as the hooks do), the parameters read through `grcore_stack_top` and `grcore_stack_slots` (about 108
+instructions, now skipped for a function with none: a template's function 0 and a top level), the
+reservation's extension and retraction called for a function that holds no raw float (now tested
+inline), and the code's payload looked up twice. What remains is runtime-core's and runtime-jit's: the
+JIT activation record's enter and leave (`grcore_activation_enter` and `_leave`, 231 and 220
+instructions, about 450 of the entry's remaining 580) and `grjit_code_call`'s own work (about 45). The
+record is AD-17's (every crossing between the interpreter and compiled code records one) and is not
+removed here; making it cheaper is a change to runtime-core, raised and not made.
+
+Measured by instructions (callgrind, `--toggle-collect` on the case function, `bench --smoke --only
+<row>`, two runs of 2,401 calls each, the whole case divided by 4,802 calls, so it includes each run's
+setup and compilation; local, host GCC 14.2.0, `-O2 -g`, against `.local-template-compiled/`):
+
+| row | `5d280d8` | position at a poll | and the entry |
+|---|---|---|---|
+| steady-template-interpreted-warm-call | 8,258 | 7,745 | 7,745 |
+| steady-template-compiled-warm-call | 9,421 | 8,534 | 8,365 |
+| steady-template-rows-interpreted-per-row | 29,351 | 27,570 | 27,570 |
+| steady-template-rows-compiled-per-row | 31,969 | 28,397 | 28,213 |
+
+Compiled calls are still more instructions than interpreted ones on these rows; what is left is the
+activation record and the per-op costs both tiers share (`gltang_vm_execution_of` in every thunk, about
+29 instructions, is runtime-core's slot lookup). Story 5 measures time.
+
+Rejected: keeping the old residue (a stood identity that outlives its operation) and writing it lazily,
+which would need every other writer of a frame's identity (a guest poll, a call, a push, a pop, a
+rebuild) to retire the pending one, for no reader that needs it; and making `SAVE_AT_OP` lazy too,
+which would trade two stores for three. Planted 198 to 201 gate it: the identity not written at a poll
+inside an operation that stands (both tiers), a compiled text that still stands after its call, an
+entry that extends the reservation only for more than one raw float, and an entry that reads no single
+argument.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

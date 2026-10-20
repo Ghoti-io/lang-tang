@@ -6,12 +6,12 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -318,7 +318,7 @@
+@@ -339,7 +339,7 @@
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
    ++exec->jit_stats.value_calls;
-   stand_at_the_op(exec, context);
--  return finished(exec, gltang_vm_op_adopt(exec, value), false);
-+  return finished(exec, value, false);  /* planted: the stored container is not copied */
+   exec->standing = true;
+-  GLTANG_Value result = gltang_vm_op_adopt(exec, value);
++  GLTANG_Value result = value;  /* planted: the stored container is not copied */
+   exec->standing = false;
+   return finished(exec, result, false);
  }
- 
- /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */

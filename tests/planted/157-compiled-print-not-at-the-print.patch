@@ -1,16 +1,26 @@
-# 157 the guest frame of a compiled printer keeps the identity of its last poll
-# defect: the print helpers do not set the guest frame's poll identity to the print's own, so the
-#   identity a poll inside a long print reads is the interpreter's no longer
+# 157 a compiled print does not stand while it runs
+# defect: the print helpers do not say that their operation stands (`exec->standing`), so a poll inside
+#   a long print writes no identity and reads the one the guest frame was left with, which is the
+#   interpreter's no longer
 # caught by: the large-print test, which compares the identity of every poll (testJit_templates)
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -180,7 +180,7 @@
- static void stand_at_the_op(GLTANG_Execution * exec, void * context) {
-   GRCORE_Stack * stack = gltang_jit_stack_of(exec->jit, context);
-   GRCORE_FrameRef top = grcore_stack_top(stack);
--  if (top.offset) {
-+  if (top.offset && false) {  /* planted: the frame is not stood at the print */
-     const uint64_t * slots = grcore_stack_slots(stack, top);
-     // A live top frame: the setter cannot refuse it.
-     (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
+@@ -189,7 +189,7 @@
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
+   ++exec->jit_stats.output_calls;
+-  exec->standing = true;
++  /* planted: the print does not stand */
+   // The operand is in the call's frame state, as it is on the interpreter's operand
+   // stack while its PRINT runs: the value is replaced by the result, null or an error.
+   GLTANG_Value result = gltang_vm_op_print(exec, value);
+@@ -201,7 +201,7 @@
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
+   ++exec->jit_stats.output_calls;
+-  exec->standing = true;
++  /* planted: the print does not stand */
+   // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
+   GLTANG_Value result = gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block);
+   exec->standing = false;

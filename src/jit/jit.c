@@ -453,15 +453,19 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   if (!f || f->state != GLTANG_JITFN_COMPILED) {
     return GLTANG_JIT_NOT_ENTERED;
   }
-  GRCORE_Stack * stack = grcore_context_stack(context);
+  // The context's stack, as the hooks keep it: an entry is made for every call of a compiled
+  // function from the interpreter (a template's every call), so what it pays is paid per call.
+  GRCORE_Stack * stack = gltang_jit_stack_of(jit, context);
   // The reservation and the pool (AD-27): this entry extends them by the
   // function's most raw floats at one site, here, where a refusal can still be
   // answered: the interpreter runs the function this time. A function with no raw
-  // float extends by zero and costs nothing. Topping up allocates, so it is before
-  // the arguments are read from the guest frame (a collection updates them there).
+  // float extends by zero and costs nothing, not even the call. Topping up allocates,
+  // so it is before the arguments are read from the guest frame (a collection updates
+  // them there).
   const size_t ext_base = jit->ext_count;
   const size_t ext_outer_floor = jit->ext_floor;
-  if (!gltang_jit_extend(exec, ((const GLTANG_JitCode *)grcore_code_payload(f->code))->max_converting, 0, fword)) {
+  const GLTANG_JitCode * jc = grcore_code_payload(f->code);
+  if (jc->max_converting != 0 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {
     return GLTANG_JIT_NOT_ENTERED;
   }
   // The native-depth budget (AD-21): a refusal means "not this time", and the
@@ -474,17 +478,19 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   ++jit->records_open;
   // One reference for the duration of the call, so code discarded during the
   // run (a deopt that was the eighth) is freed only after the call ends.
-  GRCORE_Code * handle = grcore_code_retain(f->code);
-  const GLTANG_JitCode * jc = grcore_code_payload(handle);
+  GRCORE_Code * handle = grcore_code_retain(f->code);  // the code whose payload `jc` is
   uint64_t args[GLTANG_JIT_MAX_SLOTS];
   uint64_t out[GLTANG_JIT_MAX_SLOTS + 2u];
   {
     // The parameters, then the hidden flag: 1 from here, because the interpreter
     // has made this function's entry poll; a compiled call passes 0 and the
-    // callee makes its own.
-    const uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
-    for (uint32_t k = 0; k < jc->parameter_count; ++k) {
-      args[k] = S[H + k];
+    // callee makes its own. A function with none (a template's function 0, a
+    // program's top level) reads nothing of the guest frame.
+    if (jc->parameter_count != 0) {
+      const uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
+      for (uint32_t k = 0; k < jc->parameter_count; ++k) {
+        args[k] = S[H + k];
+      }
     }
     args[jc->parameter_count] = 1u;
   }
@@ -498,8 +504,11 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   jit->refusal = GLTANG_REFUSAL_NONE;
   jit->ext_floor = jit->ext_count;  // this run's calls extend above its entry's own
   uint32_t exit = grjit_code_call(jc->code, context, exec, args, out);
-  // Every exit gives back everything the run opened, the entry's own included.
-  gltang_jit_retract_to(exec, ext_base);
+  // Every exit gives back everything the run opened, the entry's own included
+  // (nothing, for a run that extended nothing).
+  if (jit->ext_count != ext_base) {
+    gltang_jit_retract_to(exec, ext_base);
+  }
   jit->ext_floor = ext_outer_floor;
   jit->chain = outer_chain;
   --jit->records_open;

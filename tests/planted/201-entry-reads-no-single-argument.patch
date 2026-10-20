@@ -1,0 +1,19 @@
+# 201 an entry into compiled code does not read the argument of a one-parameter function
+# defect: the entry reads the parameters from the guest frame only for a function with more than one
+#   (story 4b's cheaper entry reads nothing for none), so a function of one parameter entered from
+#   the interpreter runs compiled with null for it
+# caught by: the fuel-parity test, which runs its programs interpreted and compiled at their first poll
+#   (testJit, Jit.FuelIsTheSame*; eight other tests of the suite see it too)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -486,7 +486,8 @@
+     // has made this function's entry poll; a compiled call passes 0 and the
+     // callee makes its own. A function with none (a template's function 0, a
+     // program's top level) reads nothing of the guest frame.
+-    if (jc->parameter_count != 0) {
++    memset(args, 0, sizeof args);
++    if (jc->parameter_count > 1) {  /* planted: a single parameter is not read */
+       const uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
+       for (uint32_t k = 0; k < jc->parameter_count; ++k) {
+         args[k] = S[H + k];

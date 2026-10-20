@@ -1,32 +1,30 @@
 # 156 the interpreter's frame does not stand at a print while the print runs
-# defect: `PRINT` and `PRINT_CONST` leave the frame's pc, sp and poll identity where the last poll left
-#   them, so a poll inside a long print (its pacing) sees another frame than compiled code's call of the
-#   same print shows
+# defect: `PRINT` and `PRINT_CONST` neither record their position in the frame nor stand, so a poll
+#   inside a long print (its pacing) writes no identity and sees another frame than compiled code's
+#   call of the same print shows
 # caught by: the frame differential over the output programs, interpreter against JIT (testObserver)
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -803,10 +803,7 @@
+@@ -883,9 +883,7 @@
        case GLTANG_OP_PRINT: {
          // A long print polls inside (its pacing): the frame there stands at the print,
          // the state and identity compiled code's call of the same function carries.
 -        SYNC();
 -        SAVE_AT_OP();
--        // A live top frame: the setter cannot refuse it (as the print thunks of natives.c).
--        (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
+-        STAND_AT_OP();
 +        SYNC();  /* planted: the frame is not stood at the print */
          GLTANG_Value r = gltang_vm_op_print(exec, S[sp - 1u]);
+         STOOD();
          if (r == GLTANG_V_UNWIND) {
-           goto unwound;
-@@ -817,10 +814,7 @@
+@@ -897,9 +895,7 @@
        }
  
        case GLTANG_OP_PRINT_CONST: {
 -        SYNC();
 -        SAVE_AT_OP();
--        // A live top frame: the setter cannot refuse it (as the print thunks of natives.c).
--        (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
+-        STAND_AT_OP();
 +        SYNC();  /* planted: the frame is not stood at the print */
          GLTANG_Value r = gltang_vm_print_constant(exec, program->constants[a].block);
+         STOOD();
          if (r == GLTANG_V_UNWIND) {
-           goto unwound;

@@ -48,7 +48,8 @@
 // small-integer range and an exit outside it.
 //
 // Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167, 169 to
-// 176 and 178 to 191 here (173, 178, 183, 185 and 191 are the interpreter's, seen only by the JIT arm),
+// 176, 179 to 191, 198 and 199 here (173, 183, 185 and 191 are the interpreter's, seen only by the JIT
+// arm; 198 is in the runtime poll both tiers share, and only a test of each tier on its own sees it),
 // 168 here under relocation torture, 177 in testJit_floats (the opcode policy) and 156 in
 // testObserver (the frame differential over the output programs).
 
@@ -60,6 +61,7 @@
 
 #include <fstream>
 #include <functional>
+#include <map>
 #include <sstream>
 #include <set>
 #include <string>
@@ -979,6 +981,45 @@ TEST(JitTemplates, ALongConcatenationAndALongSlicePollAsOftenAndAScopeThatRunsOu
   }
 }
 
+TEST(JitTemplates, APollInsideALongOperationReportsThatOperationsOwnLineOnEachTier) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // An operation that may poll partway records nothing until a poll happens inside it, and that
+  // poll then writes the operation's identity (story 4b: gltang_vm_native_poll, for an operation
+  // that stands). The tests above compare the two tiers, which cannot see a poll inside an
+  // operation that reports an earlier one on both of them (the identity was never written, so the
+  // frame still holds the last poll's): here each poll's identity is located to its line, on each
+  // tier on its own. Line 1's loop polls at its back-edges and inside its concatenations; lines 2
+  // to 4 poll only inside their long concatenation, slice and print. A short operation has no
+  // poll to report it, so no identity names line 5.
+  const std::string source =
+      "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\n"
+      "x = s + \"|\" + s;\n"
+      "y = x[1:40000:2];\n"
+      "print(y);\n"
+      "z = \"<\" + \"li\"; print(z); w = z[0];\n";
+  tt::Compiled page(source, Mode::Script, "jit.tang");
+  ASSERT_TRUE(page.ok());
+  for (long threshold : {0L, 1L}) {
+    Outcome out = run(scenario(source), threshold);
+    ASSERT_TRUE(out.finished) << "threshold " << threshold;
+    std::map<int, uint64_t> by_line;
+    for (const GRCORE_PollIdentity & id : out.identities) {
+      int line = 0;
+      ASSERT_EQ(gltang_program_locate(page.program, id.function, id.offset, &line), GLTANG_OK) << id.function << "/" << id.offset;
+      ++by_line[line];
+    }
+    EXPECT_GE(by_line[1], 11u) << "threshold " << threshold << ": the loop's back-edges (the control)";
+    EXPECT_GE(by_line[2], 10u) << "threshold " << threshold << ": the polls inside the concatenation of 40961 bytes";
+    EXPECT_GE(by_line[3], 5u) << "threshold " << threshold << ": the polls inside the slice";
+    EXPECT_GE(by_line[4], 2u) << "threshold " << threshold << ": the polls inside the print of 20480 bytes";
+    EXPECT_EQ(by_line[5], 0u) << "threshold " << threshold << ": short operations, no poll inside";
+    if (threshold == 1) {
+      EXPECT_EQ(out.stats.deopts, 0u) << "every operation ran compiled";
+      EXPECT_GE(out.stats.value_calls, 4u);
+    }
+  }
+}
+
 TEST(JitTemplates, AStringsIndexAndSliceAreTheInterpretersGraphemesInCompiledCode) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc = scenario(
@@ -1128,9 +1169,12 @@ TEST(JitTemplates, ANumberOperatorTheInterpreterRunsSlowAndCompiledCodeInlineLea
   // The interpreter runs `*` (and `/`, `%`, float arithmetic) through gltang_vm_op_binary;
   // compiled code computes it inline and does not stand its frame there. A poll that reads the
   // frame's identity without setting it (the memory budget refusing the string constant's
-  // allocation, made by a call that stands nowhere) must read the same on both tiers, so the
-  // interpreter must not stand at an operator whose operands are numbers either
-  // (gltang_vm_binary_may_pace). Swept over memory budgets from below the run's need to above it.
+  // allocation, made by a call that stands nowhere) must read the same on both tiers. Story 3 kept the
+  // interpreter from standing at an operator of two numbers (gltang_vm_binary_may_pace) because a
+  // stand then outlived its operation; since story 4b a stand lasts only the operation's call and
+  // writes nothing unless a poll happens inside it, so that defect (planted 178) is retired, and this
+  // sweep stays as the requirement it states. Swept over memory budgets from below the run's need to
+  // above it.
   Scenario sc = scenario("x = 7; y = x * 3; w = x / 2 + x % 3; s = \"abcdefghijklmnopqrstuvwxyz0123456789\"; print(s); print(y + w);\n");
   sc.memory_reserve = 0;
   Outcome measured = run(sc, 0);

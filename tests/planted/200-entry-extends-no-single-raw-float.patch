@@ -1,0 +1,19 @@
+# 200 an entry into compiled code does not extend the reservation for one raw float
+# defect: the entry skips the extension of the reservation and the pool unless the function holds
+#   more than one raw float at a site (story 4b's cheaper entry tests for none), so a rebuild of a
+#   frame holding one raw float has no cell to convert it with, and the reservation no longer balances
+# caught by: the reservation's capacity across compiled calls and across a nested entry
+#   (testJit_floats, JitFloats.ManyCompiledCalls* and JitFloats.ANestedEntry*; nine other tests of the
+#   suite see it too)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -465,7 +465,7 @@
+   const size_t ext_base = jit->ext_count;
+   const size_t ext_outer_floor = jit->ext_floor;
+   const GLTANG_JitCode * jc = grcore_code_payload(f->code);
+-  if (jc->max_converting != 0 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {
++  if (jc->max_converting > 1 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {  /* planted: one raw float is not extended for */
+     return GLTANG_JIT_NOT_ENTERED;
+   }
+   // The native-depth budget (AD-21): a refusal means "not this time", and the

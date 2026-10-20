@@ -75,7 +75,29 @@ GRCORE_Location gltang_vm_location(const GLTANG_Execution * exec) {
   return where;
 }
 
+/**
+ * The poll identity of an operation that stands (`exec->standing`), written now that a poll inside it
+ * is about to happen: the top guest frame, which is the operation's (the interpreter's frame, or the
+ * guest frame of the compiled function calling the operation's helper), at the operation's offset,
+ * which SYNC or the compiled call site stored in `current_offset`. Once is enough for the operation:
+ * nothing else writes that frame's identity while it runs (a nested run writes its caller's to the
+ * same offset), so later polls inside it find it written.
+ */
+static void stand_at_the_op(GLTANG_Execution * exec) {
+  exec->standing = false;
+  GRCORE_Stack * stack = grcore_context_stack(exec->context);
+  GRCORE_FrameRef top = grcore_stack_top(stack);
+  if (top.offset) {
+    const uint64_t * slots = grcore_stack_slots(stack, top);
+    // A live top frame: the setter cannot refuse it.
+    (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
+  }
+}
+
 GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work) {
+  if (exec->standing) {
+    stand_at_the_op(exec);
+  }
   gltang_vm_flush_fuel(exec);
   GRCORE_Result r = grcore_runtime_poll(exec->context, work, gltang_vm_location(exec));
   if (r != GRCORE_OK) {

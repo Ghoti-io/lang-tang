@@ -151,10 +151,14 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 // code's call site carries for the same operation (which an exit before the call needs
 // too), so a poll inside it sees the same frame in both tiers.
 #define SAVE_AT_OP() (S[GLTANG_F_PC] = pc - 1u, S[GLTANG_F_SP] = sp)
-// The identity a poll inside such an operation reads (the frame header's): the operation's own,
-// as compiled code's call of it stands there (natives.c, stand_at_the_op). A live top frame: the
-// setter cannot refuse it.
-#define STAND_AT_OP() ((void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine}))
+// The identity a poll inside such an operation reads (the frame header's) is the operation's own,
+// as compiled code's call of it reads (natives.c). The operation only says that it stands: the
+// identity is written by the runtime poll, if one happens inside it (gltang_vm_native_poll, from
+// the frame's function and `current_offset`, which SYNC has set to the operation), so an operation
+// that does not poll stores nothing. STOOD() ends it, right after the operation's call returns
+// (and `unwound` does, for a call that unwound before it).
+#define STAND_AT_OP() (exec->standing = true)
+#define STOOD() (exec->standing = false)
 #define PUSH(v) (S[sp++] = (v))
 #define DROP(n) \
   do { \
@@ -431,6 +435,7 @@ resume_loop:
         }
         {
           GLTANG_Value r = gltang_vm_op_binary(exec, op, x, y);
+          STOOD();
           if (r == GLTANG_V_UNWIND) {
             goto unwound;
           }
@@ -488,6 +493,7 @@ resume_loop:
           STAND_AT_OP();
         }
         GLTANG_Value r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -504,6 +510,7 @@ resume_loop:
         SAVE_AT_OP();
         STAND_AT_OP();
         GLTANG_Value r = gltang_vm_op_index(exec, c, i);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -524,6 +531,7 @@ resume_loop:
         }
         RELOAD();
         GLTANG_Value r = gltang_vm_op_attr(exec, S[sp - 1u], name);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -539,6 +547,7 @@ resume_loop:
         SAVE_AT_OP();
         STAND_AT_OP();
         GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -589,6 +598,7 @@ resume_loop:
           SAVE_AT_OP();
           STAND_AT_OP();
           GLTANG_Value r = gltang_vm_op_adopt(exec, v);
+          STOOD();
           if (r == GLTANG_V_UNWIND) {
             goto unwound;
           }
@@ -875,9 +885,9 @@ resume_loop:
         // the state and identity compiled code's call of the same function carries.
         SYNC();
         SAVE_AT_OP();
-        // A live top frame: the setter cannot refuse it (as the print thunks of natives.c).
-        (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
+        STAND_AT_OP();
         GLTANG_Value r = gltang_vm_op_print(exec, S[sp - 1u]);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -889,9 +899,9 @@ resume_loop:
       case GLTANG_OP_PRINT_CONST: {
         SYNC();
         SAVE_AT_OP();
-        // A live top frame: the setter cannot refuse it (as the print thunks of natives.c).
-        (void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
+        STAND_AT_OP();
         GLTANG_Value r = gltang_vm_print_constant(exec, program->constants[a].block);
+        STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -942,6 +952,7 @@ resume_loop:
   }
 
 unwound:
+  STOOD();  // an operation that stood and unwound inside (or, for ATTR, in making its name)
   gltang_vm_flush_fuel(exec);
   if (exec->act != exec->run_base_act && exec->act->policy != GLTANG_SCOPE_PAUSE
       && grcore_budget_scope_exhausted(stack, (GRCORE_BudgetScope){exec->act->scope_id})) {
@@ -1022,6 +1033,8 @@ unwound:
 #undef SYNC
 #undef SAVE
 #undef SAVE_AT_OP
+#undef STAND_AT_OP
+#undef STOOD
 #undef PUSH
 #undef DROP
 }

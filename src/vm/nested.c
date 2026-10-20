@@ -114,6 +114,11 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   const GRCORE_ActivationRef saved_record = exec->run_base_record;
   const uint32_t saved_function = exec->current_function;
   const uint32_t saved_offset = exec->current_offset;
+  // An operation of the caller's that stands (a host callback inside it opened this run) stands for
+  // the caller's frame, whose identity was written above: the nested run's frames stand for their
+  // own operations only.
+  const bool saved_standing = exec->standing;
+  exec->standing = false;
   exec->run_base_frames = base;
   exec->run_base_act = exec->act;
   exec->run_base_temps = exec->temp_count;
@@ -125,6 +130,7 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   exec->run_base_record = saved_record;
   exec->current_function = saved_function;
   exec->current_offset = saved_offset;
+  exec->standing = saved_standing;
   GLTANG_Value result = step == GRCORE_STEP_FINISHED ? exec->nested_value : GLTANG_V_UNWIND;
   if (step == GRCORE_STEP_PAUSED) {
     // Cannot happen: the record is nested, so a pause verdict was an unwind. If it

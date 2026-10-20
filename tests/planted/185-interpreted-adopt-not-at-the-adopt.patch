@@ -1,13 +1,13 @@
 # 185 the interpreter's frame does not stand at an ADOPT that copies
-# defect: the interpreter's ADOPT records no position and identity before its deep copy, so a poll
-#   inside a long copy reads the identity of whatever stood last, where compiled code's helper stands
-#   at the ADOPT (the twin of 184; only the JIT arm sees it)
+# defect: the interpreter's ADOPT records no position and does not stand before its deep copy, so a
+#   poll inside a long copy writes no identity, where compiled code's helper stands at the ADOPT (the
+#   twin of 184; only the JIT arm sees it)
 # caught by: the copying ADOPT of a large array, the identity of every poll
 #   (testJit_templates, JitTemplates.ACastToStringOfALargeArray*)
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -584,10 +584,7 @@
+@@ -593,10 +593,7 @@
          GLTANG_Value v = S[sp - 1u];
          if (gltang_vm_is_container(v)) {
            SYNC();
@@ -17,5 +17,5 @@
 -          STAND_AT_OP();
 +          /* planted: the interpreter does not stand at an ADOPT that copies */
            GLTANG_Value r = gltang_vm_op_adopt(exec, v);
+           STOOD();
            if (r == GLTANG_V_UNWIND) {
-             goto unwound;

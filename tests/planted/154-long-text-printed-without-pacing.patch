@@ -6,12 +6,12 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -202,8 +202,21 @@
+@@ -202,10 +202,22 @@
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
    ++exec->jit_stats.output_calls;
-   stand_at_the_op(exec, context);
+   exec->standing = true;
 -  // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
--  return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
+-  GLTANG_Value result = gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block);
 +  /* planted: a second printer, in pieces too small to pace */
 +  const GLTANG_StringBlock * s = (const GLTANG_StringBlock *)(uintptr_t)block;
 +  const char * bytes = gltang_string_bytes(s);
@@ -26,6 +26,8 @@
 +    done += n;
 +  }
 +  exec->out->committed = exec->out->length;
+   exec->standing = false;
+-  return finished(exec, result, false);
 +  return finished(exec, GLTANG_V_NULL, false);
  }
  

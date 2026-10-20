@@ -1,0 +1,18 @@
+# 198 a poll inside an operation that stands reports the previous one
+# defect: the runtime poll does not write the identity of the operation that stands (story 4b's
+#   lazy position), on either tier, so a poll inside a long concatenation, slice or print reports
+#   whatever the frame was left with: the last poll before the operation
+# caught by: the poll identities located to their lines, on each tier on its own (testJit_templates,
+#   JitTemplates.APollInsideALongOperation*); a comparison of the two tiers cannot see it
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -95,7 +95,7 @@
+ }
+ 
+ GLTANG_Status gltang_vm_native_poll(GLTANG_Execution * exec, uint64_t work) {
+-  if (exec->standing) {
++  if (exec->standing && false) {  /* planted: the operation's identity is not written at the poll */
+     stand_at_the_op(exec);
+   }
+   gltang_vm_flush_fuel(exec);

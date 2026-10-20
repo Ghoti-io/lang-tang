@@ -1,0 +1,20 @@
+# 199 a compiled text stands after its call has returned
+# defect: the `PRINT_CONST` helper does not clear `exec->standing`, so the next poll compiled code
+#   makes inside an operation that does not stand (a refused allocation) writes that operation's
+#   position as the frame's identity, where the interpreter writes nothing
+# caught by: the large-print test, which compares the identity of every poll with the interpreter's: a
+#   later poll in an operation that does not stand writes an identity there that the interpreter's
+#   frame never holds (testJit_templates, JitTemplates.ALargePrint*; seven other tests of the suite
+#   see it too)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -204,7 +204,7 @@
+   exec->standing = true;
+   // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
+   GLTANG_Value result = gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block);
+-  exec->standing = false;
++  /* planted: the text still stands after its call */
+   return finished(exec, result, false);
+ }
+ 
