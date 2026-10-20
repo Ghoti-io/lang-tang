@@ -64,6 +64,6 @@
          set_block(c, whole);
 -        add_fuel(c, cost);
 +        /* planted: no fuel */
-       }
-       break;
- 
+         if (slow_path) {
+           GRJIT_BlockId join;
+           new_block(c, &join);

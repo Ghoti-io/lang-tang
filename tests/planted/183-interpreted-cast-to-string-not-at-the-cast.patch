@@ -1,0 +1,23 @@
+# 183 the interpreter's frame does not stand at a cast to string while it runs
+# defect: the interpreter's CAST records no position and identity before a cast to string, so a poll
+#   inside a long rendering reads the identity of whatever stood last, where compiled code's helper
+#   stands at the cast (the twin of 181; only the JIT arm sees it)
+# caught by: the cast to string of a large array, the identity of every poll
+#   (testJit_templates, JitTemplates.ACastToStringOfALargeArray*)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -481,12 +481,7 @@
+       case GLTANG_OP_CAST: {
+         GLTANG_Value v = S[sp - 1u];
+         SYNC();
+-        if (a == GLTANG_CAST_TYPE_STRING) {
+-          // A cast to string renders its operand, paced by the bytes it renders: stand at the
+-          // cast, as compiled code's helper does. The other casts poll nowhere and stand nowhere.
+-          SAVE_AT_OP();
+-          STAND_AT_OP();
+-        }
++        /* planted: the interpreter does not stand at a cast to string */
+         GLTANG_Value r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
+         if (r == GLTANG_V_UNWIND) {
+           goto unwound;

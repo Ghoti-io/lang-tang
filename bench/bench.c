@@ -1864,7 +1864,7 @@ typedef enum {
   FK_GLOBAL,    /* ...; gv = a * 2.0; return 0;                          a store of a raw float to a global (an exit) */
   FK_ARG,       /* ...; h(a * 2.0); return 0;                            a raw float as a call argument (an exit) */
   FK_E_DIV0,    /* return x / 0.0;                                      an error at every call */
-  FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call */
+  FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call, made by the cast's helper (no exit since spec-template-compiled story 4) */
   FK_E_MOD,     /* return x % 2.0;                                      an error at every call */
   FK_E_STR,     /* return x * "a";                                      an error at every call */
   FK_N_INFSUB,  /* y = x * 1.0; z = y - y; z != z ? 1 : 0; x = inf      NaN arithmetic over raw operands: not an exit */
@@ -1920,7 +1920,9 @@ static Policy family_policy(FamilyKind k, unsigned loop) {
   switch (k) {
     case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: return loop == 0u ? POL_DECLINED : POL_EXPECTED;
     case FK_E_DIV0: case FK_E_MOD: return POL_DECLINED; /* a loop-free function that ends at the exit that boxes a raw operand */
-    case FK_E_NANINT: case FK_E_STR: return POL_COUNTED;
+    /* A NaN float object cast to int was a counted guard exit at every call until spec-template-compiled
+     * story 4: it is now the interpreter's cast called from compiled code, so it makes the error with no exit. */
+    case FK_E_STR: return POL_COUNTED;
     case FK_CALLER: return POL_REMEMBERED;
     default: return POL_NORMAL;
   }

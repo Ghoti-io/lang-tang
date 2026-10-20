@@ -1764,7 +1764,7 @@ breaks nothing as not caught. Observed:
 | 69 bench-steady-expectation-one-off | the steady-state cases expect the answer for n + 1 and the fresh-engine cases do not | `bench --smoke --only steady-float-cmp`: the steady-state answer check alone | the harness aborts |
 | 70 bench-family-expectation-one-off | the cast family's expected value is 1 off | `bench --smoke --only float-entry-cast-L1`: the family cases' exact expectation | the harness aborts |
 | 71 bench-compiled-row-is-interpreted | the compiled rows run at a threshold of zero | `bench --smoke --only jit-float-cmp`: a compiled row must have compiled and entered | the harness aborts |
-| 72 bench-discard-expectation-wrong | a function that fails for real is expected never to be discarded | `bench --smoke --only steady-float-exit-nanint`: the number of functions discarded | the harness aborts |
+| 72 bench-discard-expectation-wrong | a function that fails for real is expected never to be discarded | `bench --smoke --only steady-float-exit-str` (the nanint row until spec-template-compiled story 4, which made its error the cast helper's, with no exit): the number of functions discarded | the harness aborts |
 | 73 expected-exit-counts-toward-the-limit | the deopt hook counts the exit that boxes a raw float toward the discard limit | the looped float-returner that must stay compiled across fourteen calls (`JitArith.AFunctionWithALoopThatAlwaysEnds*`) | `functions_discarded` is 1, not 0 |
 | 74 static-decline-ignores-the-loop | the compile declines a function whose every path ends at that exit without asking whether it can loop | the same test | `functions_declined_expected` is 1 and `exits_expected` is 0 |
 | 75 static-decline-ignores-a-real-exit | the decline looks only at the returns, not at the real exits | the function with a real exit path beside a float return (`JitArith.AFunctionWithARealExitOnOnePath*`) | `functions_declined_expected` is 1 |
@@ -1871,6 +1871,11 @@ breaks nothing as not caught. Observed:
 | 176 add-tests-only-its-left-operand | the slow path of a compiled `+` tests only its left operand for a host-defined value | the host-defined operand's "right of +" row (`testJit_templates`) | f's counted exits are 0, not 3, and the helper is called |
 | 177 apply-kinds-misses-index-and-slice | `apply_kinds` has no entry for `INDEX` and `SLICE` | the opcode policy over both kind tables (`testJit_floats`) | the two opcodes flow on with no known effect on the kinds |
 | 178 interpreter-stands-at-every-operator | the interpreter stands at a binary operator on two numbers too | the memory sweep after number operators (`testJit_templates`) | the identity of the refusal's poll differs from compiled code's |
+| 179 literal-elements-not-live | a literal's elements are left out of the frame state of its allocating call and stored from plain-word copies | the literal of fresh strings under torture, verify and a moving stack (`testJit_templates`) | the strings read back differ from the interpreter's |
+| 180 out-of-range-constant-cast-folded | a cast to int of a float constant is folded whatever its range | the corpus scripts of out-of-range constant casts (`testJit_templates`) | the output and error list differ from the interpreter's |
+| 181 compiled-cast-to-string-not-at-the-cast | the `CAST` thunk does not stand the guest frame at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs |
+| 182 adopt-does-not-copy | the `ADOPT` thunk hands back the container itself | the literals in a loop (`testJit_templates`) | the held row shows the caller's later change |
+| 183 interpreted-cast-to-string-not-at-the-cast | the interpreter's `CAST` does not stand at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs from compiled code's |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1878,14 +1883,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 183 are the value-building operations compiled, story 4; 183 is in the interpreter and seen only by the JIT arm.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 178 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 183 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and sixty-seven that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the hundred and seventy-two that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2553,6 +2558,66 @@ test removed, or made on the left of `+` only, a compiled slice, attribute or in
 the frame's identity, a concatenation that charges no fuel, `"x" + f` not taken as the designed box
 exit, the interpreter's slice not standing at the slice or standing at every operator, numbers too,
 and `apply_kinds` with no entry for `INDEX` and `SLICE`.
+
+**The value-building operations (spec-template-compiled story 4, CAP-3).** After story 3 the last
+value-building operations a template uses were still unconditional exits: the casts to bool and to
+string (`<%= n as string %>`), the `ARRAY` and `MAP` literals, and `ADOPT`, the copy of a container a
+literal (or a store) holds. A cast to int of a float constant outside the integer range also made the
+whole function fail to compile (story 2's finding). Each now calls the interpreter's own function:
+
+- A cast to bool or to string is a `CALL_NATIVE` of the `CAST` thunk, `gltang_vm_op_cast` (so an error
+  operand is `Not implemented` and a function, a library, a generator or a host-defined value `Not
+  supported`, the interpreter's answers: a cast never asks a host type, so it needs no custom guard). A
+  cast to int keeps its inline paths (a small integer is itself, a float object inside the
+  small-integer range is truncated); anything else (a string, null, a boolean, an error, a float
+  outside the range, a NaN) now branches (`guard_to`, as `+` does) to the same thunk instead of
+  exiting. A raw double outside the range still exits: a raw value is never given to a helper. A cast
+  to float is unchanged (its result is a raw double, which the thunk's value word is not).
+- A cast to string paces by the bytes it renders (`gltang_vm_to_string`), so both tiers stand at the
+  `CAST` before it (the interpreter's `SAVE_AT_OP` and `STAND_AT_OP`, the thunk's `stand_at_the_op`);
+  the other casts poll nowhere and stand nowhere, on either tier.
+- **A cast to int of a float constant** (`CONST` then `CAST`, the constant raw: `cast_src`, recorded by
+  the analysis walk as `str_side` is) is folded at compile time inside `[-2^59, 2^59)` and is an
+  unconditional exit outside it, a counted one, where the interpreter makes the boxed integer or the
+  error. No `TRUNC_S` of a `CONST` is emitted, which runtime-jit's verifier judges as it stands,
+  ignoring the guards before it (`check_one_trunc`); that is what refused the three corpus scripts
+  `cast-int-too-large-float`, `cast-int-too-small-float` and `cast-largest-float-that-fits`, which now
+  compile.
+- **A literal** is the `ARRAY` or `MAP` thunk (`gltang_vm_array_new`, `gltang_vm_map_new`, room for every
+  element), a GC point whose result goes to a register of its own (`built`), then the no-GC fill helpers
+  (`gltang_jit_array_fill`, `gltang_jit_map_fill`, the interpreter's `gltang_vm_array_fill` and
+  `gltang_vm_map_fill`, which neither allocate nor poll), then the container takes the literal's slot.
+  Across the allocation the elements stay in their operand registers: the call's frame state before it
+  names them, and the fill reads them after it, so they are in its stack map and a moving collector
+  updates them (planted 179 leaves them out of the frame state and fills from plain-word copies, which
+  torture catches). A fill call carries three elements or two pairs (runtime-jit's helper-call limit,
+  `max_call_arguments`, is 6 with the execution and the container), and a longer literal is filled by
+  several, in order, so **no literal is left an exit for its length**; duplicate keys keep the
+  interpreter's last-wins, across calls too, since each fill looks the key up. The frame state after
+  the allocating call names `built` in the literal's slot; the thunk's only status is an unwind (an
+  allocation refused with no reserve left), which pops the frame without reading it, so no frame with a
+  container still unfilled is ever rebuilt. A failure value the allocation makes is the literal's
+  value, unfilled, as interpreted.
+- **`ADOPT`** of anything but a container does nothing, inline (the interpreter's
+  `gltang_vm_is_container`: a non-null pointer whose kind word is an array's or a map's; a host-defined
+  value is stored as a reference). Of a container it is the `ADOPT` thunk, `gltang_vm_op_adopt`, whose
+  deep copy allocates and paces, so both tiers stand at the `ADOPT` then, and only then. `ADOPT` is in
+  the story although CAP-3 does not name it: it is in front of every element of a literal that is not
+  fresh (`[name, row]`), and without it such a literal would still exit there.
+- **Raw floats**: every element slot of `ARRAY` and `MAP`, the operand of `ADOPT` and of the casts to
+  bool and to string are in `reads_raw`, so a raw float there is the designed box exit and the
+  interpreter runs the operation (`planning/unboxed-float-output.md`).
+
+Rejected: filling a literal through native-table calls (16 arguments fit there) would make every fill a
+GC point with frame states of a half-built literal, which is what a no-GC fill avoids; making the
+container in the thunk with its elements as arguments would cap a literal at fifteen elements and pass
+the elements through the C wrapper's copy, held by nothing during the allocation; a raw-float variant of
+the cast to string belongs with unboxed float output. `ITER_*` stays an exit (the top-level exit the
+other suites put first, `for (leave : []) { }`, now leaves at `ITER_INIT`, after its compiled `[]`).
+
+Planted 179 to 183 gate it: a literal's elements not live across its allocation (torture), an
+out-of-range constant cast folded anyway, the compiled and the interpreted cast to string not standing
+at the cast, and an `ADOPT` that does not copy.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

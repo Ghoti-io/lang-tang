@@ -466,7 +466,8 @@ std::vector<Case> output_cases() {
 /// (of a string, by a step and reversed, and of an array), a retag and a render poll inside
 /// the call, where the frame of the compiled caller is seen at the operation and must be the
 /// interpreter's; a scope runs out inside a long concatenation in a template; and a template
-/// reads a map's attribute and an array's element, called many times between pauses.
+/// reads a map's attribute and an array's element, called many times between pauses. Story 4 adds
+/// the value-building operations: a long cast to string, a copying ADOPT, and literals and casts.
 std::vector<Case> value_cases() {
   std::vector<Case> cases;
   auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step) {
@@ -497,6 +498,20 @@ std::vector<Case> value_cases() {
   add("a template reads an attribute and an element between pauses",
       "use row; for (i = 0; i < 12; i += 1) { print(row()); } x = 3; x;",
       {{"row", "<% item = {name: \"n\", tags: [\"a\", \"b\"]}; t = item.tags; %><li><%= item.name %>:<%= t[0] + t[1] %>:<%= \"abc\"[1] %></li>", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}}, 17);
+  // Story 4: a cast to string of a large array and the ADOPT that copies a large stored array both
+  // pace, so they poll inside their compiled calls, where both tiers stand at the operation; and
+  // literals, casts and copies between pauses.
+  // 8191 strings: the rendering paces by its bytes and the copy by its elements, each past its interval.
+  const std::string array = "a = []; for (k = 0; k < 13; k += 1) { a = a + a + [\"item\"]; }\n";
+  add("a cast to string of a large array polls inside the compiled call",
+      "function show(a, n) { r = 0; i = 0; while (i < n) { s = a as string; r = s.length; i = i + 1; } return r; }\n" + array +
+      "for (j = 0; j < 3; j += 1) { x = show(a, 2); } print(x);", {}, 1000000);
+  add("an ADOPT that copies a large array polls inside the compiled call",
+      "function hold(a, n) { r = 0; i = 0; while (i < n) { h = [a, n]; r = h[0].size; i = i + 1; } return r; }\n" + array +
+      "for (j = 0; j < 3; j += 1) { x = hold(a, 2); } print(x);", {}, 1000000);
+  add("literals, casts and copies between pauses",
+      "function f(n) { r = \"\"; i = 0; row = [1, 2]; while (i < n) { m = {k: i, v: [row, i as string], k: \"w\"}; r = r + (m as string) + (\"7\" as int) + (i as bool); i = i + 1; } return r; }\n"
+      "for (j = 0; j < 6; j += 1) { x = f(4); } print(x);", {}, 29);
   return cases;
 }
 
@@ -948,8 +963,9 @@ TEST(Observer, ACompiledValueOperationThatPollsInsideShowsTheInterpretersFrameAt
   }
   if (jit_backend_present()) {
     // Measured over value_cases() as they stand: the count changes with the programs or with which
-    // operations compile, and either is a change to look at.
-    EXPECT_EQ(value_calls, 152u) << "the value operations ran in compiled code";
+    // operations compile, and either is a change to look at (152 at story 3; story 4's literals,
+    // casts and copies, and its three programs, make it 331).
+    EXPECT_EQ(value_calls, 331u) << "the value operations ran in compiled code";
     EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled value operation";
   }
 }

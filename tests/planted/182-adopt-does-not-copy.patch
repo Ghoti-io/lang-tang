@@ -1,0 +1,17 @@
+# 182 a compiled ADOPT does not copy the container it stores
+# defect: the ADOPT helper hands back the container itself, so a literal that stores a variable's
+#   array holds that array, and a later change through the variable is seen through the literal
+# caught by: the literals in a loop, whose held row must not show the caller's later change
+#   (testJit_templates, JitTemplates.LiteralsInALoop*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -318,7 +318,7 @@
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
+   ++exec->jit_stats.value_calls;
+   stand_at_the_op(exec, context);
+-  return finished(exec, gltang_vm_op_adopt(exec, value), false);
++  return finished(exec, value, false);  /* planted: the stored container is not copied */
+ }
+ 
+ /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */

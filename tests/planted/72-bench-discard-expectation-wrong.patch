@@ -1,6 +1,7 @@
 # 72 a function that fails for real is expected never to be discarded
 # defect: a function that fails for real is expected never to be discarded; the benchmark harness's own check (check_jit_expectation: the exact number of functions discarded)
-# caught by: bench --smoke --only steady-float-exit-nanint
+# caught by: bench --smoke --only steady-float-exit-str (it was the nanint row until spec-template-compiled
+#   story 4 made a NaN cast to int the helper's error, with no exit)
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c

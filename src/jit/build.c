@@ -41,7 +41,10 @@
  * point; the value operations, a string `CONST`, `+` past the small-integer path, `INDEX`,
  * `SLICE` and the `ATTR` of any other value, as calls of the interpreter's own functions
  * through the same table, behind a test that no operand is a host-defined value (an exit:
- * the type's operation is a host callback, which no compiled helper runs yet); and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
+ * the type's operation is a host callback, which no compiled helper runs yet); the
+ * value-building operations, a `CAST` the inline path does not do, the `ARRAY` and `MAP`
+ * literals (an allocating call, then no-GC fills) and `ADOPT` of a container, the same way,
+ * with a cast to int of a float constant folded (or, out of range, an exit); and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
  * that are no GC point, `STORE_GLOBAL` as the interpreter's plain store, and `HALT` as a
  * return of the halted word (jit.h), after which the interpreter runs `HALT`'s body. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
@@ -140,6 +143,8 @@ typedef struct Ctx {
   GRJIT_VReg act;                 ///< The execution's activation, for the prologue.
   GRJIT_VReg gp;                  ///< The globals array, for a global load or store.
   GRJIT_VReg halted;              ///< The halted word a `HALT` returns (jit.h).
+  GRJIT_VReg built;               ///< The container a literal's native made, held while its elements are stored (story 4).
+  bool need_built;                ///< The function has a literal that is compiled, so declares it.
   GRJIT_VReg tmp[TMP_COUNT];
   GRJIT_VReg tmp_f[2];            ///< The `F64` temporaries of a float operation: an unboxed operand lives in one, for that operation only.
   bool need_tmp_f;                ///< The function has a float operation or a cast to int, so declares them.
@@ -165,6 +170,7 @@ typedef struct Ctx {
   const GLTANG_LibraryMember ** call_member;  ///< Per index of a CALL: the library native it calls, or NULL.
   uint32_t * attr_src;            ///< Per index of an ATTR: the instruction that produced the operand it reads.
   uint8_t * str_side;             ///< Per index of an ADD: bit 0, its left operand is a string constant (the CONST that pushed it); bit 1, its right.
+  uint32_t * cast_src;            ///< Per index of a CAST to int: the float constant its operand is (the CONST that pushed it, raw), or PROD_NONE.
   bool * load_ok;                 ///< Per index of a USE or ATTR: compiled as a member load.
   uint8_t * end_kind;             ///< Per index reached by the walk: how the walk ended there, if it did (END_*).
   bool back_branch;               ///< A reachable jump goes to its own index or an earlier one: the code may loop.
@@ -285,8 +291,10 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_RET:
       return true;
     case GLTANG_OP_CAST:
-      // To int and to float; a cast to float makes a raw double, which is a raw source.
-      return a == GLTANG_CAST_TYPE_INTEGER || (a == GLTANG_CAST_TYPE_FLOAT && !c->raw_off);
+      // To int and to float inline; a cast to float makes a raw double, which is a raw source.
+      // To bool and to string (story 4) are calls of the interpreter's cast, through the table.
+      return a == GLTANG_CAST_TYPE_INTEGER || (a == GLTANG_CAST_TYPE_FLOAT && !c->raw_off)
+          || ((a == GLTANG_CAST_TYPE_BOOLEAN || a == GLTANG_CAST_TYPE_STRING) && c->natives_on);
     case GLTANG_OP_USE:
       return c->natives_on && use_load_ok(c, a);
     // The output operations are calls of the interpreter's own functions: the two
@@ -323,9 +331,42 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_INDEX:
     case GLTANG_OP_SLICE:
       return c->natives_on;
+    // The value-building operations (story 4): an array or a map literal is its native's
+    // allocation and then the no-GC fill of its elements, and `ADOPT` of a container is the
+    // interpreter's copy through the table (of anything else, nothing at all).
+    case GLTANG_OP_ARRAY:
+    case GLTANG_OP_MAP:
+    case GLTANG_OP_ADOPT:
+      return c->natives_on;
     default:
       return false;
   }
+}
+
+/** How a cast to int of a float constant is compiled (`cast_src`): not one, folded, or an exit. */
+enum { CAST_FOLD_NONE = 0, CAST_FOLD_IN, CAST_FOLD_OUT };
+
+/**
+ * A cast to int whose operand is a float constant, as it stands (story 4): inside the
+ * small-integer range it is folded to the integer the interpreter's truncation makes; outside it
+ * (and a NaN) it is an unconditional exit, and the interpreter makes the boxed integer or the
+ * error. Either way no `TRUNC_S` of a `CONST` reaches runtime-jit's verifier, which judges one as
+ * it stands, ignoring the guards before it, and refused the whole function for an out-of-range one.
+ */
+static int constant_cast(const Ctx * c, uint32_t i, int64_t * out) {
+  int64_t bits = 0;
+  if (!c->cast_src || c->cast_src[i] == PROD_NONE || !float_constant(c, GLTANG_INSTRUCTION_A(c->fn->code[c->cast_src[i]]), &bits)) {
+    return CAST_FOLD_NONE;
+  }
+  double v;
+  uint64_t u = (uint64_t)bits;
+  memcpy(&v, &u, sizeof(v));
+  // The bounds trunc_small guards: [-2^59, 2^59). A NaN fails both.
+  if (!(v >= -0x1p59 && v < 0x1p59)) {
+    return CAST_FOLD_OUT;
+  }
+  *out = (int64_t)v;
+  return CAST_FOLD_IN;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +415,8 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
     // `%` is integers only: with a raw operand the interpreter reports "not supported".
     case GLTANG_OP_MOD:
       return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
-    // A cast to int or to float reads a raw operand; any other cast (to bool, to string) is an exit.
+    // A cast to int or to float reads a raw operand; to bool and to string with one is the designed
+    // box exit, and the interpreter makes the text (a raw-float to-string is not compiled).
     case GLTANG_OP_CAST:
       return d >= 1 && c->sk[d - 1] == KIND_F64 && a != GLTANG_CAST_TYPE_INTEGER && a != GLTANG_CAST_TYPE_FLOAT;
     // An index or a slice of a raw float, or by one: the float is boxed by the exit and the
@@ -384,6 +426,20 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
     case GLTANG_OP_SLICE: {
       const int32_t parts = (int32_t)((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u));
       for (int32_t p = d - 1 - parts > 0 ? d - 1 - parts : 0; p < d; ++p) {
+        if (c->sk[p] == KIND_F64) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // A raw float stored by `ADOPT` or as an element of a literal (story 4) is boxed by the exit
+    // and the interpreter runs the operation, so the helpers are only ever given value words.
+    case GLTANG_OP_ADOPT:
+      return d >= 1 && c->sk[d - 1] == KIND_F64;
+    case GLTANG_OP_ARRAY:
+    case GLTANG_OP_MAP: {
+      const int64_t n = op == GLTANG_OP_MAP ? 2 * (int64_t)a : (int64_t)a;
+      for (int64_t p = (int64_t)d - n > 0 ? (int64_t)d - n : 0; p < d; ++p) {
         if (c->sk[p] == KIND_F64) {
           return true;
         }
@@ -488,12 +544,18 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
       if (a == GLTANG_CAST_TYPE_FLOAT) {
         set_stack_kind(c, (uint32_t)d - 1u, KIND_F64);
       }
-      else if (a == GLTANG_CAST_TYPE_INTEGER) {
-        set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
-      }
       else {
-        return false;  // to bool and to string are exits: nothing flows on
+        set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);  // to int, to bool, to string: a value word
       }
+      break;
+    case GLTANG_OP_ADOPT:  // the value, or its copy: a value word (a raw one was the box exit)
+      set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
+      break;
+    case GLTANG_OP_ARRAY:  // the elements are replaced by the array
+      set_stack_kind(c, (uint32_t)(d - (int32_t)a), KIND_REF);
+      break;
+    case GLTANG_OP_MAP:    // the pairs are replaced by the map
+      set_stack_kind(c, (uint32_t)(d - 2 * (int32_t)a), KIND_REF);
       break;
     case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
@@ -868,6 +930,14 @@ static GLTANG_Result analyse_once(Ctx * c) {
         // what the emission reads, as for every other decision of the walk).
         c->str_side[i] = (uint8_t)((string_producer(c, c->cur[d - 2]) ? 1u : 0u) | (string_producer(c, c->cur[d - 1]) ? 2u : 0u));
       }
+      if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && d >= 1) {
+        // Whether the operand is a float constant, raw as it stands (this walk's producer and
+        // kind; the last walk's is what the emission reads): the fold or the exit of constant_cast.
+        const uint32_t p = c->cur[d - 1];
+        const bool constant = c->sk[d - 1] == KIND_F64 && p != PROD_NONE && p < c->fn->code_count
+            && GLTANG_INSTRUCTION_OP(c->fn->code[p]) == GLTANG_OP_CONST;
+        c->cast_src[i] = constant ? p : PROD_NONE;
+      }
       if (reads_raw(c, i, op, a, d)) {
         c->end_kind[i] = END_EXPECTED;  // designed: the float is boxed for its consumer (see emit_op_kinds)
         break;                   // an unconditional exit with the raw operand in its frame state: nothing flows from it
@@ -916,6 +986,10 @@ static GLTANG_Result analyse_once(Ctx * c) {
           break;                 // an unconditional exit: nothing flows from it
         }
         c->cur[d - 1] = i;
+      }
+      else if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && constant_cast(c, i, &(int64_t){0}) == CAST_FOLD_OUT) {
+        c->end_kind[i] = END_REAL;
+        break;                   // an unconditional exit: the interpreter makes the boxed integer or the error
       }
       else if (!inline_op(c, op, a)) {
         if (op == GLTANG_OP_USE && !c->natives_on && use_load_ok(c, a)) {
@@ -979,9 +1053,19 @@ static GLTANG_Result analyse_once(Ctx * c) {
         case GLTANG_OP_NEG:
         case GLTANG_OP_NOT:
         case GLTANG_OP_CAST:
+        case GLTANG_OP_ADOPT:
           if (d < 1) { return GLTANG_ERR_INTERNAL; }
           c->cur[d - 1] = i;
           break;
+        case GLTANG_OP_ARRAY:
+        case GLTANG_OP_MAP: {
+          // The container replaces its elements (or its pairs): one value.
+          const int64_t n = op == GLTANG_OP_MAP ? 2 * (int64_t)a : (int64_t)a;
+          if ((int64_t)d < n) { return GLTANG_ERR_INTERNAL; }
+          after = (int32_t)((int64_t)d - n) + 1;
+          c->cur[after - 1] = i;
+          break;
+        }
         case GLTANG_OP_INDEX:
           // The element replaces the container and the index: one fewer.
           if (d < 2) { return GLTANG_ERR_INTERNAL; }
@@ -1108,6 +1192,7 @@ static GLTANG_Result analyse(Ctx * c) {
       c->load_ok[i] = false;
       c->declined[i] = false;
       c->attr_src[i] = PROD_NONE;
+      c->cast_src[i] = PROD_NONE;
       c->end_kind[i] = END_NONE;
     }
     c->back_branch = false;
@@ -1632,6 +1717,98 @@ static void end_add_slow_path(Ctx * c, uint32_t i, uint32_t d, GRJIT_BlockId slo
   set_block(c, join);
 }
 
+// ---------------------------------------------------------------------------
+// The value-building operations (spec-template-compiled story 4)
+// ---------------------------------------------------------------------------
+
+/** A `CAST` the inline path does not do: the interpreter's cast of the operand in slot `d - 1`, which the result replaces. */
+static void emit_cast_call(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_CAST, args, 2, c->stack[d - 1u], d);
+}
+
+/**
+ * `ADOPT`: of a container, the interpreter's copy (a call, which allocates and paces); of any other
+ * value nothing, inline, as the interpreter does nothing (a host-defined value is stored as a
+ * reference). The test is the interpreter's `gltang_vm_is_container`: a non-null pointer whose
+ * object's kind word is an array's or a map's.
+ */
+static void emit_adopt(Ctx * c, uint32_t i, uint32_t d) {
+  GRJIT_VReg * t = c->tmp;
+  GRJIT_BlockId object, copy, plain, join;
+  new_block(c, &object);
+  new_block(c, &copy);
+  new_block(c, &plain);
+  new_block(c, &join);
+  bitcast(c, t[TMP_A], c->stack[d - 1u]);
+  tag_is(c, t[TMP_C], t[TMP_A], 0);
+  cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_A]), I(0));
+  bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  flush_cost(c);
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), object, plain));
+  c->open = false;
+  set_block(c, object);
+  // Every heap object begins with its 32-bit kind (vm_internal.h, gltang_object_kind).
+  B(grjit_builder_load(c->b, t[TMP_X], c->stack[d - 1u], 0, 32, false));
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_ARRAY));
+  cmp(c, GRJIT_CMP_EQ, t[TMP_D], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_MAP));
+  bin(c, GRJIT_OP_OR, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), copy, plain));
+  c->open = false;
+  set_block(c, plain);
+  add_fuel(c, gltang_opcode_cost_table[GLTANG_OP_ADOPT]);
+  branch_to(c, join);
+  set_block(c, copy);
+  GRJIT_Operand args[1] = {V(c->stack[d - 1u])};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_ADOPT, args, 1, c->stack[d - 1u], d);  // the thunk charges the fuel
+  branch_to(c, join);
+  set_block(c, join);
+}
+
+/**
+ * `ARRAY n` or `MAP n` at `i`, its `count` operands in slots `d - count` to `d - 1`: the native
+ * makes the empty container into `built` (a GC point; its frame state before is the interpreter's
+ * frame at the literal, with every element on the operand stack), the elements stay in their slot
+ * registers, which the stack map names across the call, and the no-GC fill helpers store them, in
+ * order, in chunks that fit the helper-call limit; then the container takes the first slot.
+ *
+ * The frame state after the call names `built` in that slot. The only status the native can report
+ * is an unwind (an allocation the memory budget refused with no reserve left), which pops the frame
+ * without reading it, so no frame with a container still unfilled is ever rebuilt.
+ */
+static void emit_literal(Ctx * c, uint32_t i, uint32_t d, uint32_t a, bool map) {
+  const uint32_t count = map ? 2u * a : a;
+  const uint32_t at = d - count;
+  GRJIT_Operand args[6];
+  args[0] = I((int64_t)a);
+  emit_site(c, i);
+  flush_cost(c);
+  fill_state(c, c->state, i, d);
+  fill_state(c, c->state2, i + 1u, at + 1u);
+  c->state2[H + c->lc + at] = grjit_frame_slot_vreg(c->built);
+  GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
+  GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
+  B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 1, &before, &after));
+  c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+  const uint32_t chunk = map ? 2u * GLTANG_JIT_FILL_PAIRS : GLTANG_JIT_FILL_ELEMENTS;
+  for (uint32_t done = 0; done < count; done += chunk) {
+    const uint32_t n = count - done < chunk ? count - done : chunk;
+    // The array's count, or the map's absent second key: a 0 (no string is 0).
+    size_t argc = 0;
+    args[argc++] = I((int64_t)(intptr_t)c->exec);
+    args[argc++] = V(c->built);
+    if (!map) {
+      args[argc++] = I((int64_t)n);
+    }
+    for (uint32_t k = 0; k < chunk; ++k) {
+      args[argc++] = k < n ? V(c->stack[at + done + k]) : I(0);
+    }
+    B(grjit_builder_call(c->b, GRJIT_NO_VREG, map ? (uint64_t)(uintptr_t)gltang_jit_map_fill : (uint64_t)(uintptr_t)gltang_jit_array_fill,
+        GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, args, argc, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+  }
+  B(grjit_builder_move(c->b, c->stack[at], V(c->built)));
+}
+
 static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
 
 /**
@@ -1707,6 +1884,11 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       emit_value_attr(c, i, d, a);
       return true;
     }
+    emit_exit(c, i, d);
+    return false;
+  }
+  if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && constant_cast(c, i, &k) == CAST_FOLD_OUT) {
+    // A float constant outside the small-integer range (or a NaN): the interpreter makes it.
     emit_exit(c, i, d);
     return false;
   }
@@ -1809,6 +1991,15 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
     case GLTANG_OP_SLICE:
       emit_slice(c, i, d, a);
+      break;
+    case GLTANG_OP_ADOPT:
+      emit_adopt(c, i, d);
+      break;
+    case GLTANG_OP_ARRAY:
+      emit_literal(c, i, d, a, false);
+      break;
+    case GLTANG_OP_MAP:
+      emit_literal(c, i, d, a, true);
       break;
 
     // The output operations: the thunks charge the two prints' fuel, as the interpreter
@@ -2009,6 +2200,16 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
 
     case GLTANG_OP_CAST:
+      if (a == GLTANG_CAST_TYPE_BOOLEAN || a == GLTANG_CAST_TYPE_STRING) {
+        emit_cast_call(c, i, d, a);  // the thunk charges the fuel
+        break;
+      }
+      if (constant_cast(c, i, &k) == CAST_FOLD_IN) {
+        // A float constant inside the range: the integer is known now (the CONST's raw register is dead).
+        B(grjit_builder_const(c->b, T[d - 1u], (int64_t)gltang_v_from_small_int(k)));
+        add_fuel(c, cost);
+        break;
+      }
       if (a == GLTANG_CAST_TYPE_FLOAT) {
         if (c->sk[d - 1u] != KIND_F64) {
           // A small integer is converted and a float object read; the result is the raw double.
@@ -2025,7 +2226,11 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       }
       else {
         // A small integer is itself; a float object is truncated (inside the range) and tagged.
-        GRJIT_BlockId whole, other;
+        // Anything else (a string, null, a boolean, an error, a float outside the range) is the
+        // interpreter's cast called from compiled code (story 4), where natives can be called: the
+        // tests go to that slow path instead of exiting (`guard_to`), as `+`'s do.
+        const bool slow_path = c->natives_on;
+        GRJIT_BlockId whole, other, slow = 0;
         new_block(c, &whole);
         new_block(c, &other);
         bitcast(c, t[TMP_A], T[d - 1u]);
@@ -2034,12 +2239,35 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
         B(grjit_builder_br_if(c->b, V(t[TMP_C]), whole, other));
         c->open = false;
         set_block(c, other);
+        if (slow_path) {
+          new_block(c, &slow);
+          c->guard_to = slow;
+          c->guard_to_on = true;
+        }
         unbox_float_object(c, i, d, d - 1u, c->tmp_f[0]);
+        if (slow_path) {
+          // The range test, as a branch to the helper: trunc_small's own guards, which the verifier
+          // requires beside the truncation in its block, then always hold.
+          cmp(c, GRJIT_CMP_GE, t[TMP_C], V(c->tmp_f[0]), FI(-0x1p59));
+          cmp(c, GRJIT_CMP_LT, t[TMP_D], V(c->tmp_f[0]), FI(0x1p59));
+          bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+          guard(c, V(t[TMP_C]), i, d);
+          c->guard_to_on = false;
+        }
         trunc_small(c, i, d, c->tmp_f[0], t[TMP_R]);
         box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
         branch_to(c, whole);
         set_block(c, whole);
         add_fuel(c, cost);
+        if (slow_path) {
+          GRJIT_BlockId join;
+          new_block(c, &join);
+          branch_to(c, join);
+          set_block(c, slow);
+          emit_cast_call(c, i, d, a);  // the thunk charges the fuel
+          branch_to(c, join);
+          set_block(c, join);
+        }
       }
       break;
 
@@ -2231,18 +2459,20 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->call_member = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(const GLTANG_LibraryMember *));
   c->attr_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
   c->str_side = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t));
+  c->cast_src = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(uint32_t));
   c->load_ok = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->declined = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
   c->local_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
   if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at || !c->kind_at
       || !c->cur || !c->call_k || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !expected_sites || !c->end_kind || !c->call_member
-      || !c->attr_src || !c->str_side || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
+      || !c->attr_src || !c->str_side || !c->cast_src || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
     goto done;
   }
   for (size_t i = 0; i < n; ++i) {
     c->depth[i] = -1;
     c->call_k[i] = -1;
+    c->cast_src[i] = PROD_NONE;
   }
   for (uint32_t g = 0; g < program->global_count; ++g) {
     c->global_fn[g] = DECL_NONE;
@@ -2309,6 +2539,10 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   for (size_t i = 0; i < n && !c->need_tmp_f; ++i) {
     c->need_tmp_f = c->depth[i] >= 0 && GLTANG_INSTRUCTION_OP(fn->code[i]) == GLTANG_OP_CAST && GLTANG_INSTRUCTION_A(fn->code[i]) == GLTANG_CAST_TYPE_INTEGER;
   }
+  for (size_t i = 0; i < n && !c->need_built; ++i) {
+    const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(fn->code[i]);
+    c->need_built = c->depth[i] >= 0 && (op == GLTANG_OP_ARRAY || op == GLTANG_OP_MAP);
+  }
   for (size_t i = 0; i < n; ++i) {
     if (c->depth[i] >= 0 && c->declined[i]) {
       ++exec->jit_stats.native_sites_unsupported;
@@ -2368,6 +2602,9 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->act));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->gp));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->halted));
+  if (c->need_built) {
+    B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->built));
+  }
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_slot));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_tbl));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->jitp));
@@ -2498,6 +2735,7 @@ done:
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_member);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->attr_src);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->str_side);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->cast_src);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->load_ok);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->declined);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_use);

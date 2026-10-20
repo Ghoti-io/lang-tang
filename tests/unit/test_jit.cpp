@@ -236,7 +236,9 @@ TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRun
   Scenario sc;
   sc.source =
       "function g(x) { return x * 2; }\n"
-      "function f(n) { a = [1, 2, 3]; s = 0; i = 0; while (i < n) { s = s + g(i) + a[i % 3]; i = i + 1; } print(s); return s / 2 + s % 7; }\n"
+      // The loop over `a` is the unconditional exit (ITER_INIT); the array literal was one until
+      // spec-template-compiled story 4 compiled it.
+      "function f(n) { a = [1, 2, 3]; for (q : a) { } s = 0; i = 0; while (i < n) { s = s + g(i) + a[i % 3]; i = i + 1; } print(s); return s / 2 + s % 7; }\n"
       "print(f(20)); print(f(3)); print(f(0));\n"
       "function h(x) { return x / 0; }\nprint(h(4) as string);\n";
   Outcome plain, jit;
@@ -250,7 +252,9 @@ TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompil
   // after the entry poll leaves compiled code" decline cannot be reached from
   // source: both functions are compiled, and the difference is where they leave.
   Scenario exits;
-  exits.source = "function f(a) { return [a, a]; }\nprint(f(1) as string);\n";
+  // f leaves at its loop's ITER_INIT (it left at the array literal, and the inlined program's top level
+  // at its cast to string, until spec-template-compiled story 4 compiled both).
+  exits.source = "function f(a) { for (q : [a]) { } return [a, a]; }\nprint(f(1) as string);\n";
   Scenario inlined;
   inlined.source = "function f(a) { return a + 1; }\nprint(f(1) as string);\n";
   Outcome e_plain, e_jit, i_plain, i_jit;
@@ -261,13 +265,13 @@ TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompil
   EXPECT_EQ(e_jit.stats.functions_compiled, 2u) << "the top level and f";
   EXPECT_EQ(e_jit.stats.entries, 1u);
   EXPECT_EQ(e_jit.stats.calls, 1u);
-  EXPECT_EQ(e_jit.stats.returns, 0u) << "f leaves at the array";
+  EXPECT_EQ(e_jit.stats.returns, 0u) << "f leaves at its loop";
   EXPECT_EQ(e_jit.stats.deopts, 1u);
   EXPECT_EQ(i_jit.stats.functions_compiled, 2u);
   EXPECT_EQ(i_jit.stats.entries, 1u);
   EXPECT_EQ(i_jit.stats.calls, 1u) << "f returns from compiled code, to compiled code";
-  EXPECT_EQ(i_jit.stats.deopts, 1u) << "the one exit is the top level's cast to string";
-  EXPECT_EQ(i_jit.stats.returns, 0u);
+  EXPECT_EQ(i_jit.stats.deopts, 0u) << "the cast to string is a compiled call, and nothing leaves";
+  EXPECT_EQ(i_jit.stats.returns, 1u) << "the top level's HALT";
   EXPECT_EQ(e_jit.stats.compile_failures + i_jit.stats.compile_failures, 0u);
 }
 

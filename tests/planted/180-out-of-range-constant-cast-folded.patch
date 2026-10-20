@@ -1,0 +1,21 @@
+# 180 a cast to int of a float constant outside the small-integer range is folded anyway
+# defect: constant_cast does not test the range, so a constant the interpreter turns into a boxed
+#   integer or an overflow error is folded into a (wrong) small integer, and the cast never exits
+# caught by: the three corpus scripts of out-of-range constant casts, their output and error list
+#   against the interpreter's (testJit_templates, JitTemplates.ACastToIntOfAFloatConstant*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -359,10 +359,8 @@
+   uint64_t u = (uint64_t)bits;
+   memcpy(&v, &u, sizeof(v));
+   // The bounds trunc_small guards: [-2^59, 2^59). A NaN fails both.
+-  if (!(v >= -0x1p59 && v < 0x1p59)) {
+-    return CAST_FOLD_OUT;
+-  }
+-  *out = (int64_t)v;
++  /* planted: the range is not tested, so an out-of-range constant is folded too */
++  *out = v >= -0x1p63 && v < 0x1p63 ? (int64_t)v : INT64_MIN;
+   return CAST_FOLD_IN;
+ }
+ 

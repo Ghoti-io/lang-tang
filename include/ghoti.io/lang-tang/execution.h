@@ -348,7 +348,9 @@ typedef struct GLTANG_JitStats {
   uint64_t result_clears;       ///< `CLEAR_RESULT` made from compiled code.
   // The value operations (spec-template-compiled story 3): a string constant, `+` past the
   // small-integer path, `INDEX`, `SLICE` and the `ATTR` of a value that is not a library run
-  // in compiled code as calls of the interpreter's own operations.
+  // in compiled code as calls of the interpreter's own operations; and those of story 4: a `CAST`
+  // the inline path does not do, the allocation of an `ARRAY` or `MAP` literal (its fill is no
+  // call of the table and is not counted) and the copy `ADOPT` makes of a container.
   uint64_t value_calls;         ///< Those operations made from compiled code (each a call through the native table).
 } GLTANG_JitStats;
 

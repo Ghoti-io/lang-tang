@@ -23,8 +23,9 @@
  *
  * The helpers compiled code calls: the fuel flush, the callee-value notes and
  * the statement-result and discard operations (`CLEAR_RESULT`, `SET_RESULT`,
- * `DISCARD`, each the interpreter's own function), which are not GC points, and
- * the poll slow path.
+ * `DISCARD`, each the interpreter's own function), the filling of an array or a
+ * map literal compiled code has made (the interpreter's own fill), which are not GC
+ * points, and the poll slow path.
  *
  * The poll helper does not touch the guest frame. The polling frame is paired
  * with its guest frame by the walk (runtime-core, `a/compiled.h`); the abstract
@@ -76,6 +77,26 @@ void gltang_jit_discard(GLTANG_Execution * exec, uint64_t value, uint64_t functi
     exec->current_offset = (uint32_t)offset;
     gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_DISCARDED, value, exec->act);
   }
+}
+
+// The literals (spec-template-compiled story 4): the container was made by its native, a GC
+// point across which the elements stayed in compiled code's registers (in the stack map, so a
+// moving collection updated them); they are stored here, after it, by the interpreter's fill.
+
+void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t count, uint64_t e0, uint64_t e1, uint64_t e2) {
+  if (!gltang_v_is_kind(array, GLTANG_OBJ_ARRAY)) {
+    return;
+  }
+  const GLTANG_Value elements[GLTANG_JIT_FILL_ELEMENTS] = {e0, e1, e2};
+  gltang_vm_array_fill(exec, array, elements, (size_t)count);
+}
+
+void gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1) {
+  if (!gltang_v_is_kind(map, GLTANG_OBJ_MAP)) {
+    return;
+  }
+  const GLTANG_Value pairs[2u * GLTANG_JIT_FILL_PAIRS] = {k0, v0, k1, v1};
+  gltang_vm_map_fill(exec, map, pairs, k1 ? 2u : 1u);
 }
 
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {

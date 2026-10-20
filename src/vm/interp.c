@@ -481,6 +481,12 @@ resume_loop:
       case GLTANG_OP_CAST: {
         GLTANG_Value v = S[sp - 1u];
         SYNC();
+        if (a == GLTANG_CAST_TYPE_STRING) {
+          // A cast to string renders its operand, paced by the bytes it renders: stand at the
+          // cast, as compiled code's helper does. The other casts poll nowhere and stand nowhere.
+          SAVE_AT_OP();
+          STAND_AT_OP();
+        }
         GLTANG_Value r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -578,6 +584,10 @@ resume_loop:
         GLTANG_Value v = S[sp - 1u];
         if (gltang_vm_is_container(v)) {
           SYNC();
+          // The copy paces (a deep copy of a long container): stand at the ADOPT, as compiled
+          // code's helper does. An ADOPT of anything else does nothing, and stands nowhere.
+          SAVE_AT_OP();
+          STAND_AT_OP();
           GLTANG_Value r = gltang_vm_op_adopt(exec, v);
           if (r == GLTANG_V_UNWIND) {
             goto unwound;

@@ -1333,6 +1333,8 @@ TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
   // Story 3: `INDEX` and `SLICE` flow on (calls of the interpreter's own operations), and with a raw
   // operand each is the designed box exit. `ADD` stays in the first set: the policy's state names no
   // string constant beside the raw operands, and `"x" + f` is the one `+` that is a box exit.
+  // Story 4: `ARRAY`, `MAP` and `ADOPT` flow on (a literal's allocation and fill, the copy of a stored
+  // container), and with a raw element or operand each is the designed box exit.
   const std::set<unsigned> go_on_with_a_raw_operand = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
       GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
       GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT, GLTANG_OP_HALT, GLTANG_OP_NEG, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE,
@@ -1342,7 +1344,8 @@ TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
       GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_MOD, GLTANG_OP_LT,
       GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CAST, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE,
       GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET, GLTANG_OP_PRINT, GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT,
-      GLTANG_OP_HALT, GLTANG_OP_STORE_GLOBAL, GLTANG_OP_SET_RESULT, GLTANG_OP_DISCARD, GLTANG_OP_INDEX, GLTANG_OP_SLICE};
+      GLTANG_OP_HALT, GLTANG_OP_STORE_GLOBAL, GLTANG_OP_SET_RESULT, GLTANG_OP_DISCARD, GLTANG_OP_INDEX, GLTANG_OP_SLICE,
+      GLTANG_OP_ARRAY, GLTANG_OP_MAP, GLTANG_OP_ADOPT};
   for (unsigned op = 0; op < static_cast<unsigned>(GLTANG_OP_COUNT); ++op) {
     unsigned policy = gltang_vm_jit_test_opcode_policy(op);
     const bool reads = (policy & 1u) != 0;

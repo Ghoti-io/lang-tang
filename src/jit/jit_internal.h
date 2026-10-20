@@ -139,7 +139,12 @@ typedef enum GLTANG_JitRefusal {
  * site), `+` past the small-integer path (the two operands), `INDEX` (the
  * container and the index), `SLICE` (its flags, the container and up to three
  * parts) and the `ATTR` of a value that is not a library (the value and the
- * name's constant).
+ * name's constant); and those of story 4: a `CAST` the inline path does not do (the
+ * value and the cast type: to bool, to string, and to int of a value that is not a
+ * small integer or a float inside the small-integer range), the allocation of an
+ * `ARRAY` or a `MAP` literal (its count; its elements are stored afterwards by
+ * `gltang_jit_array_fill` and `gltang_jit_map_fill`, which are no GC points) and the
+ * copy of a container `ADOPT` stores (the value).
  */
 enum {
   GLTANG_JIT_NATIVE_CALL0 = 0,   ///< ... up to GLTANG_JIT_NATIVE_CALL0 + 15.
@@ -152,8 +157,24 @@ enum {
   GLTANG_JIT_NATIVE_INDEX = 22,
   GLTANG_JIT_NATIVE_SLICE = 23,
   GLTANG_JIT_NATIVE_VALUE_ATTR = 24,
-  GLTANG_JIT_NATIVE_COUNT = 25
+  GLTANG_JIT_NATIVE_CAST = 25,
+  GLTANG_JIT_NATIVE_ARRAY = 26,
+  GLTANG_JIT_NATIVE_MAP = 27,
+  GLTANG_JIT_NATIVE_ADOPT = 28,
+  GLTANG_JIT_NATIVE_COUNT = 29
 };
+
+/**
+ * @brief The elements one `gltang_jit_array_fill` stores, and the pairs one
+ *   `gltang_jit_map_fill` stores: what fits runtime-jit's limit for a helper call
+ *   (`GRJIT_Limits::max_call_arguments`, 6: the register arguments of every backend's
+ *   convention) beside the execution and the container (and, for an array, the count). A
+ *   longer literal is filled by several calls, in order, so no literal is left an exit
+ *   for its length.
+ */
+#define GLTANG_JIT_FILL_ELEMENTS 3u
+#define GLTANG_JIT_FILL_PAIRS 2u
+_Static_assert(3u + GLTANG_JIT_FILL_ELEMENTS <= 6u && 2u + 2u * GLTANG_JIT_FILL_PAIRS <= 6u, "a fill call's arguments must fit runtime-jit's default helper-call limit");
 /**
  * @brief The most native stack the thunks, the shared wrapper and the host function's own
  *   frame are taken to use before they call anything that checks: 16 KiB, because what a
@@ -321,6 +342,21 @@ void gltang_jit_set_result(GLTANG_Execution * exec, uint64_t value, uint64_t lis
  *   interpreter's SYNC is). Not a GC point, as above.
  */
 void gltang_jit_discard(GLTANG_Execution * exec, uint64_t value, uint64_t function, uint64_t offset);
+/**
+ * @brief The elements of an `ARRAY` literal from compiled code, `count` of them (at most
+ *   ::GLTANG_JIT_FILL_ELEMENTS; the rest are zero and not read), appended to the array the
+ *   native `ARRAY` made: the interpreter's own `gltang_vm_array_fill`. Not a GC point: the
+ *   array was made with room for every element, so a store neither allocates nor polls (it
+ *   goes through the barrier). A value that is not an array (the failure the allocation
+ *   made, which is then the literal's value) is left as it is, as the interpreter leaves it.
+ */
+void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t count, uint64_t e0, uint64_t e1, uint64_t e2);
+/**
+ * @brief The same for a `MAP` literal: one or two key and value pairs (a second key of 0,
+ *   which no string is, means one), through the interpreter's `gltang_vm_map_fill`, so a
+ *   key that comes again replaces the value (the last wins), across calls too. Not a GC point.
+ */
+void gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
 

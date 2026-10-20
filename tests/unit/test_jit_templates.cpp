@@ -41,9 +41,15 @@
 // small-integer path, `INDEX`, `SLICE` and the `ATTR` of a value that is not a library, each a
 // call of the interpreter's own function; a host-defined operand of one is a real exit before it.
 //
+// Story 4 compiles the value-building operations: a `CAST` (to bool, to string, and to int of a
+// value the inline path does not take), the `ARRAY` and `MAP` literals (an allocating call, then
+// no-GC fills of the elements, which stay in compiled registers across the allocation) and `ADOPT`
+// of a container (the interpreter's copy). A cast to int of a float constant is folded inside the
+// small-integer range and an exit outside it.
+//
 // Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167 and 169
 // to 173 here, 168 here under relocation torture, and 156 in testObserver (the frame
-// differential over the output programs).
+// differential over the output programs); 179 onward for story 4 (documentation/design.md).
 
 #include "exec_harness.h"
 #include "jit_harness.h"
@@ -51,7 +57,9 @@
 
 #include <ghoti.io/lang-tang/type.h>
 
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -803,7 +811,7 @@ namespace {
 
 /// `t.items(n)`: an array of n maps, each `{name: "<item k>" (tagged HTML), row: [k, "r<k>"]}`,
 /// made by the host, so that a template reads maps and arrays with no `MAP` or `ARRAY` of its own
-/// (those are story 4's, and an exit until then).
+/// (those were story 4's, and an exit until then; the story 3 counts below are kept so).
 bool items_native(GLTANG_NativeCall * call, void *) {
   GLTANG_Handle count;
   if (gltang_call_arg(call, 0, &count) != GLTANG_OK) {
@@ -1075,7 +1083,8 @@ TEST(JitTemplates, AHostDefinedOperandOfAValueOperationIsARealExitBeforeTheOpera
     EXPECT_EQ(f_deopts, 3) << c.name << ": one counted exit at each call, charged to f";
     EXPECT_EQ(jit.stats.exits_counted, 1u + 3u) << c.name << ": the top level's, and f's three";
     EXPECT_EQ(jit.stats.native_exits_stack, 0u) << c.name << ": not taken for a refused native call";
-    EXPECT_EQ(jit.stats.value_calls, c.constants) << c.name << ": the operation's helper was never given the host-defined value";
+    // kTopLevelLeaves' empty array is a compiled literal since story 4 (one value call); its loop is the exit.
+    EXPECT_EQ(jit.stats.value_calls, 1u + c.constants) << c.name << ": the operation's helper was never given the host-defined value";
   }
 }
 
@@ -1153,6 +1162,291 @@ TEST(JitTemplates, WhereNativesCannotBeCalledTheValueOperationsStayExitsAndTheOu
   EXPECT_EQ(jit.result, plain.result);
   EXPECT_EQ(jit.stats.value_calls, 0u);
   EXPECT_GE(jit.stats.deopts, 1u) << "a value operation left compiled code";
+}
+
+// ---------------------------------------------------------------------------
+// The value-building operations (story 4)
+// ---------------------------------------------------------------------------
+
+TEST(JitTemplates, ATemplateOfCastsLiteralsAndStoredContainersIsCalledManyTimesWithNoExitAndIsNeverDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Before story 4 each call left compiled code at its first cast to bool or to string, literal or
+  // ADOPT, and at the eighth call the function was discarded. `"12" as int` is the interpreter's cast
+  // called from compiled code (a string is not a small integer), `3.9 as int` is folded, the rest are
+  // calls. `[name, row]` stores `row`, a variable holding an array: ADOPT copies it (of `name`, a
+  // string, ADOPT does nothing and calls nothing). The map literal names `k` twice: the last wins.
+  Scenario sc = scenario("use card; i = 0; while (i < 30) { print(card()); i = i + 1; }\n");
+  sc.parts.push_back(card(
+      "<% name = \"n\"; row = [1, 2]; pair = [name, row]; m = {k: name, v: 2, k: \"last\"}; %>"
+      "<%= \"12\" as int %>|<%= 3.9 as int %>|<%= 5 as string %>|<%= 1 as bool %>|<%= pair %>|<%= m.k %>|<%= [name, \"c\", 3] %>\n"));
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, plain.raw);
+  EXPECT_NE(jit.raw.find("12|3|5|true|"), std::string::npos) << jit.raw.substr(0, 200);
+  EXPECT_NE(jit.raw.find("|[n, [1, 2]]|last|[n, c, 3]"), std::string::npos) << "the last `k` wins: " << jit.raw.substr(0, 200);
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0) << "no exit was charged to the template's function 0";
+  EXPECT_EQ(seen[1].compiled, 1) << "it was still compiled after thirty calls";
+  EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  EXPECT_EQ(jit.stats.deopts, 1u) << "the one exit is the script's first template call";
+  // Each call: the string constants "n", "k", "v", "k", "last", "12" and "c" (7); the literals [1, 2],
+  // [name, row], the map and [name, "c", 3] (4); the ADOPT of row (1); the casts of "12" to int, of 5
+  // to string and of 1 to bool (3; 3.9 as int is folded); `m.k` (1): 16.
+  EXPECT_EQ(jit.stats.value_calls, 30u * 16u);
+  EXPECT_EQ(plain.stats.value_calls, 0u);
+}
+
+TEST(JitTemplates, ACastToStringOfALargeArrayPollsAsOftenAtTheSameFramesAndADeepOneIsTheRecursionLimit) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // An array of three thousand strings rendered by `as string` paces by the bytes it renders: the
+  // polls inside the compiled cast are compared one by one with their identity (both tiers stand at
+  // the CAST), and their count by native. Nesting an array in itself past the value-depth limit
+  // (`a = [a]`: the stored `a` is copied by ADOPT, in compiled code) is the interpreter's
+  // `Recursion limit` error, which the cast to string then renders, in both tiers.
+  {
+    Scenario sc = scenario(
+        "function big(n) { a = []; i = 0; while (i < n) { a = a + [\"item\"]; i = i + 1; } return a; }\n"
+        "function show(a) { s = a as string; return s.length; }\n"
+        "x = big(3000); print(show(x)); print(\",\"); print(show(x));\n");
+    std::vector<uint64_t> paced;
+    sc.after = [&](Context & context) { paced.push_back(native_polls(context, "RENDER_TO_STRING")); };
+    Outcome plain, jit;
+    expect_same_position(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    ASSERT_EQ(paced.size(), 2u);
+    EXPECT_EQ(paced[0], paced[1]);
+    EXPECT_GE(paced[1], 2u) << "the cast polled inside its compiled call";
+    EXPECT_EQ(jit.raw, plain.raw);
+    EXPECT_EQ(jit.stats.deopts, 0u);
+  }
+  // A stored array of 8191 strings, copied by ADOPT into a literal: the deep copy paces by its
+  // elements, so it polls inside the compiled copy, where both tiers stand at the ADOPT.
+  {
+    Scenario sc = scenario(
+        "function hold(a) { h = [a, 1]; return h[0].size; }\n"
+        "a = []; for (k = 0; k < 13; k += 1) { a = a + a + [\"item\"]; }\n"
+        "print(hold(a)); print(\",\"); print(hold(a));\n");
+    std::vector<uint64_t> paced;
+    sc.after = [&](Context & context) { paced.push_back(native_polls(context, "DEEP_COPY")); };
+    Outcome plain, jit;
+    expect_same_position(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    ASSERT_EQ(paced.size(), 2u);
+    EXPECT_EQ(paced[0], paced[1]);
+    EXPECT_GE(paced[1], 2u) << "the copy polled inside its compiled call";
+    EXPECT_EQ(jit.raw, "8191,8191");
+    EXPECT_EQ(jit.stats.deopts, 0u);
+  }
+  {
+    Scenario sc = scenario(
+        "function deep(n) { a = 1; i = 0; while (i < n) { a = [a]; i = i + 1; } return a; }\n"
+        "function show(a) { s = a as string; return s; }\n"
+        "x = deep(2050); e = show(x); print(e); print(\"|\"); print(show([1, [2]]));\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.errors, plain.errors);
+    EXPECT_NE(jit.raw.find("Recursion Limit Exceeded"), std::string::npos) << jit.raw.substr(0, 200);
+    EXPECT_GE(jit.stats.value_calls, 2050u) << "each copy was a compiled ADOPT";
+    EXPECT_NE(jit.raw.find("|[1, [2]]"), std::string::npos) << jit.raw;
+    EXPECT_EQ(jit.stats.deopts, 0u);
+  }
+}
+
+TEST(JitTemplates, LiteralsInALoopAreTheInterpretersValuesWithTheLastKeyWinningAndAStoredContainerCopied) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A literal longer than one fill call (twenty-one elements, nine pairs), a key that comes again in
+  // another fill call, an empty literal of each kind, a literal of literals, and a stored container
+  // that the literal copies (ADOPT): the caller changes the array afterwards (its SET_INDEX is an
+  // exit, after f has run compiled), and the copy held by the literal does not see it.
+  Scenario sc = scenario(
+      "function f(n, row) {\n"
+      "  i = 0; out = \"\"; held = null;\n"
+      "  while (i < n) {\n"
+      "    a = i; b = \"b\" + i;\n"
+      "    l = [a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, i, row];\n"
+      "    m = {k: a, j: b, x: 1, y: 2, z: 3, w: 4, k: b, u: 5, v: [a]};\n"
+      "    e = []; nest = [[a], {q: [b]}];\n"
+      "    held = [row, b];\n"
+      "    out = out + (l as string) + (m as string) + (e as string) + (nest as string) + \";\";\n"
+      "    i = i + 1;\n"
+      "  }\n"
+      "  print(out);\n"
+      "  return held;\n"
+      "}\n"
+      "r = [3, 4]; h = f(6, r); g = f(2, r); r[0] = 99; print(h); print(g); print(r);\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, plain.raw);
+  EXPECT_NE(jit.raw.find("\"k\": b3, \"j\": b3"), std::string::npos) << "the last `k` wins: " << jit.raw.substr(0, 400);
+  EXPECT_EQ(jit.raw.find("[[99"), std::string::npos) << "the stored row was copied, so 99 is not seen through it: " << jit.raw;
+  EXPECT_EQ(jit.stats.deopts, 1u) << "the one exit is the top level's SET_INDEX `r[0] = 99`, after both calls of f";
+}
+
+TEST(JitTemplates, ALiteralsElementsSurviveTheAllocationOfItsContainerUnderTortureVerifyAndAMovingStack) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The elements are fresh strings that nothing but compiled code's registers holds while the
+  // container is allocated: under torture that allocation collects, so an element left out of the
+  // call's stack map is freed before the fill stores it (and, under relocation torture, moved and
+  // left stale). Every literal is read back and printed.
+  Scenario sc = scenario(
+      "function f(n) {\n"
+      "  out = \"\"; i = 0;\n"
+      "  while (i < n) {\n"
+      "    l = [\"a\" + i, \"b\" + i, \"c\" + i, \"d\" + i, \"e\" + i];\n"
+      "    m = {p: \"x\" + i, q: \"y\" + i, r: \"z\" + i};\n"
+      "    out = out + l[0] + l[1] + l[2] + l[3] + l[4] + m.p + m.q + m.r + \";\";\n"
+      "    i = i + 1;\n"
+      "  }\n"
+      "  return out;\n"
+      "}\n"
+      "print(f(8)); print(f(3));\n");
+  sc.torture = 1;
+  sc.verify = 1;
+  sc.moving = 1;
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_NE(jit.raw.find("a7b7c7d7e7x7y7z7;"), std::string::npos) << jit.raw;
+  EXPECT_EQ(jit.raw, plain.raw);
+  EXPECT_EQ(jit.stats.deopts, 0u);
+  EXPECT_EQ(jit.heap_invalid_pointers, 0u);
+}
+
+TEST(JitTemplates, ACastToIntOfAFloatConstantIsFoldedInsideTheRangeAndAnExitOutsideItAndTheFunctionCompiles) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Story 2 found that `99999999999999999999999.0 as int` made the whole top level fail to compile:
+  // runtime-jit's verifier judges a TRUNC_S of a CONST as it stands, ignoring the guards before it.
+  // Now no such TRUNC_S is emitted: inside the small-integer range the cast is folded, and outside it
+  // it is an unconditional exit, the interpreter making the boxed integer or the error. The three
+  // corpus scripts that hold such constants compile.
+  for (const char * name : {"cast-int-too-large-float", "cast-int-too-small-float", "cast-largest-float-that-fits"}) {
+    std::ifstream in(std::string(GLTANG_TEST_DATA) + "/corpus/script/" + name + ".tang", std::ios::binary);
+    ASSERT_TRUE(in.good()) << name;
+    std::stringstream text;
+    text << in.rdbuf();
+    Scenario sc = scenario(text.str());
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << name;
+    EXPECT_EQ(jit.errors, plain.errors) << name;
+    EXPECT_EQ(jit.stats.compile_failures, 0u) << name << ": the function compiles";
+    EXPECT_EQ(jit.stats.functions_compiled, 1u) << name;
+    EXPECT_EQ(jit.stats.entries, 1u) << name;
+    EXPECT_EQ(jit.stats.deopts, 1u) << name << ": the out-of-range cast is the one exit";
+    EXPECT_EQ(jit.stats.exits_counted, 1u) << name;
+  }
+  // Inside the range: folded, no exit, no call.
+  {
+    // `-3.9 as int` is `-(3.9 as int)`: a cast binds tighter than a unary minus.
+    Scenario sc = scenario("x = 3.9 as int; y = -3.9 as int; z = 576460752303423424.0 as int; print(x); print(y); print(z);\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "3-3576460752303423424");
+    EXPECT_EQ(jit.stats.deopts, 0u);
+    EXPECT_EQ(jit.stats.value_calls, 0u) << "a folded cast calls nothing";
+  }
+}
+
+TEST(JitTemplates, ARawFloatInALiteralOrCastToStringIsTheDesignedBoxExit) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The helpers are given value words only: a raw float as an element, a map value, ADOPT's operand
+  // or the operand of a cast to string or to bool is boxed by the exit and the interpreter runs the
+  // operation (a raw-float to-string is planning/unboxed-float-output.md's). The loop keeps each
+  // function from the static decline.
+  struct Case {
+    const char * name;
+    const char * body;
+  };
+  const Case cases[] = {
+      {"an array element", "x = 1.5 * 2.0; return [x];"},
+      {"an array element beside others", "x = 1.5 * 2.0; return [1, x, \"s\"];"},
+      {"a map value", "x = 1.5 * 2.0; return {k: x};"},
+      {"a cast to string", "x = 1.5 * 2.0; return x as string;"},
+      {"a cast to bool", "x = 0.5 * 0.0; return x as bool;"},
+  };
+  for (const Case & c : cases) {
+    Scenario sc = scenario(std::string("function f() { i = 0; while (i < 2) { i = i + 1; } ") + c.body + " }\nprint(f()); print(\";\"); print(f());\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << c.name;
+    EXPECT_EQ(jit.raw, plain.raw) << c.name;
+    EXPECT_EQ(jit.stats.exits_expected, 2u) << c.name;
+    EXPECT_EQ(jit.stats.exits_counted, 0u) << c.name;
+    EXPECT_EQ(jit.stats.functions_declined_expected, 0u) << c.name;
+  }
+}
+
+TEST(JitTemplates, CastErrorsAndAHostDefinedOperandOfACastAreTheInterpretersWithNoExit) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A cast of an error (`Not implemented`), of a function, of an array to int and of a host-defined value
+  // (`Not supported`, the interpreter's answer: a cast never asks the host type, host-extensibility
+  // story 6), each on a line of its own so each error's origin names it. A host-defined value stored
+  // into a literal is a reference (ADOPT copies only arrays and maps).
+  Boxes boxes;
+  Scenario sc = scenario(
+      "function f(e, b) {\n"
+      "  c1 = e as string;\n"
+      "  c2 = f as bool;\n"
+      "  c3 = [1] as int;\n"
+      "  c4 = b as string;\n"
+      "  c5 = b as int;\n"
+      "  l = [b, b];\n"
+      "  print(c1); print(c2); print(c3); print(c4); print(c5); print(l.size);\n"
+      "  return l.size;\n"
+      "}\n"
+      "use t; b = t.box(); print(f(t.fail(), b)); print(f(t.fail(), b));\n");
+  sc.before = [&](Context & context) {
+    GLTANG_Library * t = nullptr;
+    ASSERT_EQ(gltang_library_create("t", &t), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(t, "box", &Boxes::make, &boxes), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(t, "fail", &fail_native, nullptr), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_library(context.library(), t), GLTANG_OK);
+    gltang_library_release(t);
+    ASSERT_EQ(gltang_execution_attach_types(context.execution, boxes.registry), GLTANG_OK);
+  };
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.errors, plain.errors);
+  EXPECT_EQ(jit.raw, plain.raw);
+  for (const char * text : {"Not supported", "Not implemented"}) {
+    EXPECT_NE(jit.errors.find(text), std::string::npos) << text << ": " << jit.errors;
+  }
+  for (int line = 2; line <= 6; ++line) {
+    EXPECT_NE(jit.errors.find("page:" + std::to_string(line) + "["), std::string::npos) << "line " << line << ": " << jit.errors;
+  }
+  EXPECT_EQ(jit.stats.deopts, 0u) << "every cast was the interpreter's own, called from compiled code";
+}
+
+TEST(JitTemplates, TheTopLevelExitOfTheOtherSuitesIsNowAtItsLoopAfterACompiledEmptyArray) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // kTopLevelLeaves' `[]` is a compiled literal since story 4 (one value call), so its one exit is the
+  // loop's ITER_INIT after it: still one counted exit, charged to function 0.
+  Scenario sc = scenario(kTopLevelLeaves);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.value_calls, 1u) << "the empty array ran compiled, so the exit is after it";
+  EXPECT_EQ(jit.stats.deopts, 1u);
+  EXPECT_EQ(jit.stats.exits_counted, 1u);
+}
+
+TEST(JitTemplates, WhereNativesCannotBeCalledCastsAndLiteralsStayExitsAndTheOutputIsTheSame) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  Scenario sc = scenario("function f(n) { r = \"\"; i = 0; while (i < n) { r = r + ([i, \"x\"] as string) + ({k: i} as string) + (\"7\" as int); i = i + 1; } return r; }\nx = f(3); x;\n");
+  sc.natives_off = true;
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.result, plain.result);
+  EXPECT_EQ(jit.stats.value_calls, 0u);
+  EXPECT_GE(jit.stats.deopts, 1u);
 }
 
 #else  // JIT=no

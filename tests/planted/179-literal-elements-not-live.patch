@@ -1,0 +1,32 @@
+# 179 a literal's elements are not live across the allocation of its container
+# defect: compiled code leaves a literal's elements out of the frame state of the call that allocates
+#   the container and fills it from plain-word copies made before it, so the elements are in no stack
+#   map across that GC point: a collection there frees an element that only compiled code holds
+# caught by: the literal of fresh strings under torture, verify and a moving stack, read back
+#   (testJit_templates, JitTemplates.ALiteralsElementsSurvive*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1780,9 +1780,12 @@
+   args[0] = I((int64_t)a);
+   emit_site(c, i);
+   flush_cost(c);
+-  fill_state(c, c->state, i, d);
++  fill_state(c, c->state, i, at);  /* planted: the frame before the call does not name the elements */
+   fill_state(c, c->state2, i + 1u, at + 1u);
+   c->state2[H + c->lc + at] = grjit_frame_slot_vreg(c->built);
++  for (uint32_t k = 0; k < count && k < TMP_COUNT; ++k) {
++    bitcast(c, c->tmp[k], c->stack[at + k]);  /* planted: and they are read as plain words before the allocation */
++  }
+   GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
+   GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
+   B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 1, &before, &after));
+@@ -1798,7 +1801,7 @@
+       args[argc++] = I((int64_t)n);
+     }
+     for (uint32_t k = 0; k < chunk; ++k) {
+-      args[argc++] = k < n ? V(c->stack[at + done + k]) : I(0);
++      args[argc++] = k < n ? (done + k < TMP_COUNT ? V(c->tmp[done + k]) : V(c->stack[at + done + k])) : I(0);  /* planted */
+     }
+     B(grjit_builder_call(c->b, GRJIT_NO_VREG, map ? (uint64_t)(uintptr_t)gltang_jit_map_fill : (uint64_t)(uintptr_t)gltang_jit_array_fill,
+         GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, args, argc, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));

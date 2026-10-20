@@ -45,8 +45,8 @@ extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, void * call
 namespace jt {
 
 /// A statement that makes a script's top level leave compiled code where it stands, with an
-/// unconditional exit that counts: the empty array literal is one until spec-template-compiled
-/// story 4, and `ITER_INIT` after it (no story of that spec compiles it); the loop over an
+/// unconditional exit that counts: `ITER_INIT` (no story of spec-template-compiled compiles it;
+/// the empty array literal before it was the exit until story 4 compiled it); the loop over an
 /// empty array prints nothing and makes no error. Being unconditional, it also keeps the static decline (a function whose
 /// every path ends at a designed box exit) from applying to the top level, which a guard
 /// would not. A test whose calls must be made by the interpreter, or whose counts include the

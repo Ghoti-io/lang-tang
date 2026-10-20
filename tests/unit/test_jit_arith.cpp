@@ -490,6 +490,10 @@ TEST(JitArith, AnIntegerResultOutsideTheSmallIntegerRangeExitsAndTheInterpreterM
 
 TEST(JitArith, ACastToIntOfADoubleInsideTheSmallRangeIsCompiledAndEverythingElseExits) {
   GLTANG_REQUIRE_JIT_BACKEND();
+  // From a raw double, everything outside the small range exits (a raw value cannot be handed to a
+  // helper). From a value word, since spec-template-compiled story 4, it does not: a float object
+  // outside the range (and NaN, the infinities) is the interpreter's cast called from compiled code,
+  // which makes the boxed integer or the error, so that shape never exits.
   struct Case {
     const char * value;
     bool exits;
@@ -524,7 +528,9 @@ TEST(JitArith, ACastToIntOfADoubleInsideTheSmallRangeIsCompiledAndEverythingElse
       expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure()) << c.value << " shape " << shape;
       EXPECT_EQ(jit.stats.compile_failures, 0u) << c.value;
-      const bool exits = shape == 1 && c.differs ? c.exits_from_a_word : c.exits;
+      const bool exits = shape == 1 ? false : c.exits;
+      (void)c.exits_from_a_word;
+      (void)c.differs;
       EXPECT_EQ(jit.stats.deopts > kMain, exits) << c.value << " shape " << shape << ": " << (c.exits ? "an exit" : "compiled to the end");
     }
   }
@@ -591,11 +597,12 @@ TEST(JitArith, AFunctionWithNoLoopWhoseEveryPathEndsInAComputedFloatIsDeclinedAt
 TEST(JitArith, AFunctionWithARealExitOnOnePathBesideAFloatReturnOnTheOtherIsCompiledNotDeclinedAndItsRealExitsStillReachTheLimit) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // No loop, and one path ends at the designed exit (the return of a raw float); the other ends at an instruction
-  // compiled code does not do (an array), which is a real exit. Only a function whose every path is the designed one
+  // compiled code does not do (a loop over an array: `ITER_INIT`; the array literal itself was the exit until
+  // spec-template-compiled story 4 compiled it), which is a real exit. Only a function whose every path is the designed one
   // is declined, so this one is compiled and entered; its real exits count, and the eighth lets it go, while its
   // designed exits before that did not count.
   Scenario sc = scenario(
-      "function f(c, a) { x = a * 1.5; if (c) { return x; } y = [1, 2]; return y[0]; }\n"
+      "function f(c, a) { x = a * 1.5; if (c) { return x; } y = [1, 2]; for (q : y) { } return y[0]; }\n"
       "k = 0; while (k < 12) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
   Outcome plain, jit;
   expect_same_compiled(sc, &plain, &jit);

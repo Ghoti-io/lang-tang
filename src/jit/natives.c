@@ -39,6 +39,10 @@
  *   small-integer path (`gltang_vm_op_binary`), `INDEX`, `SLICE` and the `ATTR` of a value
  *   that is not a library (`gltang_vm_op_index`, `gltang_vm_op_slice`,
  *   `gltang_vm_op_attr`), so each is the interpreter's one implementation.
+ * - The value-building operations of story 4: a `CAST` (`gltang_vm_op_cast`), the
+ *   allocation of an `ARRAY` or a `MAP` literal (`gltang_vm_array_new`,
+ *   `gltang_vm_map_new`; its elements are stored after it, by the no-GC fill helpers of
+ *   helpers.c) and the copy of a container that `ADOPT` stores (`gltang_vm_op_adopt`).
  *
  * Each returns the value and a status: zero, or `GRJIT_NATIVE_UNWIND` for the
  * `GLTANG_V_UNWIND` an operation returns when a runtime poll ordered the run to
@@ -272,6 +276,51 @@ static GRJIT_NativeResult thunk_value_attr(void * context, uint64_t container, u
   return finished(exec, attribute(exec, container, constant), false);
 }
 
+// The value-building operations (spec-template-compiled story 4), each its operation's fuel and
+// the interpreter's own function, as above.
+
+static GRJIT_NativeResult thunk_cast(void * context, uint64_t value, uint64_t type) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CAST];
+  ++exec->jit_stats.value_calls;
+  // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
+  // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.
+  if (type == GLTANG_CAST_TYPE_STRING) {
+    stand_at_the_op(exec, context);
+  }
+  return finished(exec, gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type), false);
+}
+
+/**
+ * The container of a literal, made empty with room for `count` elements (or pairs): the
+ * interpreter's allocation, a GC point, and the literal's value even when it is the failure the
+ * allocation made. The elements are in the call's frame state and in compiled code's registers,
+ * which the stack map names, so the collector keeps them and a moving one updates them; compiled
+ * code then stores them with the fill helpers, which do not allocate.
+ */
+static GRJIT_NativeResult thunk_array(void * context, uint64_t count) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ARRAY];
+  ++exec->jit_stats.value_calls;
+  return finished(exec, gltang_vm_array_new(exec, (size_t)count), false);
+}
+
+static GRJIT_NativeResult thunk_map(void * context, uint64_t count) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_MAP];
+  ++exec->jit_stats.value_calls;
+  return finished(exec, gltang_vm_map_new(exec, (size_t)count), false);
+}
+
+/** `ADOPT` of a container (compiled code tests that it is one: of anything else `ADOPT` does nothing, and calls nothing): the interpreter's deep copy, which paces. */
+static GRJIT_NativeResult thunk_adopt(void * context, uint64_t value) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
+  ++exec->jit_stats.value_calls;
+  stand_at_the_op(exec, context);
+  return finished(exec, gltang_vm_op_adopt(exec, value), false);
+}
+
 /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */
 static GRJIT_Result add_native(GRJIT_NativeTable * table, uint64_t address, const GRJIT_Type * params, size_t count, uint32_t expected) {
   GRJIT_NativeDesc desc;
@@ -379,6 +428,21 @@ GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTabl
   if (r == GRJIT_OK) {
     const GRJIT_Type value_attr_params[2] = {GRJIT_TYPE_REF, GRJIT_TYPE_I64};
     r = add_native(table, (uint64_t)(uintptr_t)thunk_value_attr, value_attr_params, 2, GLTANG_JIT_NATIVE_VALUE_ATTR);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type cast_params[2] = {GRJIT_TYPE_REF, GRJIT_TYPE_I64};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_cast, cast_params, 2, GLTANG_JIT_NATIVE_CAST);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type count_params[1] = {GRJIT_TYPE_I64};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_array, count_params, 1, GLTANG_JIT_NATIVE_ARRAY);
+    if (r == GRJIT_OK) {
+      r = add_native(table, (uint64_t)(uintptr_t)thunk_map, count_params, 1, GLTANG_JIT_NATIVE_MAP);
+    }
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type adopt_params[1] = {GRJIT_TYPE_REF};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_adopt, adopt_params, 1, GLTANG_JIT_NATIVE_ADOPT);
   }
   if (r != GRJIT_OK) {
     grjit_native_table_free(table);
