@@ -87,7 +87,10 @@ uint64_t native_polls(Context & context, const char * native) {
 TEST(JitTemplates, ALoopOfPrintsRunsCompiledWithNoExitAtAPrintAndTheSameBytesFuelAndPolls) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // `r = print(i)`: a print's value is null, so the function returns null; a print that
-  // left its operand in place would return 99.
+  // left its operand in place would return 99. The value is stored rather than dropped
+  // because a bare `print(i);` in a function ends in `DISCARD` (and at the top level in
+  // `SET_RESULT`), which this story does not compile: that statement still leaves compiled
+  // code after its print, at the `DISCARD`.
   Scenario sc = scenario("function f(n) { r = 1; i = 0; while (i < n) { r = print(i); i = i + 1; } return r; }\nx = f(100);\nx;\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
