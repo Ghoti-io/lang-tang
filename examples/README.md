@@ -37,6 +37,9 @@ templates also include `library.h`, and `host_values.c` `description.h`.
 | Make a library every program can `use` | [`host_context.c`](host_context.c), `main`: `gltang_language_set_library` |
 | Stream the output as it is printed, with each segment's tag | [`host_context.c`](host_context.c), `to_page`: `gltang_execution_set_output_sink` |
 | Encode the host's own text the way the engine does | [`host_context.c`](host_context.c): `gltang_unicode_string_render`, `gltang_unicode_string_html_encode` |
+| Define a value type of the host's own that a template adds, compares and reads (`price + tip`, `3 + price`, `price.amount`) | [`custom_type.c`](custom_type.c), `main`: `GLTANG_TypeDescriptor`, `gltang_type_registry_add`, `gltang_execution_attach_types` |
+| Make an instance and keep data in it: raw bytes for plain data, a slot for a value | [`custom_type.c`](custom_type.c), `make_money`: `gltang_handle_make_custom`, `gltang_handle_custom_write_bytes`, `gltang_handle_custom_slot_set` |
+| Answer for some operands and decline the rest, so the other side, or the language, decides | [`custom_type.c`](custom_type.c), `money_add` and `money_less`: `GLTANG_OP_DECLINE`, `self_is_lhs` |
 | Register a template and call it from another (`use sidebar; sidebar()`) | [`nested_templates.c`](nested_templates.c), `gltang_library_add_template` |
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |

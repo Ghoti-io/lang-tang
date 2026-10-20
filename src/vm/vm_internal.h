@@ -86,6 +86,7 @@
 #include <ghoti.io/runtime-heap/type.h>
 #include "../compile/program_internal.h"
 #include "../library/library_internal.h"
+#include "../library/types_internal.h"
 #include "string_layout.h"
 
 /** @brief One output segment: bytes from `offset` carry `type`. */
@@ -171,7 +172,8 @@ typedef enum {
   GLTANG_OBJ_LIBRARY,       ///< A library: a pointer to a sealed GLTANG_Library.
   GLTANG_OBJ_NATIVE,        ///< A native function, perhaps bound to a value.
   GLTANG_OBJ_TEMPLATE,      ///< A template: a pointer to its library member.
-  GLTANG_OBJ_RNG            ///< A random number generator, its state inline.
+  GLTANG_OBJ_RNG,           ///< A random number generator, its state inline.
+  GLTANG_OBJ_CUSTOM         ///< An instance of a host-defined type (custom.c).
 } GLTANG_ObjectKind;
 
 typedef struct GLTANG_IntegerObject {
@@ -267,6 +269,26 @@ typedef struct GLTANG_RngObject {
   uint64_t seed;
   GCU_Random_MT64_State state;
 } GLTANG_RngObject;
+
+/**
+ * @brief An instance of a host-defined type (type.h): its type, then
+ *   `slot_count` value slots, then the type's raw bytes.
+ *
+ * The heap type traces the slots from the count in this header, so a module
+ * writes no trace function (AD-11). Raw bytes are never traced. The payload is
+ * zero-filled when it is made: every slot null, every byte zero.
+ */
+typedef struct GLTANG_CustomObject {
+  uint32_t kind;
+  uint32_t slot_count;          ///< The type's, copied: what the trace reads.
+  const GLTANG_Type * type;     ///< Held by a registry the execution retains.
+  GLTANG_Value slots[];         ///< Traced; then the raw bytes.
+} GLTANG_CustomObject;
+
+/** @brief Where an instance's raw bytes start. */
+static inline unsigned char * gltang_custom_bytes(GLTANG_CustomObject * object) {
+  return (unsigned char *)(void *)&object->slots[object->slot_count];
+}
 
 static inline uint32_t gltang_object_kind(GLTANG_Value v) {
   return *(const uint32_t *)(const void *)(uintptr_t)v;
@@ -432,6 +454,11 @@ typedef struct GLTANG_HandleState {
   GLTANG_LibraryMember ** owned_members;  ///< Native records made at run time; freed at destroy.
   size_t owned_member_count;
   size_t owned_member_capacity;
+  GLTANG_TypeRegistry ** registries;      ///< Attached type registries (custom.c), retained; released at destroy.
+  size_t registry_count;
+  size_t registry_capacity;
+  const GLTANG_Type * snapshot_refused;   ///< The type that made the last snapshot take refuse, or NULL.
+  uint64_t context_serial;                ///< What a registry of thread-unsafe types is bound by (custom.c); 0 until the first attach.
 } GLTANG_HandleState;
 
 struct GLTANG_Execution {
@@ -439,6 +466,7 @@ struct GLTANG_Execution {
   GRHEAP_Heap * heap;
   const GRCORE_Allocator * allocator;
   GRCORE_EngineId engine;
+  GRCORE_RequestKind halt_kind; ///< Beside `engine`, where it fills the padding: the halt option's request (errorlist.c).
   GLTANG_Program * program;     ///< The main program.
   GLTANG_ExecutionState state;
   bool destroyed;
@@ -478,7 +506,6 @@ struct GLTANG_Execution {
   bool statement_polls;         ///< `LINE` polls like `POLL` (the host asked for it; default off).
   bool halted;                  ///< The first error has ended the run.
   bool halt_registered;
-  GRCORE_RequestKind halt_kind;
   GRCORE_Port * port;
 
   // What the host attached.
@@ -658,6 +685,7 @@ extern const GRHEAP_Type gltang_type_library;
 extern const GRHEAP_Type gltang_type_native;
 extern const GRHEAP_Type gltang_type_template;
 extern const GRHEAP_Type gltang_type_rng;
+extern const GRHEAP_Type gltang_type_custom;
 
 GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v);
 bool gltang_vm_truthy(GLTANG_Value v);
@@ -729,6 +757,16 @@ GLTANG_Value gltang_vm_make_native_value(GLTANG_Execution * exec, const GLTANG_L
 
 /** @brief Forgets the answer a call has so far (a new `gltang_call_return_*` replaces it). */
 void gltang_vm_call_forget_answer(GLTANG_NativeCall * call);
+
+/**
+ * @brief The value a finished host call stands for (its answer, or the
+ *   out-of-memory value, the unwind or the error it set), read while its scope
+ *   is open; then closes the scope and frees what the call made. A GC point.
+ */
+GLTANG_Value gltang_vm_call_settle(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked);
+
+/** @brief Ends a call whose answer is not wanted (a declined operation): closes its scope, frees what it made. */
+void gltang_vm_call_abandon(GLTANG_NativeCall * call);
 
 /** @brief The defaults of the two handle limits. */
 #define GLTANG_SCOPE_LIMIT_DEFAULT ((size_t)1024)
@@ -863,6 +901,60 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
 GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index, GLTANG_Value v, bool adopt);
 GLTANG_Value gltang_vm_op_set_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name, GLTANG_Value v, bool adopt);
 GLTANG_Value gltang_vm_op_adopt(GLTANG_Execution * exec, GLTANG_Value v);
+
+// ---------------------------------------------------------------------------
+// Custom values: instances of host-defined types (custom.c)
+// ---------------------------------------------------------------------------
+
+static inline bool gltang_v_is_custom(GLTANG_Value v) {
+  return gltang_v_is_kind(v, GLTANG_OBJ_CUSTOM);
+}
+static inline GLTANG_CustomObject * gltang_vm_custom(GLTANG_Value v) {
+  return (GLTANG_CustomObject *)gltang_object(v);
+}
+
+/** @brief The handle state, made if there is none; NULL when memory is out (handle.c). */
+GLTANG_HandleState * gltang_vm_handle_state(GLTANG_Execution * exec);
+
+/** @brief Whether a type's registry is attached to the execution. */
+bool gltang_vm_type_attached(const GLTANG_Execution * exec, const GLTANG_Type * type);
+
+/** @brief A new instance of `type`, zero-filled; a failure value when it cannot be made. A GC point. */
+GLTANG_Value gltang_vm_make_custom(GLTANG_Execution * exec, const GLTANG_Type * type);
+
+/**
+ * @brief A binary operator or comparison with a custom operand, by the
+ *   reflection rule (type.h): the left operand's operation, then the right's,
+ *   then `Not supported`. `==` and `!=` included. Whether it is a compound
+ *   assignment is read from the instruction being executed (its operand), so
+ *   nothing on a built-in path carries it. A GC point.
+ */
+GLTANG_Value gltang_vm_custom_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Value a, GLTANG_Value b);
+
+/**
+ * @brief Equality of an element pair inside a container comparison, where one
+ *   of the two is custom: the `equal` operation with reflection, then identity.
+ *
+ * @return GLTANG_V_TRUE, GLTANG_V_FALSE, GLTANG_V_UNWIND, or the
+ *   out-of-memory value.
+ */
+GLTANG_Value gltang_vm_custom_element_equal(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b);
+
+/** @brief `-v` for a custom `v`. A GC point. */
+GLTANG_Value gltang_vm_custom_neg(GLTANG_Execution * exec, GLTANG_Value v);
+/** @brief `v.name` for a custom `v`; `name` is a string value. A GC point. */
+GLTANG_Value gltang_vm_custom_attr(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value name);
+/** @brief `v.name = x` for a custom `v`. A GC point. */
+GLTANG_Value gltang_vm_custom_set_attr(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value name, GLTANG_Value x);
+/** @brief `v[i]` for a custom `v`. A GC point. */
+GLTANG_Value gltang_vm_custom_index(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value index);
+/** @brief `v[i] = x` for a custom `v`. A GC point. */
+GLTANG_Value gltang_vm_custom_set_index(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value index, GLTANG_Value x);
+/** @brief `v[a:b:c]` for a custom `v`; each part a value, null when omitted. A GC point. */
+GLTANG_Value gltang_vm_custom_slice(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value start, GLTANG_Value stop, GLTANG_Value step);
+
+/** @brief The custom heap type's snapshot hook: refuses, and records the type (snapshot.c reads it). */
+GRHEAP_Result gltang_vm_custom_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
 
 // ---------------------------------------------------------------------------
 // The execution (execution.c) and the resolver (resolve.c)

@@ -65,6 +65,10 @@ static GLTANG_HandleState * state_of(GLTANG_Execution * exec) {
   return exec->handles;
 }
 
+GLTANG_HandleState * gltang_vm_handle_state(GLTANG_Execution * exec) {
+  return state_of(exec);
+}
+
 static bool frame_push(GLTANG_Execution * exec) {
   GLTANG_HandleState * hs = state_of(exec);
   if (!hs) {
@@ -668,6 +672,123 @@ GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call, GLTANG_NativeF
 }
 
 // ---------------------------------------------------------------------------
+// Custom values
+// ---------------------------------------------------------------------------
+
+GLTANG_Result gltang_handle_make_custom(GLTANG_NativeCall * call, const GLTANG_Type * type, GLTANG_Handle * out) {
+  if (!call || !type || !out) {
+    return GLTANG_ERR_INVALID;
+  }
+  // Only a type of a registry this execution attached: its registry is then
+  // retained for as long as an instance can exist (AD-22).
+  if (!gltang_vm_type_attached(call->exec, type)) {
+    return GLTANG_ERR_INVALID;
+  }
+  return made(call, gltang_vm_make_custom(call->exec, type), out);
+}
+
+/** The custom value a handle names, or NULL. */
+static GLTANG_CustomObject * custom_of(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
+  bool ok;
+  GLTANG_Value v = gltang_vm_handle_value(call, handle, &ok);
+  return ok && gltang_v_is_custom(v) ? gltang_vm_custom(v) : NULL;
+}
+
+const GLTANG_Type * gltang_handle_custom_type(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  return custom ? custom->type : NULL;
+}
+
+GLTANG_Result gltang_handle_custom_slot_get(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Handle * out) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || !out || index >= custom->slot_count) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Handle h;
+  GLTANG_Result r = push_handle(call, custom->slots[index], &h);
+  if (r == GLTANG_OK) {
+    *out = h;
+  }
+  return r;
+}
+
+GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Handle value) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  bool ok_v;
+  GLTANG_Value v = gltang_vm_handle_value(call, value, &ok_v);
+  if (!custom || !ok_v || index >= custom->slot_count) {
+    return GLTANG_ERR_INVALID;
+  }
+  // A container is copied as every store of one is; the copy is a GC point, so
+  // the instance is read again from its handle after it.
+  GLTANG_Result r;
+  size_t mark = hold_stored_copy(call, v, &r);
+  if (mark == SIZE_MAX) {
+    return r;
+  }
+  GLTANG_CustomObject * holder = custom_of(call, handle);
+  // A slot is traced, so the store goes through the barrier (AD-11).
+  (void)grheap_store_word(call->exec->heap, holder, &holder->slots[index], gltang_vm_temp_at(call->exec, mark));
+  gltang_vm_temp_release(call->exec, mark);
+  return GLTANG_OK;
+}
+
+/** Whether `[offset, offset + length)` is inside an instance's raw bytes. */
+static bool byte_range(const GLTANG_CustomObject * custom, size_t offset, size_t length) {
+  size_t size = custom->type->descriptor.byte_count;
+  return offset <= size && length <= size - offset;
+}
+
+GLTANG_Result gltang_handle_custom_read_bytes(const GLTANG_NativeCall * call, GLTANG_Handle handle, size_t offset, void * buffer, size_t length) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || (!buffer && length) || !byte_range(custom, offset, length)) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (length) {
+    memcpy(buffer, gltang_custom_bytes(custom) + offset, length);
+  }
+  return GLTANG_OK;
+}
+
+GLTANG_Result gltang_handle_custom_write_bytes(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t offset, const void * bytes, size_t length) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || (!bytes && length) || !byte_range(custom, offset, length)) {
+    return GLTANG_ERR_INVALID;
+  }
+  // Raw bytes are never traced, so no barrier: they are plain data.
+  if (length) {
+    memcpy(gltang_custom_bytes(custom) + offset, bytes, length);
+  }
+  return GLTANG_OK;
+}
+
+/* For the tests only; declared in vm/test_hooks.h. */
+void * gltang_vm_test_handle_object(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
+  bool ok;
+  GLTANG_Value v = gltang_vm_handle_value(call, handle, &ok);
+  return ok && gltang_v_is_object(v) ? gltang_object(v) : NULL;
+}
+
+// ---------------------------------------------------------------------------
+// The runtime poll
+// ---------------------------------------------------------------------------
+
+GLTANG_Result gltang_call_poll(GLTANG_NativeCall * call, uint64_t work) {
+  if (!call) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (call->scope_unwind) {
+    return GLTANG_ERR_LIMIT;
+  }
+  // Continue or unwind only (AD-21): the callback's C frame is live here.
+  if (GLTANG_NATIVE_POLL(call->exec, HOST_CALLBACK, work ? work : 1u) != GLTANG_ST_OK) {
+    call->scope_unwind = true;
+    return GLTANG_ERR_LIMIT;
+  }
+  return GLTANG_OK;
+}
+
+// ---------------------------------------------------------------------------
 // The answer
 // ---------------------------------------------------------------------------
 
@@ -804,6 +925,12 @@ void gltang_vm_handles_destroy(GLTANG_Execution * exec) {
     gcu_allocator_free(exec->allocator, hs->owned_members[i]);
   }
   gcu_allocator_free(exec->allocator, hs->owned_members);
+  // Last: an instance's type lives in its registry, and the heap's objects are
+  // gone or unreachable by now.
+  for (size_t i = 0; i < hs->registry_count; ++i) {
+    gltang_type_registry_release(hs->registries[i]);
+  }
+  gcu_allocator_free(exec->allocator, hs->registries);
   gcu_allocator_free(exec->allocator, hs);
   exec->handles = NULL;
 }

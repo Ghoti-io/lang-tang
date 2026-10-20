@@ -98,6 +98,9 @@ extern "C" {
 /** @brief A named table of members. Opaque; reference counted (library.h). */
 typedef struct GLTANG_Library GLTANG_Library;
 
+/** @brief A host-defined value type, held by its registry (type.h). Opaque. */
+typedef struct GLTANG_Type GLTANG_Type;
+
 /**
  * @brief What a native function or a factory is given: its arguments, the
  *   handles it makes, and where it puts its answer. Opaque; valid for the
@@ -190,6 +193,25 @@ GLTANG_API GLTANG_Result gltang_call_bound(
  */
 GLTANG_API void gltang_call_return_handle(
     GLTANG_NativeCall * call, GLTANG_Handle handle);
+
+/**
+ * @brief Polls the runtime from inside a callback, charging `work` units of
+ *   fuel (AD-21).
+ *
+ * A callback whose work the program controls (a long loop over a collection
+ * the program built) calls this every so often, so that a budget or a
+ * request from the host is honoured while it runs. The poll allows only two
+ * verdicts: go on, or stop the run. A stop makes every later call of the
+ * callback fail and the run unwinds when the callback returns, whatever it
+ * answers. A pause the host asks for is taken at the program's next poll.
+ *
+ * @may_gc
+ * @param work Units of fuel the callback has done since it last polled; at
+ *   least one is charged.
+ * @return ::GLTANG_OK to go on; ::GLTANG_ERR_LIMIT when the run is to stop
+ *   (return at once); ::GLTANG_ERR_INVALID for NULL.
+ */
+GLTANG_API GLTANG_Result gltang_call_poll(GLTANG_NativeCall * call, uint64_t work);
 
 /** @} */
 
@@ -436,6 +458,83 @@ GLTANG_API GLTANG_Result gltang_handle_make_library(GLTANG_NativeCall * call,
 GLTANG_API GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call,
     GLTANG_NativeFn function, void * user, GLTANG_Handle bound,
     GLTANG_Handle * out);
+
+/** @} */
+
+/**
+ * @name Custom values (type.h)
+ *
+ * An instance of a host-defined type: its slots, which hold values the
+ * collector sees, and its raw bytes, which are copied in and out.
+ * @{
+ */
+
+/**
+ * @brief Makes an instance of `type`, every slot null and every byte zero.
+ *
+ * @may_gc
+ * @param type A type of a registry attached to this execution
+ *   (::gltang_execution_attach_types).
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument or a type
+ *   whose registry this execution has not attached; ::GLTANG_ERR_LIMIT as for
+ *   every constructor.
+ */
+GLTANG_API GLTANG_Result gltang_handle_make_custom(GLTANG_NativeCall * call,
+    const GLTANG_Type * type, GLTANG_Handle * out);
+
+/**
+ * @brief The type of a custom value; NULL unless the handle names one.
+ *
+ * @no_gc
+ */
+GLTANG_API const GLTANG_Type * gltang_handle_custom_type(
+    const GLTANG_NativeCall * call, GLTANG_Handle handle);
+
+/**
+ * @brief A handle to what slot `index` of a custom value holds. It names the
+ *   value itself, not a copy.
+ *
+ * @no_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not a custom
+ *   value or an index past its slots; ::GLTANG_ERR_LIMIT for a full scope.
+ */
+GLTANG_API GLTANG_Result gltang_handle_custom_slot_get(GLTANG_NativeCall * call,
+    GLTANG_Handle handle, size_t index, GLTANG_Handle * out);
+
+/**
+ * @brief Stores `value` in slot `index` of a custom value; a container is
+ *   copied, as every store of one into another value is.
+ *
+ * @may_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not valid or
+ *   not a custom value, or an index past its slots; ::GLTANG_ERR_LIMIT as for
+ *   every constructor.
+ */
+GLTANG_API GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call,
+    GLTANG_Handle handle, size_t index, GLTANG_Handle value);
+
+/**
+ * @brief Copies `length` raw bytes from `offset` of a custom value out.
+ *
+ * @no_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not a custom
+ *   value, a NULL buffer with a length, or a range past its bytes (then
+ *   nothing is copied).
+ */
+GLTANG_API GLTANG_Result gltang_handle_custom_read_bytes(
+    const GLTANG_NativeCall * call, GLTANG_Handle handle, size_t offset,
+    void * buffer, size_t length);
+
+/**
+ * @brief Copies `length` bytes into a custom value's raw bytes at `offset`.
+ *
+ * @no_gc
+ * @return As ::gltang_handle_custom_read_bytes (nothing is written on a
+ *   refusal).
+ */
+GLTANG_API GLTANG_Result gltang_handle_custom_write_bytes(
+    GLTANG_NativeCall * call, GLTANG_Handle handle, size_t offset,
+    const void * bytes, size_t length);
 
 /** @} */
 

@@ -571,6 +571,15 @@ static GLTANG_Value call_result_general(GLTANG_Execution * exec, GLTANG_NativeCa
   return result;
 }
 
+GLTANG_Value gltang_vm_call_settle(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
+  return call_result_general(exec, call, worked);
+}
+
+void gltang_vm_call_abandon(GLTANG_NativeCall * call) {
+  gltang_vm_scope_close(call);
+  call_finish(call);
+}
+
 /**
  * The value a finished host call stands for. A scalar answer from a call that
  * used no handle, no description and no text (nearly every native call) is made

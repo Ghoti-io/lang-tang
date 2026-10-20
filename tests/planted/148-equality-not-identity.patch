@@ -1,0 +1,15 @@
+# 148 equality not defaulting to identity
+# defect: `==` and `!=` that every side declined give the language's Not supported, as the arithmetic does, instead of identity
+# caught by: the equality tests (testCustom)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -384,7 +384,7 @@
+   }
+   if (declined) {
+     // Every side declined: the language's own rule, made only now.
+-    if (op == GLTANG_TYPE_OP_EQUAL || op == GLTANG_TYPE_OP_NOT_EQUAL) {
++    if (false && (op == GLTANG_TYPE_OP_EQUAL || op == GLTANG_TYPE_OP_NOT_EQUAL)) { /* planted: no identity */
+       // Identity for two custom values; never equal to a value of another kind.
+       bool same = identical(exec, mark);
+       r = gltang_v_from_bool(op == GLTANG_TYPE_OP_EQUAL ? same : !same);

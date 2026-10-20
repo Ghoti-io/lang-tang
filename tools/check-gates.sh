@@ -105,6 +105,8 @@ expect_fail 'labels/planted-free-language (the language layer API labelled free)
   'language.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-language"
 expect_fail 'labels/planted-free-valuekind (the value kind the handle API names labelled free)' \
   'valuekind.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-valuekind"
+expect_fail 'labels/planted-free-type (the host-type API labelled free)' \
+  'type.h is labelled free but must be stable' "$L" "$FIX/labels/planted-free-type"
 expect_fail 'labels/planted-unclassified' 'newthing.h is in neither' \
   "$L" "$FIX/labels/planted-unclassified"
 expect_fail 'labels/empty' 'measuring nothing' "$L" "$work/empty"

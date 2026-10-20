@@ -1,0 +1,15 @@
+# 146 a non-thread-safe registry attached to a second context
+# defect: the binding of a registry of thread-unsafe types to its first context is never checked
+# caught by: the binding test (testCustom)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -241,7 +241,7 @@
+ }
+ 
+ bool gltang_type_registry_bind(GLTANG_TypeRegistry * registry, uint64_t context_serial) {
+-  if (!registry->bindable) {
++  if (true || !registry->bindable) { /* planted: never bound */
+     return true;
+   }
+   uint_fast64_t expected = 0;

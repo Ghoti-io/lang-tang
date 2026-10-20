@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -796,9 +796,7 @@
+@@ -921,9 +921,7 @@
      gltang_library_release(hs->held_libraries[i]);
    }
    gcu_allocator_free(exec->allocator, hs->held_libraries);
@@ -13,5 +13,5 @@
 -  }
 +  /* planted: the native records are not freed */
    gcu_allocator_free(exec->allocator, hs->owned_members);
-   gcu_allocator_free(exec->allocator, hs);
-   exec->handles = NULL;
+   // Last: an instance's type lives in its registry, and the heap's objects are
+   // gone or unreachable by now.

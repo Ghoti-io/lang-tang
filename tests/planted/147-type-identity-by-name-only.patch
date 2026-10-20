@@ -1,0 +1,14 @@
+# 147 type identity compared by name only
+# defect: two types are the same when their names and versions are, whatever registry holds them
+# caught by: the identity test: one name and version in two registries (testCustom)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -285,6 +285,6 @@
+   }
+   // The whole tuple, never the address: two registries holding one name and
+   // version hold two types (AD-29).
+-  return a->registry_id == b->registry_id && a->descriptor.version == b->descriptor.version &&
++  return /* planted: the registry is not compared */ a->descriptor.version == b->descriptor.version &&
+          a->name_length == b->name_length && !memcmp(a->name, b->name, a->name_length);
+ }

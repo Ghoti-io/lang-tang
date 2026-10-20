@@ -442,6 +442,19 @@ static bool is_weak(GLTANG_ValueKind k) {
 static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pacer) {
   GLTANG_ValueKind ka = gltang_vm_kind(a);
   GLTANG_ValueKind kb = gltang_vm_kind(b);
+  if (ka == GLTANG_KIND_CUSTOM || kb == GLTANG_KIND_CUSTOM) {
+    // A custom element: its type's `equal`, with reflection, before any rule
+    // of the language; identity when no side answers (type.h). The call is a
+    // GC point: the caller reads its arrays again from their temporaries.
+    GLTANG_Value r = gltang_vm_custom_element_equal(pacer->exec, a, b);
+    if (r == GLTANG_V_UNWIND) {
+      return EQ_UNWIND;
+    }
+    if (r == GLTANG_V_TRUE || r == GLTANG_V_FALSE) {
+      return r == GLTANG_V_TRUE ? EQ_TRUE : EQ_FALSE;
+    }
+    return EQ_OOM;
+  }
   // Null, booleans and strings are equal to their own kind and to nothing
   // else, whatever the other side is (language reference, 13.3).
   if (is_weak(ka) || is_weak(kb)) {

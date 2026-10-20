@@ -48,7 +48,8 @@ typedef enum {
   GLTANG_KIND_FUNCTION, ///< A function declared by the program, a native function, or a template.
   GLTANG_KIND_ERROR,    ///< An error value (language reference, section 10.2).
   GLTANG_KIND_LIBRARY,  ///< A library: a named table of members (language reference, section 9).
-  GLTANG_KIND_RNG       ///< A random number generator (`random.seeded(n)`).
+  GLTANG_KIND_RNG,      ///< A random number generator (`random.seeded(n)`).
+  GLTANG_KIND_CUSTOM    ///< An instance of a type a host registered (type.h). Appended: the kinds before it keep their numbers.
 } GLTANG_ValueKind;
 
 #ifdef __cplusplus

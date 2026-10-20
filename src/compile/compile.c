@@ -718,7 +718,9 @@ static void compile_binary(Compiler * c, Fn * fn, GLTANG_Ast_Node_Binary * node)
     case GLTANG_BINARY_TYPE_OR:
       break;
   }
-  emit(c, fn, op, 0);
+  // The operand says the operation is a compound assignment's (`+=`): only a
+  // host-defined type's operation reads it (type.h).
+  emit(c, fn, op, node->is_assignment ? 1u : 0u);
 }
 
 static void compile_assign(Compiler * c, Fn * fn, GLTANG_Ast_Node_Assign * node) {

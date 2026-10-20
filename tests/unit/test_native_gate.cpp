@@ -461,7 +461,7 @@ TEST(NativeGateCoverage, EveryPollInTheSourcesNamesAnEntryAndEveryEntryIsNamed) 
     listed.insert(n.id);
   }
   std::set<std::string> named;
-  const char * files[] = {"container.c", "description.c", "errorlist.c", "execution.c", "interp.c", "libvalue.c", "materialize.c", "ops.c", "string.c", "template.c", "text.c", "value.c"};
+  const char * files[] = {"container.c", "custom.c", "description.c", "errorlist.c", "execution.c", "handle.c", "interp.c", "libvalue.c", "materialize.c", "ops.c", "string.c", "template.c", "text.c", "value.c"};
   size_t polls = 0;
   for (const char * f : files) {
     std::string text = slurp(src_dir() + "/" + f);

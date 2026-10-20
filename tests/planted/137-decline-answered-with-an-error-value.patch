@@ -1,0 +1,15 @@
+# 137 a decline answered with an error value
+# defect: a declined operation makes the language's error value, which is then dropped: the decline allocates, and the error hooks see it (logged, or halting the run)
+# caught by: the decline allocation count and the error-hook tests (testCustom)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -254,7 +254,7 @@
+     // A decline: whatever the callback set is dropped, and no value is made.
+     gltang_vm_call_abandon(&call);
+     *declined = true;
+-    result = GLTANG_V_NULL;
++    result = gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED); /* planted: a decline made into a value */
+   }
+   else {
+     if (status == GLTANG_OP_OK && call.set == GLTANG_CALL_NONE &&

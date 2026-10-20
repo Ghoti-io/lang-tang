@@ -54,6 +54,7 @@
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
 #include <ghoti.io/lang-tang/seeds.h>
+#include <ghoti.io/lang-tang/type.h>
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/b/context.h>
 #include <ghoti.io/runtime-core/b/run.h>
@@ -145,6 +146,27 @@ GLTANG_API void gltang_execution_destroy(GLTANG_Execution * execution);
  */
 GLTANG_API GLTANG_Result gltang_execution_set_libraries(
     GLTANG_Execution * execution, GLTANG_Library * library);
+
+/**
+ * @brief Attaches a registry of host-defined types (type.h): the program's
+ *   values may then be instances of its types.
+ *
+ * The registry is sealed (it refuses ::gltang_type_registry_add from now on)
+ * and retained until the execution is destroyed. An execution may attach
+ * several; attaching one twice is a no-op. A registry that holds a type that
+ * is not `thread_safe` is bound to the context of the first execution it is
+ * attached to, and attaching it to an execution of another context is
+ * refused. Two registries that hold the same name and version with different
+ * table hashes cannot both be attached to one execution.
+ *
+ * @param execution The execution.
+ * @param registry The registry.
+ * @return As ::gltang_execution_set_libraries; ::GLTANG_ERR_INVALID also for
+ *   a NULL registry, a registry bound to another context, or a name and
+ *   version that clash with a registry already attached; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_execution_attach_types(
+    GLTANG_Execution * execution, GLTANG_TypeRegistry * registry);
 
 /**
  * @brief Sets the seed sequence the execution's generators are seeded from.
@@ -796,10 +818,25 @@ typedef GRCORE_Snapshot GLTANG_Snapshot;
  * @param out_snapshot Receives the snapshot, with a count of one. Written only
  *   on success.
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID as above or for a NULL argument;
+ *   ::GLTANG_ERR_UNSUPPORTED while the execution holds a persistent handle, a
+ *   library or a native function a callback made, or an instance of a
+ *   host-defined type (::gltang_snapshot_refused_type names it);
  *   ::GLTANG_ERR_LIMIT or ::GLTANG_ERR_OOM when an allocation failed.
  */
 GLTANG_API GLTANG_Result gltang_snapshot_take(
     GLTANG_Execution * execution, GLTANG_Snapshot ** out_snapshot);
+
+/**
+ * @brief The type that made the last ::gltang_snapshot_take of this
+ *   execution refuse, or NULL.
+ *
+ * An instance of a host-defined type cannot be in a snapshot yet: a take of an
+ * execution whose heap holds one live is refused with
+ * ::GLTANG_ERR_UNSUPPORTED, and this names the type of the first instance the
+ * take met. A later take that is not refused for a type clears it.
+ */
+GLTANG_API const GLTANG_Type * gltang_snapshot_refused_type(
+    const GLTANG_Execution * execution);
 
 /**
  * @brief Restores a snapshot into a `NEW` execution.

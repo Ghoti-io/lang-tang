@@ -1,0 +1,18 @@
+# 142 a slot not traced
+# defect: the custom heap type's trace reports none of the instance's slots
+# caught by: the slot tests: a cycle's control and a slot under forced torture and verify (testCustom)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -67,9 +67,8 @@
+ // image refuses it by name (custom.c) until story 8 gives types their hooks.
+ static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
+   GLTANG_CustomObject * object = payload;
+-  for (uint32_t i = 0; i < object->slot_count; ++i) {
+-    grheap_trace_word(tracer, &object->slots[i]);
+-  }
++  (void)object;
++  (void)tracer; /* planted: no slot is traced */
+ }
+ 
+ const GRHEAP_Type gltang_type_custom = GRHEAP_TYPE_INIT("lang-tang custom", sizeof(GLTANG_CustomObject), custom_trace, NULL, NULL, gltang_vm_custom_snapshot, NULL);

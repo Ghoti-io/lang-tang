@@ -1040,13 +1040,25 @@ GLTANG_Result gltang_snapshot_take(GLTANG_Execution * execution, GLTANG_Snapshot
   if (execution->handles && (execution->handles->persistent_live || execution->handles->held_library_count || execution->handles->owned_member_count)) {
     return GLTANG_ERR_UNSUPPORTED;
   }
+  if (execution->handles) {
+    execution->handles->snapshot_refused = NULL;
+  }
   GRCORE_Snapshot * snapshot = NULL;
   GRCORE_Result r = grcore_context_snapshot(execution->context, NULL, &snapshot);
   if (r != GRCORE_OK) {
+    // An instance of a host-defined type refused the image (its heap type's
+    // hook, custom.c), and named its type: story 8 gives types their hooks.
+    if (execution->handles && execution->handles->snapshot_refused) {
+      return GLTANG_ERR_UNSUPPORTED;
+    }
     return from_core(r);
   }
   *out_snapshot = snapshot;
   return GLTANG_OK;
+}
+
+const GLTANG_Type * gltang_snapshot_refused_type(const GLTANG_Execution * execution) {
+  return execution && execution->handles ? execution->handles->snapshot_refused : NULL;
 }
 
 /** What the restore asks the host for, by the name of the key asking. */

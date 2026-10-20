@@ -78,6 +78,12 @@ struct GLTANG_Ast_Node_Binary {
    * The type of binary operation.
    */
   GLTANG_Binary_Type operator_type;
+  /**
+   * Whether the operation is the arithmetic of a compound assignment (`a += b`
+   * is parsed as `a = a + b` with this set). A host-defined type's operation
+   * is told (type.h); nothing else reads it.
+   */
+  bool is_assignment;
 };
 
 /**

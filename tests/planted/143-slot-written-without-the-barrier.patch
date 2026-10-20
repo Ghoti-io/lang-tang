@@ -1,0 +1,15 @@
+# 143 a slot written without the barrier
+# defect: the handle API stores into a slot with a plain write, not grheap_store_word
+# caught by: barrier-verify in the forced torture and verify tests (testCustom)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -728,7 +728,7 @@
+   }
+   GLTANG_CustomObject * holder = custom_of(call, handle);
+   // A slot is traced, so the store goes through the barrier (AD-11).
+-  (void)grheap_store_word(call->exec->heap, holder, &holder->slots[index], gltang_vm_temp_at(call->exec, mark));
++  holder->slots[index] = gltang_vm_temp_at(call->exec, mark); /* planted: no barrier */
+   gltang_vm_temp_release(call->exec, mark);
+   return GLTANG_OK;
+ }

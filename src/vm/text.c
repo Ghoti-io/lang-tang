@@ -590,6 +590,15 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
     }
     case GLTANG_KIND_RNG:
       return mode == GLTANG_RENDER_PRINT ? GLTANG_ST_OK : text(sink, "RNG");
+    case GLTANG_KIND_CUSTOM: {
+      // As a function, until a type can print itself (story 6): `print`
+      // appends nothing, and an element shows the type's name.
+      if (mode == GLTANG_RENDER_PRINT) {
+        return GLTANG_ST_OK;
+      }
+      GLTANG_Status st = text(sink, "Custom: ");
+      return st == GLTANG_ST_OK ? text(sink, gltang_type_name(gltang_vm_custom(v)->type)) : st;
+    }
     case GLTANG_KIND_ERROR: {
       GLTANG_ErrorKind kind = gltang_vm_error_kind(v);
       if (gltang_error_kind_is_marker(kind)) {
@@ -724,6 +733,10 @@ GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBu
 GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v) {
   if (gltang_v_is_kind(v, GLTANG_OBJ_STRING)) {
     return v;
+  }
+  if (gltang_v_is_custom(v)) {
+    // A type has no to-string yet (story 6): never an empty string.
+    return gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED);
   }
   GLTANG_Sink sink;
   gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);

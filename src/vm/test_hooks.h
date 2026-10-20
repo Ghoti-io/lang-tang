@@ -118,6 +118,13 @@ unsigned gltang_vm_jit_test_opcode_policy(unsigned op);
 /** Adds the test native of the given kind (see testnatives.c) to a library. */
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind);
 
+/**
+ * For the tests only: the heap object a handle names (its payload), or NULL for
+ * a handle that is not valid or names no object. A test asks the heap for the
+ * object's stable ID with it, to see later whether the object was collected.
+ */
+void * gltang_vm_test_handle_object(const GLTANG_NativeCall * call, GLTANG_Handle handle);
+
 #ifdef __cplusplus
 }
 #endif

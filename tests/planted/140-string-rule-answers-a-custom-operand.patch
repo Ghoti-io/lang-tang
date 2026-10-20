@@ -1,0 +1,18 @@
+# 140 the string rule answering a custom operand
+# defect: `+` with a string on one side runs the string rule for a custom other side instead of declining to the type
+# caught by: the built-in-on-the-left test: "xyz" + money (testCustom)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -306,11 +306,6 @@
+         // `+` concatenates when either side is a string, converting the other
+         // as printing it would (4.2.1). An error operand is the result.
+         GLTANG_Value other = a_string ? b : a;
+-        if (gltang_v_is_custom(other)) {
+-          // The string rule declines a custom operand (it would need the
+-          // type's to-string, story 6): the type's add, with reflection.
+-          return gltang_vm_custom_binary(exec, op, a, b);
+-        }
+         if (gltang_vm_is_error(other)) {
+           return other;
+         }

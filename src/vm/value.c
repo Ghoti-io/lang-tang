@@ -61,6 +61,19 @@ static void map_store_trace(GRHEAP_Tracer * tracer, void * payload) {
   }
 }
 
+// An instance of a host-defined type: the slots, as many as its header says
+// (AD-11: the engine traces, no module does). The raw bytes after them are
+// never traced. The type pointer is the one host pointer it holds, so an
+// image refuses it by name (custom.c) until story 8 gives types their hooks.
+static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
+  GLTANG_CustomObject * object = payload;
+  for (uint32_t i = 0; i < object->slot_count; ++i) {
+    grheap_trace_word(tracer, &object->slots[i]);
+  }
+}
+
+const GRHEAP_Type gltang_type_custom = GRHEAP_TYPE_INIT("lang-tang custom", sizeof(GLTANG_CustomObject), custom_trace, NULL, NULL, gltang_vm_custom_snapshot, NULL);
+
 const GRHEAP_Type gltang_type_integer = GRHEAP_TYPE_INIT("lang-tang integer", sizeof(GLTANG_IntegerObject), NULL, NULL, NULL, NULL, NULL);
 const GRHEAP_Type gltang_type_float = GRHEAP_TYPE_INIT("lang-tang float", sizeof(GLTANG_FloatObject), NULL, NULL, NULL, NULL, NULL);
 const GRHEAP_Type gltang_type_string = GRHEAP_TYPE_INIT("lang-tang string", sizeof(GLTANG_StringBlock), NULL, NULL, NULL, NULL, NULL);
@@ -151,19 +164,26 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
   if (!gltang_v_is_object(v)) {
     return GLTANG_KIND_NULL;
   }
-  switch (gltang_object_kind(v)) {
-    case GLTANG_OBJ_INTEGER: return GLTANG_KIND_INTEGER;
-    case GLTANG_OBJ_FLOAT: return GLTANG_KIND_FLOAT;
-    case GLTANG_OBJ_STRING: return GLTANG_KIND_STRING;
-    case GLTANG_OBJ_ARRAY: return GLTANG_KIND_ARRAY;
-    case GLTANG_OBJ_MAP: return GLTANG_KIND_MAP;
-    case GLTANG_OBJ_ERROR: return GLTANG_KIND_ERROR;
-    case GLTANG_OBJ_LIBRARY: return GLTANG_KIND_LIBRARY;
-    case GLTANG_OBJ_NATIVE:
-    case GLTANG_OBJ_TEMPLATE: return GLTANG_KIND_FUNCTION;
-    case GLTANG_OBJ_RNG: return GLTANG_KIND_RNG;
-    default: return GLTANG_KIND_NULL;
-  }
+  // A table, not a switch: the custom kind made the switch's code large enough
+  // that the compiler stopped inlining this function into its callers in this
+  // file (gltang_vm_truthy), which every truth test paid for.
+  static const uint8_t kinds[] = {
+    [GLTANG_OBJ_INTEGER] = GLTANG_KIND_INTEGER,
+    [GLTANG_OBJ_FLOAT] = GLTANG_KIND_FLOAT,
+    [GLTANG_OBJ_STRING] = GLTANG_KIND_STRING,
+    [GLTANG_OBJ_ARRAY] = GLTANG_KIND_ARRAY,
+    [GLTANG_OBJ_ARRAY_STORE] = GLTANG_KIND_NULL,
+    [GLTANG_OBJ_MAP] = GLTANG_KIND_MAP,
+    [GLTANG_OBJ_MAP_STORE] = GLTANG_KIND_NULL,
+    [GLTANG_OBJ_ERROR] = GLTANG_KIND_ERROR,
+    [GLTANG_OBJ_LIBRARY] = GLTANG_KIND_LIBRARY,
+    [GLTANG_OBJ_NATIVE] = GLTANG_KIND_FUNCTION,
+    [GLTANG_OBJ_TEMPLATE] = GLTANG_KIND_FUNCTION,
+    [GLTANG_OBJ_RNG] = GLTANG_KIND_RNG,
+    [GLTANG_OBJ_CUSTOM] = GLTANG_KIND_CUSTOM,
+  };
+  uint32_t k = gltang_object_kind(v);
+  return k < sizeof kinds ? (GLTANG_ValueKind)kinds[k] : GLTANG_KIND_NULL;
 }
 
 bool gltang_vm_is_error(GLTANG_Value v) {
@@ -208,6 +228,7 @@ bool gltang_vm_truthy(GLTANG_Value v) {
     case GLTANG_KIND_FUNCTION: return true;  // unspecified by the reference
     case GLTANG_KIND_LIBRARY: return true;
     case GLTANG_KIND_RNG: return true;
+    case GLTANG_KIND_CUSTOM: return true;  // as a function, until a type can say (story 6)
     case GLTANG_KIND_ERROR: return false;
   }
   return false;

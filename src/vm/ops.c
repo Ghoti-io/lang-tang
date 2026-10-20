@@ -152,6 +152,10 @@ static GLTANG_Value compare(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Va
     double y = gltang_vm_number(b);
     order = x < y ? -1 : (x > y ? 1 : (x == y ? 0 : 2));
   }
+  else if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+    // No built-in rule compares a custom value: its type's, with reflection.
+    return gltang_vm_custom_binary(exec, op, a, b);
+  }
   else {
     return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
@@ -271,10 +275,19 @@ static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_
 // The binary operators
 // ---------------------------------------------------------------------------
 
+// A custom operand (type.h) goes to its type wherever the built-in rules have
+// no answer for it. Every built-in rule declines a custom operand, so the test
+// is made only on the paths that would otherwise end in `Not supported` or
+// reach the string rule: a pair of built-in kinds pays for it only where it
+// already fails. Equality is the exception, because the type's `equal` is
+// asked before the language's weak-kind rule.
 GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Value a, GLTANG_Value b) {
   switch (op) {
     case GLTANG_OP_EQ:
     case GLTANG_OP_NE: {
+      if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+        return gltang_vm_custom_binary(exec, op, a, b);
+      }
       GLTANG_Value r = gltang_vm_equal(exec, a, b);
       if (r == GLTANG_V_TRUE || r == GLTANG_V_FALSE) {
         return op == GLTANG_OP_EQ ? r : gltang_v_from_bool(r == GLTANG_V_FALSE);
@@ -293,11 +306,16 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
         // `+` concatenates when either side is a string, converting the other
         // as printing it would (4.2.1). An error operand is the result.
         GLTANG_Value other = a_string ? b : a;
+        if (gltang_v_is_custom(other)) {
+          // The string rule declines a custom operand (it would need the
+          // type's to-string, story 6): the type's add, with reflection.
+          return gltang_vm_custom_binary(exec, op, a, b);
+        }
         if (gltang_vm_is_error(other)) {
           return other;
         }
         GLTANG_ValueKind other_kind = gltang_vm_kind(other);
-        if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG) {
+        if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG || other_kind == GLTANG_KIND_CUSTOM) {
           return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
         }
         if (a_string && b_string) {
@@ -334,6 +352,9 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
       if (gltang_v_is_kind(a, GLTANG_OBJ_ARRAY) && gltang_v_is_kind(b, GLTANG_OBJ_ARRAY)) {
         return array_concat(exec, a, b);
       }
+      if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+        return gltang_vm_custom_binary(exec, op, a, b);
+      }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     }
     case GLTANG_OP_MUL:
@@ -346,10 +367,16 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
       if (gltang_vm_is_number(a) && gltang_vm_is_number(b)) {
         return arithmetic(exec, op, a, b);
       }
+      if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+        return gltang_vm_custom_binary(exec, op, a, b);
+      }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     case GLTANG_OP_MOD:
       if (is_integer_value(a) && is_integer_value(b)) {
         return arithmetic(exec, op, a, b);
+      }
+      if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+        return gltang_vm_custom_binary(exec, op, a, b);
       }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
     default:
@@ -367,6 +394,9 @@ GLTANG_Value gltang_vm_op_neg(GLTANG_Execution * exec, GLTANG_Value v) {
   }
   if (is_float_value(v)) {
     return gltang_vm_make_float(exec, -gltang_vm_float(v));
+  }
+  if (gltang_v_is_custom(v)) {
+    return gltang_vm_custom_neg(exec, v);
   }
   return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
 }
@@ -462,7 +492,8 @@ GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_C
   if (kind == GLTANG_KIND_ERROR) {
     return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }
-  if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG) {
+  // A custom value has no cast until its type can say (story 6): as a function.
+  if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG || kind == GLTANG_KIND_CUSTOM) {
     return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   switch (type) {
@@ -529,7 +560,12 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
       bool found;
       return gltang_vm_map_get(container, gltang_string_bytes(key), (size_t)key->byte_length, &found);
     }
+    case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
     default:
+      if (gltang_v_is_custom(container)) {
+        // Any value is an index of a custom value: its type decides.
+        return gltang_vm_custom_index(exec, container, index);
+      }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
@@ -538,12 +574,19 @@ static bool name_is(const char * name, size_t length, const char * text) {
   return length == strlen(text) && !memcmp(name, text, length);
 }
 
+static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value);
+
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name_value) {
   const GLTANG_StringBlock * name = gltang_vm_string(name_value);
-  return gltang_vm_op_attr_named(exec, container, gltang_string_bytes(name), (size_t)name->byte_length);
+  return attr(exec, container, gltang_string_bytes(name), (size_t)name->byte_length, name_value);
 }
 
 GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length) {
+  return attr(exec, container, name, length, GLTANG_V_NULL);
+}
+
+/** The attribute rule; `name_value` is the name as a string value, or null when only its bytes are known. */
+static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value) {
   switch (gltang_vm_kind(container)) {
     case GLTANG_KIND_STRING:
       if (name_is(name, length, "length")) {
@@ -586,8 +629,27 @@ GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value conta
       return gltang_vm_library_attr(exec, container, name, length);
     case GLTANG_KIND_RNG:
       return gltang_vm_rng_attr(exec, container, name, length);
-    default:
-      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+    case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
+    default: {
+      if (!gltang_v_is_custom(container)) {
+        return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      }
+      if (name_value) {
+        return gltang_vm_custom_attr(exec, container, name_value);
+      }
+      // A name given as bytes (a dotted `use` path): its type is handed a string.
+      size_t mark = gltang_vm_temp_mark(exec);
+      if (!gltang_vm_temp_push(exec, container)) {
+        return exec->roots[GLTANG_ROOT_OOM];
+      }
+      GLTANG_Value text = gltang_vm_string_from_utf8(exec, name, length, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+      container = gltang_vm_temp_at(exec, mark);
+      gltang_vm_temp_release(exec, mark);
+      if (!gltang_v_is_kind(text, GLTANG_OBJ_STRING)) {
+        return text == GLTANG_V_NULL ? MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED) : text;
+      }
+      return gltang_vm_custom_attr(exec, container, text);
+    }
   }
 }
 
@@ -653,6 +715,10 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   bool is_array = gltang_v_is_kind(container, GLTANG_OBJ_ARRAY);
   bool is_string = gltang_v_is_kind(container, GLTANG_OBJ_STRING);
   if (!is_array && !is_string) {
+    if (gltang_v_is_custom(container)) {
+      // The parts as given, a missing one null.
+      return gltang_vm_custom_slice(exec, container, values[0], values[1], values[2]);
+    }
     return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   // A part whose value is null is an omitted part, as in ctang, whose parser
@@ -815,7 +881,11 @@ GLTANG_Value gltang_vm_op_set_index(GLTANG_Execution * exec, GLTANG_Value contai
       }
       return map_store(exec, container, index, v, adopt);
     }
+    case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
     default:
+      if (gltang_v_is_custom(container)) {
+        return gltang_vm_custom_set_index(exec, container, index, v);
+      }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }
@@ -827,7 +897,11 @@ GLTANG_Value gltang_vm_op_set_attr(GLTANG_Execution * exec, GLTANG_Value contain
     case GLTANG_KIND_ARRAY:
       // The error subscripting an array with a string would be.
       return MAKE_ERROR(GLTANG_ERROR_INVALID_INDEX);
+    case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
     default:
+      if (gltang_v_is_custom(container)) {
+        return gltang_vm_custom_set_attr(exec, container, name, v);
+      }
       return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
 }

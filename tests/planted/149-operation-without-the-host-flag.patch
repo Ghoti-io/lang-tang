@@ -1,0 +1,15 @@
+# 149 the operation called without the host-function flag
+# defect: a type's operation runs with `in_host` clear, so it can reconfigure or destroy the execution running it
+# caught by: the host-function test: a setter called from inside an operation (testCustom)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -245,7 +245,7 @@
+     // Host code from here to its return: it cannot destroy or reconfigure the
+     // execution (the setters refuse), as in a native.
+     const bool outer_in_host = exec->in_host;
+-    exec->in_host = true;
++    (void)outer_in_host; /* planted: not host code */
+     status = run_callback(&call, oc, h);
+     exec->in_host = outer_in_host;
+   }

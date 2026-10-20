@@ -811,6 +811,7 @@ size_t gltang_execution_result_size(const GLTANG_Execution * execution) {
     case GLTANG_KIND_ARRAY: return (size_t)gltang_vm_array(v)->length;
     case GLTANG_KIND_MAP: return (size_t)gltang_vm_map(v)->count;
     case GLTANG_KIND_STRING: return (size_t)gltang_vm_string(v)->grapheme_length;
+    case GLTANG_KIND_CUSTOM: return 0;  // its type has no size to give yet (story 6)
     default: return 0;
   }
 }
@@ -887,6 +888,9 @@ static void fill_item(GLTANG_Value v, GLTANG_ResultItem * out) {
     case GLTANG_KIND_LIBRARY:
       out->text = gltang_library_name(((const GLTANG_LibraryObject *)gltang_object(v))->library);
       out->length = out->text ? strlen(out->text) : 0;
+      break;
+    case GLTANG_KIND_CUSTOM:
+      // The kind only: a host reads an instance through a callback's handles.
       break;
     default: break;
   }

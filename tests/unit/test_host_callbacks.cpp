@@ -95,6 +95,19 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   GLTANG_Persistent persistent = {0, 0};
   GLTANG_Library * library = nullptr;
   ASSERT_EQ(gltang_library_create("lib", &library), GLTANG_OK);
+  // A host-defined type, for the custom-value calls: two slots, eight bytes.
+  GLTANG_TypeRegistry * registry = nullptr;
+  ASSERT_EQ(gltang_type_registry_create(&registry), GLTANG_OK);
+  GLTANG_TypeDescriptor descriptor = GLTANG_TYPE_DESCRIPTOR_INIT;
+  descriptor.name = "probe_type";
+  descriptor.slot_count = 2;
+  descriptor.byte_count = 8;
+  const GLTANG_Type * type = nullptr;
+  ASSERT_EQ(gltang_type_registry_add(registry, &descriptor, &type), GLTANG_OK);
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, registry), GLTANG_OK);
+  gltang_type_registry_release(registry);
+  GLTANG_Handle c = {0, 0};
+  unsigned char bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
   std::map<std::string, Case> table;
 #define CASE(fn, allocates, ...) table[#fn] = {allocates, [&](GLTANG_NativeCall * call, GLTANG_Handle s, GLTANG_Handle a, GLTANG_Handle m) { (void)s; (void)a; (void)m; __VA_ARGS__; }}
   GLTANG_Handle out;
@@ -140,6 +153,13 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   CASE(gltang_handle_promote, false, (void)gltang_handle_promote(call, s, &persistent));
   CASE(gltang_persistent_get, false, (void)gltang_persistent_get(call, persistent, &out));
   CASE(gltang_persistent_release, false, (void)gltang_persistent_release(call, persistent));
+  CASE(gltang_call_poll, false, (void)gltang_call_poll(call, 1));
+  CASE(gltang_handle_make_custom, true, (void)gltang_handle_make_custom(call, type, &out));
+  CASE(gltang_handle_custom_type, false, (void)gltang_handle_custom_type(call, c));
+  CASE(gltang_handle_custom_slot_get, false, (void)gltang_handle_custom_slot_get(call, c, 0, &out));
+  CASE(gltang_handle_custom_slot_set, true, (void)gltang_handle_custom_slot_set(call, c, 1, a));
+  CASE(gltang_handle_custom_read_bytes, false, (void)gltang_handle_custom_read_bytes(call, c, 0, bytes, sizeof bytes));
+  CASE(gltang_handle_custom_write_bytes, false, (void)gltang_handle_custom_write_bytes(call, c, 0, bytes, sizeof bytes));
 #undef CASE
 
   std::set<std::string> measured;
@@ -153,6 +173,8 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
     EXPECT_EQ(gltang_call_arg(call, 2, &m), GLTANG_OK);
     // gltang_persistent_get and _release need a persistent to exist; the promote case makes it.
     EXPECT_EQ(gltang_handle_promote(call, s, &persistent), GLTANG_OK);
+    // The custom-value readers and writers need an instance.
+    EXPECT_EQ(gltang_handle_make_custom(call, type, &c), GLTANG_OK);
     for (const Labelled & f : fns) {
       auto it = table.find(f.name);
       EXPECT_NE(it, table.end()) << f.name << " has no row in the gate's table, so its label was never checked";

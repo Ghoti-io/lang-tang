@@ -1,0 +1,16 @@
+# 145 a registry not sealed on attach
+# defect: attaching a registry retains it and leaves it open to gltang_type_registry_add
+# caught by: the seal test (testCustom)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -236,8 +236,7 @@
+   if (!registry) {
+     return NULL;
+   }
+-  atomic_store_explicit(&registry->sealed, true, memory_order_release);
+-  return gltang_type_registry_retain(registry);
++  return gltang_type_registry_retain(registry); /* planted: not sealed */
+ }
+ 
+ bool gltang_type_registry_bind(GLTANG_TypeRegistry * registry, uint64_t context_serial) {

@@ -391,6 +391,8 @@ static GLTANG_Ast_Node * make_compound_assign(GLTANG_Parser_Unicode_String name,
     return NULL;
   }
 
+  ((GLTANG_Ast_Node_Binary *)operation)->is_assignment = true;
+
   // gltang_ast_node_binary_create owns read and rhs from here, so the failure
   // path below destroys the operation rather than its parts.
   GLTANG_Ast_Node * assignment = (GLTANG_Ast_Node *)gltang_ast_node_assign_create(target, operation, location);

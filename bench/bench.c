@@ -65,6 +65,7 @@
 #include <ghoti.io/lang-tang/language.h>
 #include <ghoti.io/lang-tang/library.h>
 #include <ghoti.io/lang-tang/program.h>
+#include <ghoti.io/lang-tang/type.h>
 #include <ghoti.io/lang-tang/value.h>
 #include <ghoti.io/runtime-core/runtime-core.h>
 #include <ghoti.io/runtime-heap/runtime-heap.h>
@@ -1160,6 +1161,124 @@ static uint64_t print_with_sink_run(uint64_t iterations, double * elapsed) {
   return run_source_with(PRINT_SOURCE, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_output_sink);
 }
 
+/*
+ * The custom kind (story 5 of spec-tang-host-extensibility): an add on a
+ * host-defined `money` (its raw bytes an amount; the add makes a new instance)
+ * against the same loop on integers (and run-string-build-200 for strings), an
+ * attribute read on it against a map's, and making instances. The registry is
+ * made once for the process and is thread-safe, so every engine attaches it.
+ */
+static const GLTANG_Type * bench_money;
+
+static int64_t bench_amount(GLTANG_NativeCall * call, GLTANG_Handle h) {
+  int64_t a = 0;
+  (void)gltang_handle_custom_read_bytes(call, h, 0, &a, sizeof a);
+  return a;
+}
+
+static GLTANG_OpStatus bench_money_answer(GLTANG_NativeCall * call, int64_t amount) {
+  GLTANG_Handle h;
+  if (gltang_handle_make_custom(call, bench_money, &h) != GLTANG_OK || gltang_handle_custom_write_bytes(call, h, 0, &amount, sizeof amount) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_handle(call, h);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_money_add(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_Handle other, bool self_is_lhs, bool is_assignment) {
+  (void)user;
+  (void)self_is_lhs;
+  (void)is_assignment;
+  if (gltang_handle_kind(call, other) != GLTANG_KIND_INTEGER) {
+    return GLTANG_OP_DECLINE;
+  }
+  return bench_money_answer(call, bench_amount(call, self) + gltang_handle_integer(call, other));
+}
+
+static GLTANG_OpStatus bench_money_get(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_Handle name) {
+  (void)user;
+  size_t length = 0;
+  const char * text = gltang_handle_text(call, name, &length);
+  if (!text || length != 6 || memcmp(text, "amount", 6) != 0) {
+    return GLTANG_OP_DECLINE;
+  }
+  gltang_call_return_integer(call, bench_amount(call, self));
+  return GLTANG_OP_OK;
+}
+
+static bool bench_make_money(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  return bench_money_answer(call, gltang_call_integer(call, 0)) == GLTANG_OP_OK;
+}
+
+static GLTANG_TypeRegistry * bench_types(void) {
+  static GLTANG_TypeRegistry * registry;
+  if (!registry) {
+    GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "money";
+    d.version = 1;
+    d.byte_count = sizeof(int64_t);
+    d.thread_safe = true;
+    d.add = bench_money_add;
+    d.attribute_get = bench_money_get;
+    if (gltang_type_registry_create(&registry) != GLTANG_OK || gltang_type_registry_add(registry, &d, &bench_money) != GLTANG_OK) {
+      setup_failed("the custom type");
+    }
+  }
+  return registry;
+}
+
+static void setup_custom(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "money", bench_make_money, NULL) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK
+      || gltang_execution_attach_types(execution, bench_types()) != GLTANG_OK) {
+    setup_failed("the custom type's library");
+  }
+  gltang_library_release(library);
+}
+
+static uint64_t custom_add_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 1001;
+  uint64_t sink = run_source_with("use money; m = money(1); for (i = 0; i < 1000; i += 1) { m = m + 1; } m.amount;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_custom);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t custom_integer_add_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 1001;
+  uint64_t sink = run_source_with("use money; m = 1; for (i = 0; i < 1000; i += 1) { m = m + 1; } m;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_custom);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t custom_attr_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 7000;
+  uint64_t sink = run_source_with("use money; m = money(7); n = 0; for (i = 0; i < 1000; i += 1) { n += m.amount; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_custom);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t custom_map_attr_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 7000;
+  uint64_t sink = run_source_with("use money; m = {amount: 7}; n = 0; for (i = 0; i < 1000; i += 1) { n += m.amount; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_custom);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t custom_make_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 999;
+  uint64_t sink = run_source_with("use money; m = null; for (i = 0; i < 1000; i += 1) { m = money(i); } m.amount;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_custom);
+  have_expected_integer = 0;
+  return sink;
+}
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -2169,6 +2288,11 @@ static const Case cases[] = {
     {"host-execution-library-use-200", execution_library_use_run, 5000u, 5u},
     {"host-print-2000-no-sink", print_no_sink_run, 2000u, 5u},
     {"host-print-2000-with-sink", print_with_sink_run, 2000u, 5u},
+    {"custom-add-1000", custom_add_run, 2000u, 5u},
+    {"custom-integer-add-1000", custom_integer_add_run, 5000u, 5u},
+    {"custom-attribute-read-1000", custom_attr_run, 2000u, 5u},
+    {"custom-map-attribute-read-1000", custom_map_attr_run, 5000u, 5u},
+    {"custom-make-1000", custom_make_run, 2000u, 5u},
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},

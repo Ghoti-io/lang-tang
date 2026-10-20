@@ -60,3 +60,4 @@ GLTANG_NATIVE(DESCRIPTION_MATERIALIZE, 1, "reach a host-described value (use, or
 GLTANG_NATIVE(ALLOCATION_REFUSED, 0, "an allocation the memory budget refused")
 GLTANG_NATIVE(CALL_REFUSED, 0, "a call whose frame the budget or the allocator refused")
 GLTANG_NATIVE(HALT_REQUEST, 0, "the halt option's request, posted when the first error is created")
+GLTANG_NATIVE(HOST_CALLBACK, 0, "a host callback (a native, a factory, a type's operation) polling through its call object")

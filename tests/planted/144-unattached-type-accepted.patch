@@ -1,0 +1,15 @@
+# 144 an unattached type accepted by make_custom
+# defect: gltang_handle_make_custom makes an instance of a type whose registry the execution never attached
+# caught by: the unattached-type test (testCustom)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -681,7 +681,7 @@
+   }
+   // Only a type of a registry this execution attached: its registry is then
+   // retained for as long as an instance can exist (AD-22).
+-  if (!gltang_vm_type_attached(call->exec, type)) {
++  if (false && !gltang_vm_type_attached(call->exec, type)) { /* planted: any type */
+     return GLTANG_ERR_INVALID;
+   }
+   return made(call, gltang_vm_make_custom(call->exec, type), out);

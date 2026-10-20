@@ -47,6 +47,7 @@ inline const char * kind_text(GLTANG_ValueKind kind) {
     case GLTANG_KIND_ERROR: return "error";
     case GLTANG_KIND_LIBRARY: return "library";
     case GLTANG_KIND_RNG: return "rng";
+    case GLTANG_KIND_CUSTOM: return "custom";
   }
   return "other";
 }
