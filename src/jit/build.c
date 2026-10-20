@@ -38,7 +38,10 @@
  * library native (a host function), each a call to the engine's own operation
  * (natives.c) with no exit; the output operations, `PRINT` and `PRINT_CONST` as calls of
  * the interpreter's print through the same table and `CLEAR_RESULT` as a call that is no GC
- * point; and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
+ * point; the value operations, a string `CONST`, `+` past the small-integer path, `INDEX`,
+ * `SLICE` and the `ATTR` of any other value, as calls of the interpreter's own functions
+ * through the same table, behind a test that no operand is a host-defined value (an exit:
+ * its type is the interpreter's to ask); and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
  * that are no GC point, `STORE_GLOBAL` as the interpreter's plain store, and `HALT` as a
  * return of the halted word (jit.h), after which the interpreter runs `HALT`'s body. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
@@ -146,6 +149,8 @@ typedef struct Ctx {
   bool open;                      ///< The current block has no terminator yet.
   bool oom;                       ///< An analysis allocation failed.
   GRJIT_BlockId entry_poll;       ///< The prologue's branch target when the flag is 0.
+  GRJIT_BlockId guard_to;         ///< While `guard_to_on`: where a failed guard goes instead of exiting (the slow path of `+`).
+  bool guard_to_on;
 
   // The analysis.
   int32_t * depth;                ///< Per bytecode index: the operand-stack depth there, or -1 if unreachable.
@@ -159,6 +164,7 @@ typedef struct Ctx {
   int32_t * call_k;               ///< Per index of a CALL: the function it calls, or -1 (an exit).
   const GLTANG_LibraryMember ** call_member;  ///< Per index of a CALL: the library native it calls, or NULL.
   uint32_t * attr_src;            ///< Per index of an ATTR: the instruction that produced the operand it reads.
+  uint8_t * str_side;             ///< Per index of an ADD: bit 0, its left operand is a string constant (the CONST that pushed it); bit 1, its right.
   bool * load_ok;                 ///< Per index of a USE or ATTR: compiled as a member load.
   uint8_t * end_kind;             ///< Per index reached by the walk: how the walk ended there, if it did (END_*).
   bool back_branch;               ///< A reachable jump goes to its own index or an earlier one: the code may loop.
@@ -239,6 +245,12 @@ static bool string_constant(const Ctx * c, uint32_t index) {
   return index < c->program->constant_count && c->program->constants[index].kind == GLTANG_CONST_STRING && c->program->constants[index].block;
 }
 
+/** Whether the instruction that produced an operand is the `CONST` of a string. */
+static bool string_producer(const Ctx * c, uint32_t producer) {
+  return producer != PROD_NONE && producer < c->fn->code_count && GLTANG_INSTRUCTION_OP(c->fn->code[producer]) == GLTANG_OP_CONST
+      && string_constant(c, GLTANG_INSTRUCTION_A(c->fn->code[producer]));
+}
+
 /** Whether an instruction other than CALL is compiled inline, or is a deoptimization exit. */
 static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
   int64_t unused;
@@ -301,7 +313,16 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_FUNC:
       return a < c->program->function_count;
     case GLTANG_OP_CONST:
-      return small_int_constant(c, a, &unused) || (!c->raw_off && float_constant(c, a, &unused));
+      // A string constant is the execution's cached heap string, made on its first use:
+      // whether it is made yet is not known here, so it is a call of the interpreter's
+      // `gltang_vm_constant` (story 3), through the table.
+      return small_int_constant(c, a, &unused) || (!c->raw_off && float_constant(c, a, &unused)) || (c->natives_on && string_constant(c, a));
+    // The value operations (spec-template-compiled story 3): calls of the interpreter's own
+    // index and slice, through the table. `ATTR` and `+` are decided where they are emitted
+    // (a library's member, the small-integer path).
+    case GLTANG_OP_INDEX:
+    case GLTANG_OP_SLICE:
+      return c->natives_on;
     default:
       return false;
   }
@@ -331,7 +352,7 @@ static void set_local_kind(Ctx * c, uint32_t local, uint8_t kind) {
  * other instruction that does is an unconditional exit with the operand in its frame
  * state, and the interpreter re-executes it.
  */
-static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
+static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, int32_t d) {
   switch (op) {
     case GLTANG_OP_NOT:
     case GLTANG_OP_JMP_FALSE:
@@ -356,9 +377,31 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     // A cast to int or to float reads a raw operand; any other cast (to bool, to string) is an exit.
     case GLTANG_OP_CAST:
       return d >= 1 && c->sk[d - 1] == KIND_F64 && a != GLTANG_CAST_TYPE_INTEGER && a != GLTANG_CAST_TYPE_FLOAT;
+    // An index or a slice of a raw float, or by one: the float is boxed by the exit and the
+    // interpreter runs the operation (its error), so the helper is never given one raw.
+    case GLTANG_OP_INDEX:
+      return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
+    case GLTANG_OP_SLICE: {
+      const int32_t parts = (int32_t)((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u));
+      for (int32_t p = d - 1 - parts; p >= 0 && p < d; ++p) {
+        if (c->sk[p] == KIND_F64) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // `+` with a raw float on one side and a string constant on the other is a concatenation,
+    // which converts the float to text: the designed box exit, and the interpreter makes the
+    // text (a raw-float concatenation is planning/unboxed-float-output.md's). With any other
+    // operand beside a raw float it is float arithmetic, whose unbox is a guard (a string from
+    // a variable fails it, a real exit).
+    case GLTANG_OP_ADD:
+      if (d >= 2 && c->str_side) {
+        return (c->sk[d - 2] == KIND_F64 && (c->str_side[i] & 2u)) || (c->sk[d - 1] == KIND_F64 && (c->str_side[i] & 1u));
+      }
+      return false;
     // These read a raw operand and compute with it (float arithmetic, a comparison, a negation).
     case GLTANG_OP_NEG:
-    case GLTANG_OP_ADD:
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
     case GLTANG_OP_DIV:
@@ -470,6 +513,12 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
       break;
     case GLTANG_OP_CALL:
       set_stack_kind(c, (uint32_t)d - 1u - a, KIND_REF);
+      break;
+    case GLTANG_OP_INDEX:  // the container is replaced by the element, a value word
+      set_stack_kind(c, (uint32_t)d - 2u, KIND_REF);
+      break;
+    case GLTANG_OP_SLICE:  // the container is replaced by the slice, a value word
+      set_stack_kind(c, (uint32_t)d - 1u - ((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u)), KIND_REF);
       break;
     // Instructions with no effect on a kind: they pop, jump or leave.
     case GLTANG_OP_POLL:
@@ -814,7 +863,12 @@ static GLTANG_Result analyse_once(Ctx * c) {
       bool branch = false;       // a conditional or unconditional jump to `a`
       int32_t branch_depth = d;
       c->end_kind[i] = END_NONE;  // this walk decides how the instruction ends: a walk of it with other kinds is not remembered
-      if (reads_raw(c, op, a, d)) {
+      if (op == GLTANG_OP_ADD && d >= 2) {
+        // Which side is a string constant, as this walk's producers say (the last walk's is
+        // what the emission reads, as for every other decision of the walk).
+        c->str_side[i] = (uint8_t)((string_producer(c, c->cur[d - 2]) ? 1u : 0u) | (string_producer(c, c->cur[d - 1]) ? 2u : 0u));
+      }
+      if (reads_raw(c, i, op, a, d)) {
         c->end_kind[i] = END_EXPECTED;  // designed: the float is boxed for its consumer (see emit_op_kinds)
         break;                   // an unconditional exit with the raw operand in its frame state: nothing flows from it
       }
@@ -853,11 +907,14 @@ static GLTANG_Result analyse_once(Ctx * c) {
         if (ok && !c->natives_on) {
           c->declined[i] = true;
         }
-        if (!c->load_ok[i]) {
+        // Any other value's attribute is the interpreter's attribute rule called from compiled
+        // code (story 3), behind a test that the value is not a host-defined one: so where
+        // natives can be called every ATTR flows on, one way or the other, and a walk that
+        // later finds the operand is not the library it thought only changes which call it is.
+        if (!c->natives_on) {
           c->end_kind[i] = END_REAL;
           break;                 // an unconditional exit: nothing flows from it
         }
-        c->flowed[i] = true;
         c->cur[d - 1] = i;
       }
       else if (!inline_op(c, op, a)) {
@@ -925,6 +982,20 @@ static GLTANG_Result analyse_once(Ctx * c) {
           if (d < 1) { return GLTANG_ERR_INTERNAL; }
           c->cur[d - 1] = i;
           break;
+        case GLTANG_OP_INDEX:
+          // The element replaces the container and the index: one fewer.
+          if (d < 2) { return GLTANG_ERR_INTERNAL; }
+          c->cur[d - 2] = i;
+          after = d - 1;
+          break;
+        case GLTANG_OP_SLICE: {
+          // The slice replaces the container and its parts (one per flag bit).
+          const int32_t parts = (int32_t)((a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u));
+          if (d < parts + 1) { return GLTANG_ERR_INTERNAL; }
+          c->cur[d - 1 - parts] = i;
+          after = d - parts;
+          break;
+        }
         case GLTANG_OP_ADD:
         case GLTANG_OP_SUB:
         case GLTANG_OP_MUL:
@@ -1056,12 +1127,13 @@ static GLTANG_Result analyse(Ctx * c) {
       c->raw_off = true;
       continue;
     }
+    // Only a CALL can need it: an ATTR flows on whatever its operand turns out to be (a
+    // library's member or any other value), so only a CALL is marked as having flowed.
     for (size_t i = 0; i < c->fn->code_count; ++i) {
       if (!c->flowed[i]) {
         continue;
       }
-      bool call = GLTANG_INSTRUCTION_OP(c->fn->code[i]) == GLTANG_OP_CALL;
-      if (call ? (c->call_k[i] < 0 && !c->call_member[i]) : !c->load_ok[i]) {
+      if (c->call_k[i] < 0 && !c->call_member[i]) {
         c->force_exit[i] = true;
         again = true;
       }
@@ -1139,8 +1211,21 @@ static void flush_cost(Ctx * c) {
   c->pending_cost = 0;
 }
 
+static void new_block(Ctx * c, GRJIT_BlockId * out);
+static void set_block(Ctx * c, GRJIT_BlockId id);
+
 static void guard(Ctx * c, GRJIT_Operand cond, uint32_t index, uint32_t depth) {
   flush_cost(c);
+  if (c->guard_to_on) {
+    // Inside the small-integer path of `+`: a failed test goes to the slow path, the
+    // interpreter's `+` called from compiled code, with nothing of the operation done.
+    GRJIT_BlockId go_on;
+    new_block(c, &go_on);
+    B(grjit_builder_br_if(c->b, cond, go_on, c->guard_to));
+    c->open = false;
+    set_block(c, go_on);
+    return;
+  }
   fill_state(c, c->state, index, depth);
   B(grjit_builder_guard(c->b, cond, identity_at(c, index), c->state, c->slots));
 }
@@ -1362,9 +1447,13 @@ static void emit_site(Ctx * c, uint32_t i) {
  * guest frame while it runs and for an exit before it is the one at `i`; the
  * frame after it has the result in the operand slot `result_at` and `after_depth`
  * operands. Everything pending is charged first, since the native may observe it.
+ * The position is stored first (`site`) unless the native records it itself, where
+ * the interpreter's does only sometimes (a string constant, made on first use).
  */
-static void emit_native(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth) {
-  emit_site(c, i);
+static void emit_native_at(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth, bool site) {
+  if (site) {
+    emit_site(c, i);
+  }
   flush_cost(c);
   fill_state(c, c->state, i, d);
   fill_state(c, c->state2, i + 1u, after_depth);
@@ -1372,6 +1461,10 @@ static void emit_native(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJI
   GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
   B(grjit_builder_call_native(c->b, dst, id, args, argc, &before, &after));
   c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+}
+
+static void emit_native(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth) {
+  emit_native_at(c, i, d, id, args, argc, dst, after_depth, true);
 }
 
 /**
@@ -1437,6 +1530,104 @@ static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d);
 }
 
+// ---------------------------------------------------------------------------
+// The value operations (spec-template-compiled story 3): calls of the interpreter's own
+// functions through the native table (natives.c), each a GC point with the frame before the
+// operation as its state, behind a test that no operand is a host-defined value.
+// ---------------------------------------------------------------------------
+
+/**
+ * Leaves compiled code, before the operation at `i` and with nothing of it done, when the
+ * operand at stack position `pos` is a host-defined value: its type's operation is the
+ * interpreter's to call (the custom dispatch is host-extensibility story 10's). The word must
+ * be a non-null pointer (tag 0) before its kind is read; any other word goes on. The exit is
+ * a real one and counts toward the discard limit (the deopt hook reads the refusal).
+ */
+static void guard_not_custom(Ctx * c, uint32_t i, uint32_t d, uint32_t pos) {
+  GRJIT_VReg * t = c->tmp;
+  GRJIT_BlockId object, custom, go_on;
+  new_block(c, &object);
+  new_block(c, &custom);
+  new_block(c, &go_on);
+  bitcast(c, t[TMP_A], c->stack[pos]);
+  tag_is(c, t[TMP_C], t[TMP_A], 0);
+  cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_A]), I(0));
+  bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  flush_cost(c);
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), object, go_on));
+  c->open = false;
+  set_block(c, object);
+  // Every heap object begins with its 32-bit kind (vm_internal.h, gltang_object_kind).
+  B(grjit_builder_load(c->b, t[TMP_X], c->stack[pos], 0, 32, false));
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_CUSTOM));
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), custom, go_on));
+  c->open = false;
+  set_block(c, custom);
+  call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_note_operand_guard);
+  emit_exit(c, i, d);
+  set_block(c, go_on);
+}
+
+/** A string `CONST k`: the execution's cached string, made on first use (the call records the position only then, as the interpreter's SYNC is only then). */
+static void emit_string_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  set_stack_kind(c, d, KIND_REF);  // the value lands in position d, whatever was left there
+  GRJIT_Operand args[2] = {I((int64_t)a), I((int64_t)(((uint64_t)c->function_index << 32) | i))};
+  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_CONST, args, 2, c->stack[d], d + 1u, false);
+}
+
+/** `INDEX`: the interpreter's index of the container in slot `d - 2` by the value in `d - 1`; the element replaces both. */
+static void emit_index(Ctx * c, uint32_t i, uint32_t d) {
+  guard_not_custom(c, i, d, d - 2u);
+  GRJIT_Operand args[2] = {V(c->stack[d - 2u]), V(c->stack[d - 1u])};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_INDEX, args, 2, c->stack[d - 2u], d - 1u);
+}
+
+/** `SLICE flags`: the interpreter's slice of the container below its parts (one per flag bit), which the slice replaces. */
+static void emit_slice(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  const uint32_t parts = (a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u);
+  const uint32_t at = d - 1u - parts;
+  guard_not_custom(c, i, d, at);
+  GRJIT_Operand args[5] = {I((int64_t)(a & 7u)), V(c->stack[at]), I(0), I(0), I(0)};
+  for (uint32_t p = 0; p < parts; ++p) {
+    args[2u + p] = V(c->stack[at + 1u + p]);
+  }
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_SLICE, args, 5, c->stack[at], at + 1u);
+}
+
+/** `ATTR name` of a value that is not known to be a library: the interpreter's attribute rule; the value replaces the operand. */
+static void emit_value_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  guard_not_custom(c, i, d, d - 1u);
+  GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_VALUE_ATTR, args, 2, c->stack[d - 1u], d);
+}
+
+/**
+ * The slow path of `+` on two value words, the interpreter's `gltang_vm_op_binary`: where an
+ * operand is not a small integer, or the sum leaves the small-integer range, the small-integer
+ * path's tests go to `slow` instead of exiting (`guard_to`). There a host-defined operand
+ * exits, and anything else (a concatenation of strings or of arrays, a boxed integer, a float
+ * object, an error) is the call; both ways join after.
+ */
+static void begin_add_slow_path(Ctx * c, GRJIT_BlockId * slow) {
+  new_block(c, slow);
+  c->guard_to = *slow;
+  c->guard_to_on = true;
+}
+
+static void end_add_slow_path(Ctx * c, uint32_t i, uint32_t d, GRJIT_BlockId slow) {
+  GRJIT_BlockId join;
+  c->guard_to_on = false;
+  new_block(c, &join);
+  branch_to(c, join);  // the small-integer path, with its fuel
+  set_block(c, slow);
+  guard_not_custom(c, i, d, d - 2u);
+  guard_not_custom(c, i, d, d - 1u);
+  GRJIT_Operand args[2] = {V(c->stack[d - 2u]), V(c->stack[d - 1u])};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_ADD, args, 2, c->stack[d - 2u], d - 1u);
+  branch_to(c, join);
+  set_block(c, join);
+}
+
 static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
 
 /**
@@ -1478,11 +1669,11 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
 
   // What the analysis decided for this instruction and what the emission now sees must be the
   // same: it ends at the designed exit exactly when it reads a raw operand.
-  if (reads_raw(c, op, a, (int32_t)d) != (c->end_kind[i] == END_EXPECTED)) {
+  if (reads_raw(c, i, op, a, (int32_t)d) != (c->end_kind[i] == END_EXPECTED)) {
     c->err = GRJIT_ERR_INTERNAL;
     return false;
   }
-  if (reads_raw(c, op, a, (int32_t)d)) {
+  if (reads_raw(c, i, op, a, (int32_t)d)) {
     // The raw operand is in the frame state and the interpreter re-executes the instruction. This
     // exit is the design (the float is boxed for its consumer, once, by the rebuild), not a failure
     // of compiled code: the site is flagged so that it does not count toward the discard limit.
@@ -1506,6 +1697,10 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
   if (op == GLTANG_OP_ATTR) {
     if (c->load_ok[i]) {
       emit_attr(c, i, d, a);
+      return true;
+    }
+    if (c->natives_on) {
+      emit_value_attr(c, i, d, a);
       return true;
     }
     emit_exit(c, i, d);
@@ -1569,6 +1764,11 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
         // The interpreter's double, bit for bit, as the register's immediate.
         B(grjit_builder_const(c->b, c->stack_f[d], k));
       }
+      else if (!small_int_constant(c, a, &k)) {
+        // A string (inline_op takes no other): the call charges its fuel.
+        emit_string_const(c, i, d, a);
+        break;
+      }
       else {
         (void)small_int_constant(c, a, &k);
         B(grjit_builder_const(c->b, T[d], (int64_t)gltang_v_from_small_int(k)));
@@ -1599,6 +1799,12 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
     case GLTANG_OP_USE:
       emit_use(c, i, d, a);
+      break;
+    case GLTANG_OP_INDEX:
+      emit_index(c, i, d);
+      break;
+    case GLTANG_OP_SLICE:
+      emit_slice(c, i, d, a);
       break;
 
     // The output operations: the thunks charge the two prints' fuel, as the interpreter
@@ -1701,6 +1907,7 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       if (op == GLTANG_OP_MUL) {
         goto integer_mul;
       }
+
       if (op == GLTANG_OP_DIV) {
         guard_two_ints(c, i, d);
         bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
@@ -1719,13 +1926,26 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
         add_fuel(c, cost);
         break;
       }
-      guard_two_ints(c, i, d);
-      bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
-      bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
-      bin(c, op == GLTANG_OP_ADD ? GRJIT_OP_ADD : GRJIT_OP_SUB, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
-      guard_in_range(c, t[TMP_R], i, d);
-      box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
-      add_fuel(c, cost);
+      {
+        // Story 3: for `+`, an operand that is not a small integer, or a sum outside the range,
+        // is the interpreter's `+` called from compiled code (a concatenation most often), not
+        // an exit; `-` keeps its guards.
+        const bool slow_path = op == GLTANG_OP_ADD && c->natives_on;
+        GRJIT_BlockId slow = 0;
+        if (slow_path) {
+          begin_add_slow_path(c, &slow);
+        }
+        guard_two_ints(c, i, d);
+        bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+        bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
+        bin(c, op == GLTANG_OP_ADD ? GRJIT_OP_ADD : GRJIT_OP_SUB, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+        guard_in_range(c, t[TMP_R], i, d);
+        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
+        add_fuel(c, cost);
+        if (slow_path) {
+          end_add_slow_path(c, i, d, slow);
+        }
+      }
       break;
 
     integer_mul:
@@ -2006,13 +2226,14 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->end_kind = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t));
   c->call_member = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(const GLTANG_LibraryMember *));
   c->attr_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
+  c->str_side = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t));
   c->load_ok = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->declined = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
   c->local_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)c->lc + 1u) * sizeof(uint32_t));
   if (!c->depth || !c->leader || !c->target || !c->queued || !c->flowed || !c->force_exit || !c->block || !c->work || !c->prod_at || !c->kind_at
       || !c->cur || !c->call_k || !c->global_fn || !c->local_fn || !call_sites || !native_sites || !expected_sites || !c->end_kind || !c->call_member
-      || !c->attr_src || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
+      || !c->attr_src || !c->str_side || !c->load_ok || !c->declined || !c->global_use || !c->local_use) {
     goto done;
   }
   for (size_t i = 0; i < n; ++i) {
@@ -2272,6 +2493,7 @@ done:
   free_prod(c);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->call_member);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->attr_src);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->str_side);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->load_ok);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->declined);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_use);
@@ -2308,7 +2530,7 @@ unsigned gltang_vm_jit_test_opcode_policy(unsigned op) {
   Ctx c;
   memset(&c, 0, sizeof(c));
   memset(c.sk, KIND_F64, sizeof(c.sk));
-  unsigned bits = reads_raw(&c, (GLTANG_Opcode)op, 2, 3) ? 1u : 0u;
+  unsigned bits = reads_raw(&c, 0, (GLTANG_Opcode)op, 2, 3) ? 1u : 0u;
   Ctx d;
   memset(&d, 0, sizeof(d));
   d.raw_off = true;  // so that CONST does not read a program this state does not have

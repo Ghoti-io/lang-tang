@@ -6,13 +6,13 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -495,7 +495,8 @@
-       bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
-       bin(c, op == GLTANG_OP_ADD ? GRJIT_OP_ADD : GRJIT_OP_SUB, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
-       guard_in_range(c, t[TMP_R], i, d);
--      box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
-+      /* planted: the wrong tag (3 is a function value) */
-+      box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_FUNCTION);
-       add_fuel(c, cost);
-       break;
- 
+@@ -1935,7 +1935,8 @@
+         bin(c, GRJIT_OP_SAR, t[TMP_Y], V(t[TMP_B]), I(4));
+         bin(c, op == GLTANG_OP_ADD ? GRJIT_OP_ADD : GRJIT_OP_SUB, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
+         guard_in_range(c, t[TMP_R], i, d);
+-        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
++        /* planted: the wrong tag (3 is a function value) */
++        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_FUNCTION);
+         add_fuel(c, cost);
+         if (slow_path) {
+           end_add_slow_path(c, i, d, slow);

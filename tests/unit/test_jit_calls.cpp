@@ -34,6 +34,10 @@ using namespace jt;
 namespace {
 
 const char * kSourceMax = "576460752303423487";  // the largest small integer
+// A guard that fails on it: `x * 2` of kSourceMax (an operand past the product guard), whose
+// value is the interpreter's 2^60. These tests used `x + x`, which since
+// spec-template-compiled story 3 is the interpreter's `+` called from compiled code when the
+// sum leaves the range, with no exit.
 
 std::string join(const std::vector<std::string> & parts, const char * with = ", ") {
   std::string s;
@@ -501,7 +505,7 @@ TEST(JitCalls, AGuardThatFailsThreeFramesDownRebuildsTheChainAndTheCallersReente
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
-      std::string("function g(n, x) { if (n == 0) { return x + x; } return g(n - 1, x) + 1; }\n"
+      std::string("function g(n, x) { if (n == 0) { return x * 2; } return g(n - 1, x) + 1; }\n"
                   "M = ") + kSourceMax + ";\n"
       "print(g(2, M)); print(g(2, 3)); print(g(2, M)); print(g(5, 4));\n";
   sc.script = true;
@@ -833,7 +837,7 @@ TEST(JitCalls, EveryExitClassArrivesWithItsOwnCauseAndIsHandledByName) {
   // A guard.
   {
     Scenario sc;
-    sc.source = std::string("function g(x) { return x + x; }\nM = ") + kSourceMax + ";\nprint(g(M));";
+    sc.source = std::string("function g(x) { return x * 2; }\nM = ") + kSourceMax + ";\nprint(g(M));";
     Outcome jit = run(sc, 1);
     EXPECT_GE(jit.stats.deopts, 1u);
     EXPECT_EQ(jit.stats.last_exit_cause, 0u);
@@ -931,7 +935,7 @@ TEST(JitCalls, ARefusedRebuildInADeepChainPopsEveryFrameItPushedAndLeavesNothing
   // after the failure runs.
   Scenario sc;
   sc.source =
-      std::string("function g(n, x) { if (n == 0) { i = 0; while (i < 10) { i = i + 1; } return x + x; } return g(n - 1, x) + 1; }\nM = ") + kSourceMax + ";\n"
+      std::string("function g(n, x) { if (n == 0) { i = 0; while (i < 10) { i = i + 1; } return x * 2; } return g(n - 1, x) + 1; }\nM = ") + kSourceMax + ";\n"
       "print(\"before\"); print(g(12, M)); print(\"never\");\n";
   sc.script = true;
   Context * seen = nullptr;
@@ -984,7 +988,7 @@ TEST(JitCalls, TheEighthExitOfAFunctionDiscardsItByReferenceAndLaterCallsAreTheI
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
-      std::string("function r(n, x) { if (n == 0) { return x + x; } return r(n - 1, x) + 1; }\nM = ") + kSourceMax + ";\n"
+      std::string("function r(n, x) { if (n == 0) { return x * 2; } return r(n - 1, x) + 1; }\nM = ") + kSourceMax + ";\n"
       + kTopLevelLeaves + "t = 0; for (k = 0; k < 14; k += 1) { y = r(3, M); t = t + 1; } print(t); print(r(2, 5));\n";
   sc.script = true;
   Outcome plain, jit;
@@ -1033,7 +1037,7 @@ TEST(JitCalls, PausesInOneHotFunctionNeverDiscardItWhileGuardExitsStillDoAtTheEi
   // The control: the same eight-exit limit, reached by guard exits, still discards.
   {
     Scenario sc;
-    sc.source = std::string("function g(x) { return x + x; }\nM = ") + kSourceMax + ";\nt = 0; for (k = 0; k < 12; k += 1) { y = g(M); t = t + 1; } print(t);\n";
+    sc.source = std::string("function g(x) { return x * 2; }\nM = ") + kSourceMax + ";\nt = 0; for (k = 0; k < 12; k += 1) { y = g(M); t = t + 1; } print(t);\n";
     sc.script = true;
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
@@ -1061,7 +1065,7 @@ TEST(JitCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsOfALongCompiledRu
   const int kFunctions = thrash_functions();
   std::string source = "M = " + std::string(kSourceMax) + ";\n";
   for (int i = 0; i < kFunctions; ++i) {
-    source += "function f" + std::to_string(i) + "(x) { return x + x; }\n";
+    source += "function f" + std::to_string(i) + "(x) { return x * 2; }\n";
   }
   // `drive` is split in groups so that no function has more locals than a frame fits.
   const int kGroup = 40;

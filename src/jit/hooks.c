@@ -342,11 +342,18 @@ static uint32_t hook_deopt(void * context, uint64_t cause) {
           counts = false;
         }
         else if (native_site_at(jc, fr.identity.offset)) {
-          // An exit at a library call or member load: the callee value was not the
-          // native the site names (counts, like the guest call's), or the native
+          // An exit at a native call (a library call, a member load, a value operation):
+          // the callee value was not the native the site names, or an operand was a
+          // host-defined value (each counts, like the guest call's guard), or the native
           // stack would have run out before the call (does not).
           if (jit->refusal == GLTANG_REFUSAL_NATIVE_GUARD) {
             ++exec->jit_stats.native_call_exits_guard;
+            counts = true;
+          }
+          else if (jit->refusal == GLTANG_REFUSAL_OPERAND_GUARD) {
+            // A value operation's operand is a host-defined value: its type's operation
+            // is the interpreter's to call (host-extensibility story 10 compiles it). A
+            // real exit, so it counts, as any guard does.
             counts = true;
           }
           else {

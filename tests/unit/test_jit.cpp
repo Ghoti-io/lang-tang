@@ -158,11 +158,21 @@ TEST(Jit, IntegerOverflowInsideCompiledCodeDeoptimizesAndTheInterpreterBoxesTheR
       "print(add(M, 1)); print(add(M, 0)); print(add(1, 2)); print(sub(-M - 1, 1)); print(sub(5, 7));\n"
       "print(mul(M, 2)); print(mul(536870911, 536870911)); print(mul(536870912, 2)); print(mul(-536870912, 536870911)); print(mul(3, 4));\n"
       "print(neg(-M - 1)); print(neg(7));\n";
+  int add_deopts = -2;
+  sc.after = [&add_deopts](Context & context) { add_deopts = gltang_vm_jit_test_function_deopts(context.execution, 1); };
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_NE(plain.raw.find("576460752303423488"), std::string::npos) << plain.raw;
-  EXPECT_GT(jit.stats.deopts, 4u);
-  EXPECT_GE(jit.stats.entries, 12u);
+  // `-`, `*` and unary minus leave at an overflow and the interpreter boxes the result:
+  // sub(-M - 1, 1), mul(M, 2), mul(536870912, 2) (an operand past the product guard) and
+  // neg(-M - 1). Since spec-template-compiled story 3 `+` does not: add(M, 1) is the
+  // interpreter's `+` called from compiled code, which boxes the sum, with no exit.
+  EXPECT_EQ(jit.stats.deopts, 4u);
+  EXPECT_EQ(add_deopts, 0) << "add's overflow made no exit";
+  EXPECT_EQ(jit.stats.value_calls, 1u) << "add(M, 1), the one sum outside the small-integer range";
+  // The first exit (sub's) rebuilds the top level too, which then runs in the interpreter
+  // and enters each of the eight calls after it: one entry of the top level and eight.
+  EXPECT_EQ(jit.stats.entries, 9u);
 }
 
 TEST(Jit, ATemplateFunctionDeoptimizesWithItsProgramQualifiedCallToken) {
@@ -172,7 +182,9 @@ TEST(Jit, ATemplateFunctionDeoptimizesWithItsProgramQualifiedCallToken) {
   sc.script = true;
   Part t;
   t.name = "t";
-  t.source = "function f(a) { return a + 1; } print(f(2)); print(f(\"x\"));";
+  // `a - 1`: a string operand is a guard exit. (`a + 1` was one until spec-template-compiled
+  // story 3, which made `"x" + 1` the interpreter's concatenation called from compiled code.)
+  t.source = "function f(a) { return a - 1; } print(f(2)); print(f(\"x\"));";
   sc.parts.push_back(t);
   int template_function_deopts = -1;
   sc.after = [&](Context & context) {
@@ -204,10 +216,19 @@ TEST(Jit, AnOperandThatIsNotASmallIntegerDeoptimizesAtTheOperation) {
       "print(lt(\"a\", \"b\")); print(lt(1.5, 2)); print(lt(null, 1)); print(not(0)); print(not(\"s\")); print(not(null)); print(eq(\"a\", \"a\")); print(eq(1, 1.0));\n"
       "e = add(null, 1); print(e as string);\n"
       "f = add([1], 2); print(f as string);\n";
+  int add_deopts = -2;
+  sc.after = [&add_deopts](Context & context) { add_deopts = gltang_vm_jit_test_function_deopts(context.execution, 1); };
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
-  EXPECT_GE(jit.stats.deopts, 10u);
   EXPECT_EQ(plain.errors, jit.errors);
+  // `<`, `!` and `==` leave at each operand that is not theirs: lt("a", "b"), whose exit also
+  // rebuilds the top level, and the seven after it, called by the interpreter. Since
+  // spec-template-compiled story 3 `+` does not leave: an operand that is not a small integer
+  // (a string, a float, a boxed integer, null, an array) is the interpreter's `+` called from
+  // compiled code, whose value or error is the interpreter's.
+  EXPECT_EQ(jit.stats.deopts, 8u);
+  EXPECT_EQ(add_deopts, 0) << "no `+` left compiled code";
+  EXPECT_GE(jit.stats.value_calls, 7u) << "each of the seven `+` past the small-integer path was a compiled call";
 }
 
 TEST(Jit, AnOperationCompiledCodeDoesNotInlineIsAnUnconditionalExitAndTheRestRunsInTheInterpreter) {
@@ -253,15 +274,18 @@ TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompil
 TEST(Jit, AFunctionThatDeoptimizesEightTimesIsDiscardedAndNeverCompiledAgain) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
-  sc.source = "function f(a) { return a + 1; }\nfor (i = 0; i < 14; i += 1) { f(\"x\"); }\nprint(f(2));\n";
+  // `a - 1` of a string is a guard exit (`a + 1` was one until spec-template-compiled story 3).
+  sc.source = "function f(a) { return a - 1; }\nfor (i = 0; i < 14; i += 1) { f(\"x\"); }\nprint(f(2));\n";
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.stats.functions_discarded, 1u);
-  // Eight deoptimizations of f, and then the interpreter alone; the top level
-  // deoptimizes once, where it first calls f.
-  EXPECT_EQ(jit.stats.deopts, 9u);
-  EXPECT_EQ(jit.stats.entries, 9u);
-  EXPECT_EQ(jit.raw, "3");
+  // Eight deoptimizations of f, and then the interpreter alone. The top level used to leave
+  // once more, at the string constant "x"; since spec-template-compiled story 3 the constant
+  // is compiled, the top level calls f from compiled code, and f's first exit rebuilds both
+  // frames (one deoptimization). The top level's entry and f's seven from the interpreter.
+  EXPECT_EQ(jit.stats.deopts, 8u);
+  EXPECT_EQ(jit.stats.entries, 8u);
+  EXPECT_EQ(jit.raw, "1");
 }
 
 // ---------------------------------------------------------------------------

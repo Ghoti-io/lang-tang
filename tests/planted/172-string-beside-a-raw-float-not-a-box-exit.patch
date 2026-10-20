@@ -1,0 +1,17 @@
+# 172 a raw float beside a string constant is not the designed box exit
+# defect: `reads_raw` no longer takes `"x" + f`, with f raw, as a concatenation, so compiled code
+#   tries float arithmetic, whose unbox of the string is a guard exit that counts
+# caught by: the raw float beside a string constant, its expected and counted exits
+#   (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -396,7 +396,7 @@
+     // operand beside a raw float it is float arithmetic, whose unbox is a guard (a string from
+     // a variable fails it, a real exit).
+     case GLTANG_OP_ADD:
+-      if (d >= 2 && c->str_side) {
++      if (d >= 2 && c->str_side && false) {  /* planted: never a box exit */
+         return (c->sk[d - 2] == KIND_F64 && (c->str_side[i] & 2u)) || (c->sk[d - 1] == KIND_F64 && (c->str_side[i] & 1u));
+       }
+       return false;

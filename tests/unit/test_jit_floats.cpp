@@ -610,8 +610,11 @@ namespace {
 // by the interpreter, whose entry polls see the reservation at zero, as they were before a top
 // level ran to its end compiled (spec-template-compiled story 2).
 const std::string kChain = std::string(kTopLevelLeaves) +
-    "M = 576460752303423487;\n"
-    "function callee(n, m) { y = 2.5; i = 0; while (i < n) { i = i + 1; } z = m + 1; return i; }\n"
+    // SMALL_MIN, and `m - 1` fails its guard on it (`m + 1` of SMALL_MAX did until
+    // spec-template-compiled story 3 made a sum outside the range the interpreter's `+`,
+    // called from compiled code with no exit).
+    "M = (0 - 576460752303423487) - 1;\n"
+    "function callee(n, m) { y = 2.5; i = 0; while (i < n) { i = i + 1; } z = m - 1; return i; }\n"
     "function caller(n, m) { x = 1.5; r = callee(n, m); s = 0; j = 0; while (j < 3) { j = j + 1; } return r; }\n"
     "print(caller(3, 1)); print(caller(3, M));\n";
 
@@ -632,7 +635,7 @@ TEST(JitFloats, AGuardThatFailsAtTheBottomOfAChainBoxesEachFramesValuesOnceAndTh
   GLTANG_JitStats st = d.stats();
   EXPECT_GE(st.calls, 1u);
   EXPECT_GE(st.deepest_chain, 1u);
-  EXPECT_EQ(st.values_boxed, 2u) << "the caller's x and the callee's y, once each, when the guard failed at the callee's `m + 1`";
+  EXPECT_EQ(st.values_boxed, 2u) << "the caller's x and the callee's y, once each, when the guard failed at the callee's `m - 1`";
   EXPECT_EQ(st.reservation_peak, 2u) << "the entry's extension and the callee's, summed";
   EXPECT_EQ(st.rebuild_failures, 0u);
   EXPECT_EQ(st.conversion_errors, 0u);
@@ -1327,6 +1330,9 @@ TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
   // read no operand, and `PRINT` of a raw float is the designed exit (its text is the interpreter's).
   // Story 2: `HALT` reads no operand (it returns); `STORE_GLOBAL`, `SET_RESULT` and `DISCARD` flow on,
   // and with a raw operand each is the designed box exit, as `PRINT` is.
+  // Story 3: `INDEX` and `SLICE` flow on (calls of the interpreter's own operations), and with a raw
+  // operand each is the designed box exit. `ADD` stays in the first set: the policy's state names no
+  // string constant beside the raw operands, and `"x" + f` is the one `+` that is a box exit.
   const std::set<unsigned> go_on_with_a_raw_operand = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
       GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
       GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT, GLTANG_OP_HALT, GLTANG_OP_NEG, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE,
@@ -1336,7 +1342,7 @@ TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
       GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_MOD, GLTANG_OP_LT,
       GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CAST, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE,
       GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET, GLTANG_OP_PRINT, GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT,
-      GLTANG_OP_HALT, GLTANG_OP_STORE_GLOBAL, GLTANG_OP_SET_RESULT, GLTANG_OP_DISCARD};
+      GLTANG_OP_HALT, GLTANG_OP_STORE_GLOBAL, GLTANG_OP_SET_RESULT, GLTANG_OP_DISCARD, GLTANG_OP_INDEX, GLTANG_OP_SLICE};
   for (unsigned op = 0; op < static_cast<unsigned>(GLTANG_OP_COUNT); ++op) {
     unsigned policy = gltang_vm_jit_test_opcode_policy(op);
     const bool reads = (policy & 1u) != 0;
@@ -1426,9 +1432,11 @@ TEST(JitFloats, AFunctionMarkedNeverOrDiscardedMakesNoExtensionWhenPushedAgain) 
   EXPECT_EQ(r.d.boxes().extensions, 0u) << "...and found no raw floats in it";
   EXPECT_EQ(r.d.boxes().capacity, 0u);
   r.pop();
-  // And the real discard: a float function whose integer add fails its guard on every call (a real failure, counted) is let go at the eighth.
+  // And the real discard: a float function whose integer subtraction fails its guard on every call (a real failure,
+  // counted) is let go at the eighth. (A subtraction: a sum outside the range is the interpreter's `+` called from
+  // compiled code since spec-template-compiled story 3, with no exit.)
   Driver d(
-      "M = 576460752303423487;\nfunction f(n) { x = 1.5; return n + 1; }\n"
+      "M = (0 - 576460752303423487) - 1;\nfunction f(n) { x = 1.5; return n - 1; }\n"
       "for (k = 0; k < 12; k += 1) { f(M); }\n",
       1, false);
   ASSERT_TRUE(d.ok());

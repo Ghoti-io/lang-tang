@@ -1,0 +1,17 @@
+# 170 a compiled slice does not stand at the slice
+# defect: the slice helper does not set the guest frame's poll identity to the slice's own, so a
+#   poll inside a long slice reads the identity of whatever stood last
+# caught by: the long concatenation and slice test, which compares the identity of every poll
+#   (testJit_templates)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -252,7 +252,7 @@
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_SLICE];
+   ++exec->jit_stats.value_calls;
+-  stand_at_the_op(exec, context);
++  /* planted: the frame is not stood at the slice */
+   // The parts present, in the order the operand stack holds them (compiled code passes a
+   // zero for each absent one, which the slice never reads); it copies them before it allocates.
+   const GLTANG_Value parts[3] = {p0, p1, p2};

@@ -6,12 +6,12 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -124,7 +124,7 @@
+@@ -157,7 +157,7 @@
  
  static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
    GLTANG_Execution * exec = gltang_vm_execution_of(context);
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
 +  /* planted: the load of a member by name is charged nothing */
    ++exec->jit_stats.member_loads;
-   // As the interpreter's ATTR, where the container stays on the operand stack for
-   // the whole operation: here it is held on the temp stack until the attribute
+   // The interpreter's ATTR stands at the operation whatever its operand (story 3): a native
+   // called after it that polls reads that identity, on both tiers.

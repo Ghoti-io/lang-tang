@@ -1,0 +1,20 @@
+# 173 the interpreter's frame does not stand at a slice while it runs
+# defect: the interpreter's `SLICE` neither records its position in the frame nor sets the frame's
+#   poll identity before the slice, so a poll inside a long slice sees another frame than compiled
+#   code's call of it, which stands at the slice
+# caught by: the long concatenation and slice test, which compares the identity of every poll
+#   (testJit_templates; the JIT arm only, since the interpreter alone has nothing to differ from)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -526,9 +526,7 @@
+       case GLTANG_OP_SLICE: {
+         size_t parts = (a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u);
+         SYNC();
+-        // Both passes of a long slice poll inside.
+-        SAVE_AT_OP();
+-        STAND_AT_OP();
++        /* planted: the frame does not stand at the slice */
+         GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
+         if (r == GLTANG_V_UNWIND) {
+           goto unwound;

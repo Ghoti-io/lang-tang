@@ -545,7 +545,9 @@ TEST(NativeCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsWhenTheDiscard
   const int kFunctions = n && *n && std::atoi(n) > 0 ? std::atoi(n) : (tt::heavy_instruments() ? 12 : 40);
   std::string source = "M = " + std::string(kSourceMax) + ";\nuse reenter;\n";
   for (int i = 0; i < kFunctions; ++i) {
-    source += "function f" + std::to_string(i) + "(x) { return x + x; }\n";
+    // `x * 2` of SMALL_MAX fails its guard (`x + x` is the interpreter's `+` called from compiled
+    // code since spec-template-compiled story 3, with no exit).
+    source += "function f" + std::to_string(i) + "(x) { return x * 2; }\n";
   }
   const int kGroup = 40;
   const int kGroups = (kFunctions + kGroup - 1) / kGroup;

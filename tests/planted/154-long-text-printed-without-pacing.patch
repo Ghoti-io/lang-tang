@@ -6,10 +6,10 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -184,8 +184,21 @@
+@@ -202,8 +202,21 @@
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
    ++exec->jit_stats.output_calls;
-   stand_at_the_print(exec, context);
+   stand_at_the_op(exec, context);
 -  // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
 -  return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
 +  /* planted: a second printer, in pieces too small to pace */
@@ -29,4 +29,4 @@
 +  return finished(exec, GLTANG_V_NULL, false);
  }
  
- /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */
+ // The value operations (spec-template-compiled story 3). Each charges its operation's fuel,

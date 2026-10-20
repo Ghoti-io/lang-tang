@@ -1860,6 +1860,12 @@ breaks nothing as not caught. Observed:
 | 165 store-global-reads-a-raw-float | `STORE_GLOBAL` is taken off the raw-operand list | the raw-float box exits, one scenario per operation (`testJit_templates`) | the store has no box exit: another value, or another count |
 | 166 set-result-always-listed | the compiled `SET_RESULT` passes the listed bit as 1 | the error result a variable holds (`testJit_templates`) | the held error is marked lost and recorded as discarded |
 | 167 halted-word-names-the-wrong-halt | the halted word names the instruction after the `HALT` | the template call that ends a run (`testJit_templates`) | the position the run ends with differs from the interpreter's |
+| 168 attribute-operand-not-held | the `ATTR` thunks read their own copy of the container after making the name | the template of attributes, elements and concatenations under relocation torture (`testJit_templates`, `make check-planted-relocate`; with relocation off the same build passes) | the run's output, result and errors differ from the interpreter's |
+| 169 custom-operand-guard-removed | compiled code calls the value operations' thunks with a host-defined operand | the host-defined operand of each value operation (`testJit_templates`) | f's counted exits are 0, not 3 |
+| 170 slice-position-not-stored | the `SLICE` thunk leaves the guest frame's identity where the last operation stood | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs |
+| 171 concatenation-skips-its-fuel | the `+` thunk adds no cost | the concatenation in a loop (`testJit_templates`) | the fuel differs from the interpreter's |
+| 172 string-beside-a-raw-float-not-a-box-exit | `reads_raw` never takes `"x" + f` for the box exit | the raw float beside a string constant (`testJit_templates`) | no expected exit, and a counted one in its place |
+| 173 interpreted-slice-not-at-the-slice | the interpreter's `SLICE` leaves the frame where the last poll left it | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs from compiled code's |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1867,14 +1873,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 173 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 167 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 173 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and fifty-seven that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs the hundred and sixty-two that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2462,6 +2468,65 @@ leaves at its first. Planted 159 to 167 gate it: `HALT`'s fuel, a halted return 
 the wrong slot or with no box exit for a raw float, a `DISCARD` that records nothing or records the
 wrong position, and a halted word that names the wrong instruction.
 
+**The value operations (spec-template-compiled story 3, CAP-3).** After story 2 the operations a
+template body uses between its prints were still unconditional exits: a string constant, `+` on
+anything but two small integers, `INDEX`, `SLICE`, and `ATTR` on anything but a library, so
+`<%= item.name %>`, `<%= row[0] %>` and `"<li>" + name` each left compiled code and counted toward the
+discard limit. Each is now a `GRJIT_OP_CALL_NATIVE` to a thunk of the table that calls the
+interpreter's own function, so there is one implementation of each:
+
+- A string `CONST` calls `gltang_vm_constant`: the execution's cached heap string, made on first use.
+  Whether it is made yet is not known when the function is compiled, so it is a call and not an inline
+  load; the thunk records the position only when it makes the string, as the interpreter's `SYNC` is
+  only then (the call site stores none, `emit_native_at`'s `site`).
+- `+` keeps its small-integer path inline; where an operand is not a small integer or the sum leaves the
+  range, the tests of that path branch (`guard_to`) to the slow path instead of exiting, which calls
+  `gltang_vm_op_binary` (a concatenation of strings or of arrays, a string and a value converted as
+  printing it would, a boxed integer, a float object, an error). `-` and the others keep their guards.
+- `INDEX`, `SLICE` and the `ATTR` of a value that is not known to be a library call
+  `gltang_vm_op_index`, `gltang_vm_op_slice` (the thunk passes the parts present and a zero for each
+  absent one, which the slice copies before it allocates) and `gltang_vm_op_attr` (the name made from
+  its constant first). `ATTR` flows on whatever its operand turns out to be, so where the analysis
+  cannot name a library it is this call rather than an exit, and a library's `.name` is the member
+  load it was.
+
+Each thunk charges its operation's cost once and counts in `value_calls`. Each is a GC point with the
+frame before the operation as its state, so the operands are in the stack map while it runs and the
+collector keeps (and a moving one updates) them; the vm functions hold what they need across their own
+allocations in the temporaries, as they do for the interpreter, and only `ATTR`, which makes its name
+first, holds its container there itself (planted 168, seen only under relocation: the frame state keeps
+the container alive where it was, so a collector that does not move sees nothing wrong).
+
+*Host-defined operands stay exits.* An operand of the custom kind is tested before the call (a non-null
+pointer whose first word is `GLTANG_OBJ_CUSTOM`) and leaves with the state before the operation: the
+container of `ATTR`, `INDEX` and `SLICE`, either side of `+`. The interpreter then asks the type.
+The exit is a real one and counts toward the discard limit; the deopt hook tells it from a native-stack
+refusal at the same site by the refusal the test leaves (`GLTANG_REFUSAL_OPERAND_GUARD`).
+Host-extensibility story 10 compiles that dispatch.
+
+*Raw floats.* No thunk is given a raw float. `INDEX` and `SLICE` with a raw operand are the designed
+box exit (`reads_raw`, `apply_kinds`). `"x" + f`, with f raw and a string constant on the other side
+(the analysis records which side's producer is the `CONST` of a string, `str_side`), is a
+concatenation that converts the float to text: the designed box exit too, and the interpreter makes
+the text (a raw-float concatenation is `planning/unboxed-float-output.md`'s). A string from a variable
+beside a raw float is float arithmetic in compiled code, and the unbox of the string is the guard exit
+it was.
+
+*The frame at a poll inside one.* A long concatenation, a slice, a retag (`.html` and the others) and
+`.render` poll inside, at their pacing, and so can a string's grapheme (a substring). As for the prints,
+the interpreter now stands its frame at the operation before it calls (`SAVE_AT_OP` and `STAND_AT_OP`:
+`pc`, `sp` and the poll identity) for `INDEX`, `SLICE`, every `ATTR` and the slow path of every binary
+operator, and the thunks set the guest frame's identity from the stored position (`stand_at_the_op`,
+the library `ATTR`'s thunk too). The binary operators are all stood at, not only `+`: a guard exit
+before `*` (an array repeated, a long string repeated) leaves the rebuilt frame at the operation, and
+the interpreter's repetition then polls inside under that identity, which the interpreted run must
+show as well. Every `ATTR` is, library or not, because a native called after a library's `.name`
+polls under whatever stood last, on both tiers. Output, fuel and the number of polls do not change.
+
+Planted 168 to 173 gate it: the attribute's container not held (relocation), the host-defined operand
+test removed, a compiled slice that does not stand at the slice, a concatenation that charges no fuel,
+`"x" + f` not taken as the designed box exit, and the interpreter's slice not standing at the slice.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
@@ -2502,8 +2567,9 @@ returns into it. The discard is applied after the entry's record is left.
 `LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `LT`, `LE`, `GT`, `GE`,
 `EQ`, `NE`, `CAST` (to int and to float), `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, the
 library `USE`, `ATTR` and `CALL` described there, the output operations `PRINT`, `PRINT_CONST` and
-`CLEAR_RESULT`, and the end of a statement and of a template, `SET_RESULT`, `DISCARD`, `STORE_GLOBAL`
-and `HALT` (a return of the halted word).
+`CLEAR_RESULT`, the end of a statement and of a template, `SET_RESULT`, `DISCARD`, `STORE_GLOBAL`
+and `HALT` (a return of the halted word), and the value operations, a string `CONST`, `+` past its
+small-integer path, `INDEX`, `SLICE` and the `ATTR` of any other value (calls, as above).
 Each step mirrors the interpreter's own inline path: both operands carry the
 integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
 small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
@@ -2511,10 +2577,10 @@ the product cannot leave the range; `DIV` guards a zero divisor, the verifier's
 minimum-over-minus-one pair and the quotient's range (`SMALL_MIN / -1` is 2^59, one
 past it), and `MOD` guards a zero divisor; the operand of `NOT`, the jumps, `AND` and `OR`
 must be a boolean. An operation with a statically raw operand is a float operation
-(below). Everything else (indexing, attributes,
-slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `ITER_*`,
-`DISCARD`, `SET_RESULT`, a `CAST` to bool or to string, a `USE` or `ATTR` that is not a library load, `HALT` and any constant that is
-neither a small integer nor a float) is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
+(below). Everything else (the `SET_*`, `ADOPT`, `ARRAY`, `MAP`, `ITER_*`, a `CAST` to bool or to
+string, a `USE` that is not a library load, a constant that is neither a small integer, a float nor a
+string, and every library or value call where natives cannot be called) is an unconditional exit at
+that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
 (a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).
 
 **Frame states are exactly the guest frame.** `frame_slots` slots in the guest

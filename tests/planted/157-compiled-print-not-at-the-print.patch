@@ -6,7 +6,7 @@
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
 @@ -162,7 +162,7 @@
- static void stand_at_the_print(GLTANG_Execution * exec, void * context) {
+ static void stand_at_the_op(GLTANG_Execution * exec, void * context) {
    GRCORE_Stack * stack = gltang_jit_stack_of(exec->jit, context);
    GRCORE_FrameRef top = grcore_stack_top(stack);
 -  if (top.offset) {

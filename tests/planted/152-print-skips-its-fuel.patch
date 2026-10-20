@@ -11,5 +11,5 @@
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
 +  /* planted: the print's own cost is not charged */
    ++exec->jit_stats.output_calls;
-   stand_at_the_print(exec, context);
+   stand_at_the_op(exec, context);
    // The operand is in the call's frame state, as it is on the interpreter's operand

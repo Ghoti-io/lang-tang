@@ -460,6 +460,46 @@ std::vector<Case> output_cases() {
   return cases;
 }
 
+/// The value operations in compiled code (spec-template-compiled story 3): a string constant,
+/// `+` past the small-integer path, `INDEX`, `SLICE` and the `ATTR` of a value that is not a
+/// library are calls of the interpreter's own functions. A long concatenation, a long slice
+/// (of a string, by a step and reversed, and of an array), a retag and a render poll inside
+/// the call, where the frame of the compiled caller is seen at the operation and must be the
+/// interpreter's; a scope runs out inside a long concatenation in a template; and a template
+/// reads a map's attribute and an array's element, called many times between pauses.
+std::vector<Case> value_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step) {
+    Case c;
+    c.name = "values/" + name;
+    c.source = source;
+    c.parts = std::move(parts);
+    c.step = step;
+    cases.push_back(c);
+  };
+  // 20480 bytes, made by the top level's own concatenations.
+  const std::string grow = "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\n";
+  add("a long concatenation polls inside the compiled call",
+      "function cat(s, n) { r = \"\"; i = 0; while (i < n) { r = s + \"|\" + s; i = i + 1; } return r; }\n" + grow +
+      "for (j = 0; j < 3; j += 1) { x = cat(s, 2); } print(x.length);", {}, 1000000);
+  add("a long slice of a string and of an array polls inside the compiled call",
+      "function sl(s, a, n) { r = 0; i = 0; while (i < n) { b = s[::-1]; c = s[1:20000:3]; d = a[::2]; r = b.length + c.length + d.size; i = i + 1; } return r; }\n" + grow +
+      "a = [1, \"x\", 3] * 3000;\nfor (j = 0; j < 3; j += 1) { x = sl(s, a, 2); } print(x);", {}, 1000000);
+  add("a retag and a render poll inside the compiled call",
+      "function tag(s, n) { r = 0; i = 0; while (i < n) { h = (\"<\" + s).html; t = h.render; r = t.length + h.byte_length; i = i + 1; } return r; }\n" + grow +
+      "for (j = 0; j < 3; j += 1) { x = tag(s, 2); } print(x);", {}, 1000000);
+  add("a long concatenation between pauses",
+      "function cat(s, n) { r = \"\"; i = 0; while (i < n) { r = s + s; i = i + 1; } return r; }\n" + grow +
+      "for (j = 0; j < 4; j += 1) { x = cat(s, 2); } print(x.length);", {}, 997);
+  add("a scope that runs out inside a long concatenation",
+      "use big; print(\"[\"); r = big(); print(\"]\"); print(\"after\");",
+      {{"big", "<% s = \"0123456789\"; k = 0; while (k < 12) { s = s + s; k += 1; } %><%= s.length %>", 400, GLTANG_SCOPE_SEGMENTS, tt::Mode::Template}}, 31);
+  add("a template reads an attribute and an element between pauses",
+      "use row; for (i = 0; i < 12; i += 1) { print(row()); } x = 3; x;",
+      {{"row", "<% item = {name: \"n\", tags: [\"a\", \"b\"]}; t = item.tags; %><li><%= item.name %>:<%= t[0] + t[1] %>:<%= \"abc\"[1] %></li>", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}}, 17);
+  return cases;
+}
+
 /// Float programs (spec-runtime-float, CAP-5): +-0, +-inf, NaN, subnormals, the
 /// largest and smallest normal magnitudes, and integers mixed with floats,
 /// inside functions (which tier up) and at the top level. Their float slots and
@@ -725,6 +765,9 @@ std::vector<Case> all_cases() {
   for (Case & c : output_cases()) {
     cases.push_back(std::move(c));
   }
+  for (Case & c : value_cases()) {
+    cases.push_back(std::move(c));
+  }
   for (Case & c : float_carry_cases()) {
     cases.push_back(std::move(c));
   }
@@ -880,6 +923,28 @@ TEST(Observer, ACompiledPrintThatPollsInsideShowsTheInterpretersFrameAtThePrint)
   if (jit_backend_present()) {
     EXPECT_GT(output_calls, 100u) << "the prints of the output programs ran in compiled code";
     EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled print";
+  }
+}
+#endif
+
+#ifdef GLTANG_WITH_JIT
+TEST(Observer, ACompiledValueOperationThatPollsInsideShowsTheInterpretersFrameAtTheOperation) {
+  // The value programs alone, interpreter against compiled code (plain and with a moving
+  // stack), and the run is not blind: the operations ran compiled, and a scope ran out inside
+  // one of them.
+  GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
+  uint64_t value_calls = 0, unwinds = 0;
+  for (const Case & c : value_cases()) {
+    Observed plain = observe(c, kPlain);
+    Observed jit = observe(c, kJit);
+    EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving), kJitMoving.label));
+    value_calls += jit.jit.value_calls;
+    unwinds += jit.jit.native_status_unwinds;
+  }
+  if (jit_backend_present()) {
+    EXPECT_GT(value_calls, 100u) << "the value operations ran in compiled code";
+    EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled value operation";
   }
 }
 #endif

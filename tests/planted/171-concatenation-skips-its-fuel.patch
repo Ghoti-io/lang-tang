@@ -1,0 +1,17 @@
+# 171 a compiled concatenation charges no fuel
+# defect: the helper compiled code calls for `+` past the small-integer path does not add the
+#   operation's cost to the pending fuel
+# caught by: the concatenation in a loop, whose fuel is compared with the interpreter's
+#   (testJit_templates)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -232,7 +232,7 @@
+ 
+ static GRJIT_NativeResult thunk_add(void * context, uint64_t a, uint64_t b) {
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADD];
++  /* planted: no fuel for the `+` */
+   ++exec->jit_stats.value_calls;
+   // A long concatenation polls inside (its pacing), at the `+`.
+   stand_at_the_op(exec, context);

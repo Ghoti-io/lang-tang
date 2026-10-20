@@ -151,6 +151,10 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 // code's call site carries for the same operation (which an exit before the call needs
 // too), so a poll inside it sees the same frame in both tiers.
 #define SAVE_AT_OP() (S[GLTANG_F_PC] = pc - 1u, S[GLTANG_F_SP] = sp)
+// The identity a poll inside such an operation reads (the frame header's): the operation's own,
+// as compiled code's call of it stands there (natives.c, stand_at_the_op). A live top frame: the
+// setter cannot refuse it.
+#define STAND_AT_OP() ((void)grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine}))
 #define PUSH(v) (S[sp++] = (v))
 #define DROP(n) \
   do { \
@@ -416,6 +420,12 @@ resume_loop:
           }
         }
         SYNC();
+        // A long concatenation or repetition polls inside (its pacing), and so may a host-defined
+        // type's operation: the frame there stands at the operation, the state and identity
+        // compiled code's call of `+` carries, and that a guard exit before any of them leaves
+        // in the rebuilt frame.
+        SAVE_AT_OP();
+        STAND_AT_OP();
         {
           GLTANG_Value r = gltang_vm_op_binary(exec, op, x, y);
           if (r == GLTANG_V_UNWIND) {
@@ -481,6 +491,9 @@ resume_loop:
         GLTANG_Value c = S[sp - 2u];
         GLTANG_Value i = S[sp - 1u];
         SYNC();
+        // A string's grapheme is a substring, paced by its bytes: stand at the index.
+        SAVE_AT_OP();
+        STAND_AT_OP();
         GLTANG_Value r = gltang_vm_op_index(exec, c, i);
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -494,6 +507,8 @@ resume_loop:
       case GLTANG_OP_ATTR: {
         SYNC();
         SAVE_AT_OP();
+        // A retag (`.html` and the others) and `.render` poll inside.
+        STAND_AT_OP();
         GLTANG_Value name = gltang_vm_constant(exec, a);
         if (name == GLTANG_V_UNWIND) {
           goto unwound;
@@ -511,6 +526,9 @@ resume_loop:
       case GLTANG_OP_SLICE: {
         size_t parts = (a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u);
         SYNC();
+        // Both passes of a long slice poll inside.
+        SAVE_AT_OP();
+        STAND_AT_OP();
         GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
         if (r == GLTANG_V_UNWIND) {
           goto unwound;

@@ -35,6 +35,10 @@
  *   them, so the value is the one it makes, whatever the library holds now.
  * - `PRINT` and `PRINT_CONST`: the interpreter's `gltang_vm_op_print` and
  *   `gltang_vm_print_constant`, so there is one implementation of printing.
+ * - The value operations: a string `CONST` (`gltang_vm_constant`), `+` past the
+ *   small-integer path (`gltang_vm_op_binary`), `INDEX`, `SLICE` and the `ATTR` of a value
+ *   that is not a library (`gltang_vm_op_index`, `gltang_vm_op_slice`,
+ *   `gltang_vm_op_attr`), so each is the interpreter's one implementation.
  *
  * Each returns the value and a status: zero, or `GRJIT_NATIVE_UNWIND` for the
  * `GLTANG_V_UNWIND` an operation returns when a runtime poll ordered the run to
@@ -124,28 +128,41 @@ static GRJIT_NativeResult thunk_use(void * context, uint64_t block) {
   return finished(exec, value, false);
 }
 
-static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
-  GLTANG_Execution * exec = gltang_vm_execution_of(context);
-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
-  ++exec->jit_stats.member_loads;
-  // As the interpreter's ATTR, where the container stays on the operand stack for
-  // the whole operation: here it is held on the temp stack until the attribute
-  // has been read, since the name is made (a GC point) and the read may allocate
-  // (a member's value). The name is cached in the execution's constants, which the
-  // collector reads, once it is made.
+/**
+ * The interpreter's `ATTR`: the name made from its constant, then the attribute rule. In the
+ * interpreter the container stays on the operand stack for the whole operation: here it is
+ * held on the temp stack until the attribute has been read, since the name is made (a GC
+ * point, which may move the container: the copy in this frame is then stale, and the one in
+ * the temporaries is updated) and the read may allocate (a member's value, a retagged
+ * string). The name is cached in the execution's constants, which the collector reads, once
+ * it is made.
+ */
+static GLTANG_Value attribute(GLTANG_Execution * exec, GLTANG_Value container, uint64_t constant) {
   size_t mark = gltang_vm_temp_mark(exec);
   if (!gltang_vm_temp_push(exec, container)) {
-    return finished(exec, exec->roots[GLTANG_ROOT_OOM], false);
+    return exec->roots[GLTANG_ROOT_OOM];
   }
   GLTANG_Value name = gltang_vm_constant(exec, (uint32_t)constant);
   container = gltang_vm_temp_at(exec, mark);
   if (name == GLTANG_V_UNWIND) {
     gltang_vm_temp_release(exec, mark);
-    return finished(exec, name, false);
+    return name;
   }
   GLTANG_Value value = gltang_vm_op_attr(exec, container, name);
   gltang_vm_temp_release(exec, mark);
-  return finished(exec, value, false);
+  return value;
+}
+
+static void stand_at_the_op(GLTANG_Execution * exec, void * context);
+
+static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
+  ++exec->jit_stats.member_loads;
+  // The interpreter's ATTR stands at the operation whatever its operand (story 3): a native
+  // called after it that polls reads that identity, on both tiers.
+  stand_at_the_op(exec, context);
+  return finished(exec, attribute(exec, container, constant), false);
 }
 
 // The output operations (spec-template-compiled story 1): `PRINT` and `PRINT_CONST`
@@ -155,11 +172,12 @@ static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_
 // interpreter, and may not re-enter.
 
 /**
- * The guest frame of the compiled printer stands at the print, as the interpreter's
- * frame does while its print runs: the identity a poll inside the print (its pacing)
- * reads is the print's own (compiled code stored the offset before the call).
+ * The guest frame of the compiled caller stands at the operation, as the interpreter's
+ * frame does while its print, concatenation, slice or attribute runs: the identity a poll
+ * inside it (its pacing) reads is the operation's own (compiled code stored the offset
+ * before the call).
  */
-static void stand_at_the_print(GLTANG_Execution * exec, void * context) {
+static void stand_at_the_op(GLTANG_Execution * exec, void * context) {
   GRCORE_Stack * stack = gltang_jit_stack_of(exec->jit, context);
   GRCORE_FrameRef top = grcore_stack_top(stack);
   if (top.offset) {
@@ -173,7 +191,7 @@ static GRJIT_NativeResult thunk_print(void * context, uint64_t value) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
   ++exec->jit_stats.output_calls;
-  stand_at_the_print(exec, context);
+  stand_at_the_op(exec, context);
   // The operand is in the call's frame state, as it is on the interpreter's operand
   // stack while its PRINT runs: the value is replaced by the result, null or an error.
   return finished(exec, gltang_vm_op_print(exec, value), false);
@@ -183,9 +201,71 @@ static GRJIT_NativeResult thunk_print_const(void * context, uint64_t block) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
   ++exec->jit_stats.output_calls;
-  stand_at_the_print(exec, context);
+  stand_at_the_op(exec, context);
   // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
   return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
+}
+
+// The value operations (spec-template-compiled story 3). Each charges its operation's fuel,
+// as the interpreter charges an operation it runs (an exit before the call has charged
+// nothing), and calls the interpreter's own function. Each operand is in the call's frame
+// state, as it is on the interpreter's operand stack while the operation runs, so the
+// collector keeps it; the vm functions hold what they need across their own allocations
+// (the temporaries), as they do for the interpreter, and only `ATTR`, which makes its name
+// first, holds its container here. An operand that is a host-defined value never arrives:
+// compiled code tests for one before the call and leaves.
+
+static GRJIT_NativeResult thunk_const(void * context, uint64_t index, uint64_t site) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CONST];
+  ++exec->jit_stats.value_calls;
+  // The interpreter's CONST: the execution's cached string, made on first use. Only the
+  // making records the position (its SYNC), so a cached constant changes nothing.
+  GLTANG_Value v = exec->constants[index];
+  if (!v) {
+    exec->current_function = (uint32_t)(site >> 32);
+    exec->current_offset = (uint32_t)site;
+    v = gltang_vm_constant(exec, (uint32_t)index);
+  }
+  return finished(exec, v, false);
+}
+
+static GRJIT_NativeResult thunk_add(void * context, uint64_t a, uint64_t b) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADD];
+  ++exec->jit_stats.value_calls;
+  // A long concatenation polls inside (its pacing), at the `+`.
+  stand_at_the_op(exec, context);
+  return finished(exec, gltang_vm_op_binary(exec, GLTANG_OP_ADD, a, b), false);
+}
+
+static GRJIT_NativeResult thunk_index(void * context, uint64_t container, uint64_t index) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_INDEX];
+  ++exec->jit_stats.value_calls;
+  // A string's grapheme is a substring, paced by its bytes.
+  stand_at_the_op(exec, context);
+  return finished(exec, gltang_vm_op_index(exec, container, index), false);
+}
+
+static GRJIT_NativeResult thunk_slice(void * context, uint64_t flags, uint64_t container, uint64_t p0, uint64_t p1, uint64_t p2) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_SLICE];
+  ++exec->jit_stats.value_calls;
+  stand_at_the_op(exec, context);
+  // The parts present, in the order the operand stack holds them (compiled code passes a
+  // zero for each absent one, which the slice never reads); it copies them before it allocates.
+  const GLTANG_Value parts[3] = {p0, p1, p2};
+  return finished(exec, gltang_vm_op_slice(exec, container, (unsigned)flags, parts), false);
+}
+
+static GRJIT_NativeResult thunk_value_attr(void * context, uint64_t container, uint64_t constant) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
+  ++exec->jit_stats.value_calls;
+  // A retag (`.html` and the others) and `.render` poll inside, at the `ATTR`.
+  stand_at_the_op(exec, context);
+  return finished(exec, attribute(exec, container, constant), false);
 }
 
 /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */
@@ -275,6 +355,26 @@ GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTabl
   if (r == GRJIT_OK) {
     const GRJIT_Type print_const_params[1] = {GRJIT_TYPE_PTR};
     r = add_native(table, (uint64_t)(uintptr_t)thunk_print_const, print_const_params, 1, GLTANG_JIT_NATIVE_PRINT_CONST);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type const_params[2] = {GRJIT_TYPE_I64, GRJIT_TYPE_I64};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_const, const_params, 2, GLTANG_JIT_NATIVE_CONST);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type add_params[2] = {GRJIT_TYPE_REF, GRJIT_TYPE_REF};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_add, add_params, 2, GLTANG_JIT_NATIVE_ADD);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type index_params[2] = {GRJIT_TYPE_REF, GRJIT_TYPE_REF};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_index, index_params, 2, GLTANG_JIT_NATIVE_INDEX);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type slice_params[5] = {GRJIT_TYPE_I64, GRJIT_TYPE_REF, GRJIT_TYPE_REF, GRJIT_TYPE_REF, GRJIT_TYPE_REF};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_slice, slice_params, 5, GLTANG_JIT_NATIVE_SLICE);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type value_attr_params[2] = {GRJIT_TYPE_REF, GRJIT_TYPE_I64};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_value_attr, value_attr_params, 2, GLTANG_JIT_NATIVE_VALUE_ATTR);
   }
   if (r != GRJIT_OK) {
     grjit_native_table_free(table);

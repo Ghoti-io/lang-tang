@@ -125,15 +125,21 @@ typedef enum GLTANG_JitRefusal {
   GLTANG_REFUSAL_REMEMBERED,   ///< The callee cannot be compiled (the compile hook said so).
   GLTANG_REFUSAL_PUSH,         ///< The push was refused: depth, memory, an argument error.
   GLTANG_REFUSAL_CALLEE_GUARD, ///< The callee value was not the function the site names.
-  GLTANG_REFUSAL_NATIVE_GUARD  ///< The callee value was not the library native the site names.
+  GLTANG_REFUSAL_NATIVE_GUARD, ///< The callee value was not the library native the site names.
+  GLTANG_REFUSAL_OPERAND_GUARD ///< An operand of a value operation compiled as a call (`+`, `INDEX`, `SLICE`, `ATTR`) is a host-defined value, whose type the interpreter asks.
 } GLTANG_JitRefusal;
 
 /**
  * The natives compiled code calls (runtime-jit's `CALL_NATIVE`), registered once
  * per execution in a table, in this order: the call of a library native with 0 to
  * 15 arguments (the callee is the first parameter), the load of a `use`d path,
- * the `.name` of a library, and the two output operations, `PRINT` (the value) and
- * `PRINT_CONST` (the constant's string block).
+ * the `.name` of a library, the two output operations, `PRINT` (the value) and
+ * `PRINT_CONST` (the constant's string block), and the value operations of
+ * spec-template-compiled story 3: a string `CONST` (the constant's index and the
+ * site), `+` past the small-integer path (the two operands), `INDEX` (the
+ * container and the index), `SLICE` (its flags, the container and up to three
+ * parts) and the `ATTR` of a value that is not a library (the value and the
+ * name's constant).
  */
 enum {
   GLTANG_JIT_NATIVE_CALL0 = 0,   ///< ... up to GLTANG_JIT_NATIVE_CALL0 + 15.
@@ -141,7 +147,12 @@ enum {
   GLTANG_JIT_NATIVE_ATTR = 17,
   GLTANG_JIT_NATIVE_PRINT = 18,
   GLTANG_JIT_NATIVE_PRINT_CONST = 19,
-  GLTANG_JIT_NATIVE_COUNT = 20
+  GLTANG_JIT_NATIVE_CONST = 20,
+  GLTANG_JIT_NATIVE_ADD = 21,
+  GLTANG_JIT_NATIVE_INDEX = 22,
+  GLTANG_JIT_NATIVE_SLICE = 23,
+  GLTANG_JIT_NATIVE_VALUE_ATTR = 24,
+  GLTANG_JIT_NATIVE_COUNT = 25
 };
 /**
  * @brief The most native stack the thunks, the shared wrapper and the host function's own
@@ -286,6 +297,8 @@ void gltang_jit_flush(GLTANG_Execution * exec);
 void gltang_jit_note_callee_guard(GLTANG_Execution * exec);
 /** @brief The same for the guard of a library call. No GC point. */
 void gltang_jit_note_native_guard(GLTANG_Execution * exec);
+/** @brief The same for the guard of a value operation that its operand is not a host-defined value. No GC point. */
+void gltang_jit_note_operand_guard(GLTANG_Execution * exec);
 /**
  * @brief `CLEAR_RESULT` from compiled code: the interpreter's own
  *   `gltang_vm_set_result(exec, null, false)`. It neither allocates in the heap nor polls,

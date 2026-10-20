@@ -6,7 +6,7 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1485,7 +1485,7 @@
+@@ -1857,7 +1857,7 @@
        if (c->sk[d - 1u] == KIND_F64) {
          // The sign bit alone: -0.0 for 0.0, a NaN keeps its payload.
          B(grjit_builder_unary(c->b, GRJIT_OP_FNEG, c->stack_f[d - 1u], V(c->stack_f[d - 1u])));
@@ -15,7 +15,7 @@
          break;
        }
        bitcast(c, t[TMP_A], T[d - 1u]);
-@@ -1545,7 +1545,7 @@
+@@ -1918,7 +1918,7 @@
          bin(c, GRJIT_OP_DIV_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
          guard_in_range(c, t[TMP_R], i, d);
          box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
@@ -23,8 +23,8 @@
 +        /* planted: no fuel */
          break;
        }
-       guard_two_ints(c, i, d);
-@@ -1589,7 +1589,7 @@
+       {
+@@ -1975,7 +1975,7 @@
          GRJIT_VReg fb = float_operand(c, i, d, d - 1u, c->tmp_f[1]);
          cmp(c, cond, t[TMP_R], V(fa), V(fb));
          box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_BOOL);
@@ -33,7 +33,7 @@
          break;
        }
        guard_two_ints(c, i, d);
-@@ -1610,7 +1610,7 @@
+@@ -1996,7 +1996,7 @@
        guard_nonzero(c, t[TMP_Y], i, d);
        bin(c, GRJIT_OP_REM_S, t[TMP_R], V(t[TMP_X]), V(t[TMP_Y]));
        box(c, T[d - 2u], t[TMP_R], GLTANG_TAG_INTEGER);
@@ -42,7 +42,7 @@
        break;
  
      case GLTANG_OP_CAST:
-@@ -1619,13 +1619,13 @@
+@@ -2005,13 +2005,13 @@
            // A small integer is converted and a float object read; the result is the raw double.
            unbox(c, i, d, d - 1u, c->stack_f[d - 1u]);
          }
@@ -58,7 +58,7 @@
          break;
        }
        else {
-@@ -1644,7 +1644,7 @@
+@@ -2030,7 +2030,7 @@
          box(c, T[d - 1u], t[TMP_R], GLTANG_TAG_INTEGER);
          branch_to(c, whole);
          set_block(c, whole);

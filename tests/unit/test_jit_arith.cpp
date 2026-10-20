@@ -373,12 +373,17 @@ TEST(JitArith, EveryCaseTheInterpreterTurnsIntoAnErrorExitsAtTheInstructionAndTh
       {"modulo by a raw operand", "function f(a) { x = a as float; z = 2 % x; return 0; }", true},
       {"modulo of a float word", "function f(a) { z = a % 2; return 0; }", true},
       {"SMALL_MIN / -1", "function f(a) { z = smin / (a as int - a as int - 1); return 0; }", false},
-      {"SMALL_MAX + 1", "function f(a) { z = smax + (a as int - a as int + 1); return 0; }", false},
+      // SMALL_MIN - 1, not SMALL_MAX + 1: since spec-template-compiled story 3 a sum outside the range is the
+      // interpreter's `+` called from compiled code (it boxes it), with no exit; `-` still exits at its guard.
+      {"SMALL_MIN - 1", "function f(a) { z = smin - (a as int - a as int + 1); return 0; }", false},
       {"SMALL_MAX * 2", "function f(a) { z = smax * (a as int - a as int + 2); return 0; }", false},
       {"as int of NaN", "function f(a) { x = a as float; z = (x - x + nan) as int; return 0; }", true},
       {"as int of an infinity", "function f(a) { x = a as float; z = (x + pinf) as int; return 0; }", true},
       {"as int of 2^59", "function f(a) { x = a as float; z = (x - x + 576460752303423488.0) as int; return 0; }", false},
       {"as int of 1e19", "function f(a) { x = a as float; z = (x - x + (\"1e19\" as float)) as int; return 0; }", true},
+      // The rows with a string literal: until spec-template-compiled story 3 the string constant was the exit, and now it
+      // is a compiled call, so the exit is the operation after it (`x + "s"` the designed box exit of a concatenation of a
+      // raw float, `<` and `!=` their guards), still one per call.
       {"a raw operand and a string", "function f(a) { x = a as float; z = x + \"s\"; return 0; }", false},
       {"a raw operand and null", "function f(a) { x = a as float; z = x * null; return 0; }", true},
       {"a raw operand and an array", "function f(a) { x = a as float; z = x - [1]; return 0; }", true},
@@ -746,9 +751,11 @@ TEST(JitArith, TheExitsOfAMixedProgramAreEachOfExactlyOneKind) {
 
 TEST(JitArith, AFunctionWithARealFailurePathIsStillDiscardedAtTheEighthCountedExit) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // The guard of the integer add fails on every call (the sum leaves the small-integer range): a real failure, counted,
-  // so the function is let go at the eighth. It has no loop and no float exit, so it is compiled, not declined.
-  Scenario sc = scenario(std::string("M = 576460752303423487;\nfunction f(a) { x = 1.5; return a + 1; }\n") +
+  // The guard of the integer subtraction fails on every call (the difference leaves the small-integer range): a real
+  // failure, counted, so the function is let go at the eighth. It has no loop and no float exit, so it is compiled, not
+  // declined. (A subtraction, not `a + 1` of SMALL_MAX: since spec-template-compiled story 3 a sum outside the range is
+  // the interpreter's `+` called from compiled code, with no exit.)
+  Scenario sc = scenario(std::string("M = (0 - 576460752303423487) - 1;\nfunction f(a) { x = 1.5; return a - 1; }\n") +
       "k = 0; while (k < 14) { print(f(M)); print(\",\"); k += 1; }\n");
   Outcome plain, jit;
   expect_same_compiled(sc, &plain, &jit);

@@ -7,7 +7,7 @@
 #
 --- a/src/jit/hooks.c
 +++ b/src/jit/hooks.c
-@@ -342,8 +342,7 @@
+@@ -338,8 +338,7 @@
            // The designed exit: a raw float is boxed for its consumer. Not a failure of compiled
            // code, so it does not count toward the discard limit (and is counted, with the
            // others, by the entry once the rebuild has succeeded).
@@ -16,4 +16,4 @@
 +          expected = true;  /* planted: and it counts */
          }
          else if (native_site_at(jc, fr.identity.offset)) {
-           // An exit at a library call or member load: the callee value was not the
+           // An exit at a native call (a library call, a member load, a value operation):

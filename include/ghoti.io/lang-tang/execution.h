@@ -346,6 +346,10 @@ typedef struct GLTANG_JitStats {
   // `CLEAR_RESULT` run in compiled code as calls to the interpreter's own functions.
   uint64_t output_calls;        ///< `PRINT` and `PRINT_CONST` made from compiled code (each a call of the interpreter's print, through the native table).
   uint64_t result_clears;       ///< `CLEAR_RESULT` made from compiled code.
+  // The value operations (spec-template-compiled story 3): a string constant, `+` past the
+  // small-integer path, `INDEX`, `SLICE` and the `ATTR` of a value that is not a library run
+  // in compiled code as calls of the interpreter's own operations.
+  uint64_t value_calls;         ///< Those operations made from compiled code (each a call through the native table).
 } GLTANG_JitStats;
 
 /**
