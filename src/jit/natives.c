@@ -55,6 +55,7 @@
 
 #include "jit_internal.h"
 
+#include <assert.h>
 #include <string.h>
 
 _Static_assert(GRJIT_NATIVE_OK == GLTANG_NATIVE_STATUS_OK, "the engine's statuses are runtime-jit's");
@@ -298,18 +299,31 @@ static GRJIT_NativeResult thunk_cast(void * context, uint64_t value, uint64_t ty
  * which the stack map names, so the collector keeps them and a moving one updates them; compiled
  * code then stores them with the fill helpers, which do not allocate.
  */
+/**
+ * The status of a literal's allocation. The call's frame state after it names the container,
+ * still unfilled, in the literal's slot (build.c, emit_literal): that is safe only because the one
+ * status other than OK is an unwind, which pops the frame without reading or rebuilding it. A
+ * status that leaves compiled code with the frame kept (a deopt) would rebuild a frame holding a
+ * half-made literal, so none may come from here.
+ */
+static GRJIT_NativeResult literal_made(const GLTANG_Execution * exec, GLTANG_Value container) {
+  GRJIT_NativeResult r = finished(exec, container, false);
+  assert((r.status == GRJIT_NATIVE_OK || r.status == GRJIT_NATIVE_UNWIND) && "a literal's allocation may only continue or unwind");
+  return r;
+}
+
 static GRJIT_NativeResult thunk_array(void * context, uint64_t count) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ARRAY];
   ++exec->jit_stats.value_calls;
-  return finished(exec, gltang_vm_array_new(exec, (size_t)count), false);
+  return literal_made(exec, gltang_vm_array_new(exec, (size_t)count));
 }
 
 static GRJIT_NativeResult thunk_map(void * context, uint64_t count) {
   GLTANG_Execution * exec = gltang_vm_execution_of(context);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_MAP];
   ++exec->jit_stats.value_calls;
-  return finished(exec, gltang_vm_map_new(exec, (size_t)count), false);
+  return literal_made(exec, gltang_vm_map_new(exec, (size_t)count));
 }
 
 /** `ADOPT` of a container (compiled code tests that it is one: of anything else `ADOPT` does nothing, and calls nothing): the interpreter's deep copy, which paces. */

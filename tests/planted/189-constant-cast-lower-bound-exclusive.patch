@@ -1,0 +1,17 @@
+# 189 the fold of a constant cast to int refuses -2^59 (the fold's twin of 61)
+# defect: constant_cast's lower bound is exclusive, so -2^59, the smallest small integer, exits
+#   instead of being folded
+# caught by: the constant casts at both bounds, which make no exit inside the range
+#   (testJit_templates, JitTemplates.ACastToIntOfAFloatConstant*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -362,7 +362,7 @@
+   uint64_t u = (uint64_t)bits;
+   memcpy(&v, &u, sizeof(v));
+   // The bounds trunc_small guards: [-2^59, 2^59). A NaN fails both.
+-  if (!(v >= -0x1p59 && v < 0x1p59)) {
++  if (!(v > -0x1p59 && v < 0x1p59)) {  /* planted: -2^59 not folded */
+     return CAST_FOLD_OUT;
+   }
+   *out = (int64_t)v;

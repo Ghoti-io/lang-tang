@@ -43,6 +43,8 @@
 
 #include "jit_internal.h"
 
+#include <assert.h>
+
 void gltang_jit_flush(GLTANG_Execution * exec) {
   gltang_vm_flush_fuel(exec);
 }
@@ -95,6 +97,11 @@ void gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uin
   if (!gltang_v_is_kind(map, GLTANG_OBJ_MAP)) {
     return;
   }
+  // A second key of 0 means one pair: no key is 0, because a map literal's keys are always string
+  // constants (the grammar's, compile.c), or the out-of-memory error where the memory budget refused
+  // to make one (gltang_vm_map_fill skips that key), which the asserts hold the compiler to.
+  assert((gltang_v_is_kind(k0, GLTANG_OBJ_STRING) || k0 == exec->roots[GLTANG_ROOT_OOM]) && "a map literal's key is a string");
+  assert((!k1 || gltang_v_is_kind(k1, GLTANG_OBJ_STRING) || k1 == exec->roots[GLTANG_ROOT_OOM]) && "a map literal's key is a string");
   const GLTANG_Value pairs[2u * GLTANG_JIT_FILL_PAIRS] = {k0, v0, k1, v1};
   gltang_vm_map_fill(exec, map, pairs, k1 ? 2u : 1u);
 }

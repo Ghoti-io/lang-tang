@@ -1,0 +1,17 @@
+# 184 the compiled ADOPT does not set the frame's poll identity to the ADOPT's own
+# defect: the ADOPT helper does not stand the guest frame at the ADOPT, so a poll inside a long deep
+#   copy reads the identity of whatever stood last (the twin of 185, which is the interpreter's)
+# caught by: the copying ADOPT of a large array, which compares the identity of every poll with the
+#   interpreter's (testJit_templates, JitTemplates.ACastToStringOfALargeArray*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -331,7 +331,7 @@
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
+   ++exec->jit_stats.value_calls;
+-  stand_at_the_op(exec, context);
++  /* planted: the frame is not stood at the ADOPT */
+   return finished(exec, gltang_vm_op_adopt(exec, value), false);
+ }
+ 

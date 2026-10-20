@@ -335,6 +335,12 @@ void gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const GLTANG_
   for (size_t i = 0; i < count; ++i) {
     GLTANG_Value key = pairs[2u * i];
     GLTANG_Value v = pairs[2u * i + 1u];
+    if (!gltang_v_is_kind(key, GLTANG_OBJ_STRING)) {
+      // A literal's key is a string constant, but one the memory budget refused to make is the
+      // out-of-memory error (gltang_vm_constant), which names no entry: it was read as a string
+      // block before, on both tiers.
+      continue;
+    }
     const GLTANG_StringBlock * k = gltang_vm_string(key);
     const char * bytes = gltang_string_bytes(k);
     size_t length = (size_t)k->byte_length;

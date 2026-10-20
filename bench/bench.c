@@ -1864,7 +1864,8 @@ typedef enum {
   FK_GLOBAL,    /* ...; gv = a * 2.0; return 0;                          a store of a raw float to a global (an exit) */
   FK_ARG,       /* ...; h(a * 2.0); return 0;                            a raw float as a call argument (an exit) */
   FK_E_DIV0,    /* return x / 0.0;                                      an error at every call */
-  FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call, made by the cast's helper (no exit since spec-template-compiled story 4) */
+  FK_E_NANINT,  /* return x as int; x = NaN                             an error at every call, made by the cast's helper in compiled code: not an exit since
+                 * spec-template-compiled story 4 (the row keeps its name, "float-exit-nanint", which the performance history keys on) */
   FK_E_MOD,     /* return x % 2.0;                                      an error at every call */
   FK_E_STR,     /* return x * "a";                                      an error at every call */
   FK_N_INFSUB,  /* y = x * 1.0; z = y - y; z != z ? 1 : 0; x = inf      NaN arithmetic over raw operands: not an exit */
@@ -1987,7 +1988,8 @@ static GLTANG_ValueKind family_expectation(FamilyKind k, unsigned loop) {
     case FK_E_MOD:
     case FK_E_STR:
       /* No C reference exists for an error value: the check is its kind, and the exit counters of
-       * the case say the error came from compiled code's guard. */
+       * the case say where the error came from: compiled code's guard, the interpreter after a box exit,
+       * or (FK_E_NANINT, since spec-template-compiled story 4) the cast's helper, with no exit at all. */
       return GLTANG_KIND_ERROR;
     default: /* the print, the global store and the call argument return 0; (0.0 / x) as int is 0 */
       have_expected_integer = 1;

@@ -1,0 +1,16 @@
+# 187 a compiled cast charges no fuel
+# defect: the CAST helper adds no cost, so a cast made by it is free in compiled code
+# caught by: the template of casts, literals and stored containers, its fuel against the interpreter's
+#   (testJit_templates, JitTemplates.ATemplateOfCastsLiterals*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -282,7 +282,7 @@
+ 
+ static GRJIT_NativeResult thunk_cast(void * context, uint64_t value, uint64_t type) {
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CAST];
++  /* planted: no fuel */
+   ++exec->jit_stats.value_calls;
+   // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
+   // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.

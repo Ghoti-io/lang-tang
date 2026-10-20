@@ -1,0 +1,18 @@
+# 186 compiled ADOPT tests only for an array, so a stored map is not copied
+# defect: emit_adopt's container test drops the map compare, so ADOPT of a map does nothing and the
+#   literal holds the caller's map itself
+# caught by: the literals in a loop, whose held map must not show the caller's later change
+#   (testJit_templates, JitTemplates.LiteralsInALoop*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1754,8 +1754,7 @@
+   // Every heap object begins with its 32-bit kind (vm_internal.h, gltang_object_kind).
+   B(grjit_builder_load(c->b, t[TMP_X], c->stack[d - 1u], 0, 32, false));
+   cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_ARRAY));
+-  cmp(c, GRJIT_CMP_EQ, t[TMP_D], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_MAP));
+-  bin(c, GRJIT_OP_OR, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
++  /* planted: a map is not taken for a container */
+   B(grjit_builder_br_if(c->b, V(t[TMP_C]), copy, plain));
+   c->open = false;
+   set_block(c, plain);

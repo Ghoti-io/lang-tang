@@ -439,7 +439,10 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
     case GLTANG_OP_ARRAY:
     case GLTANG_OP_MAP: {
       const int64_t n = op == GLTANG_OP_MAP ? 2 * (int64_t)a : (int64_t)a;
-      for (int64_t p = (int64_t)d - n > 0 ? (int64_t)d - n : 0; p < d; ++p) {
+      if ((int64_t)d < n) {
+        return false;  // a malformed depth: the walk then refuses the instruction (GLTANG_ERR_INTERNAL)
+      }
+      for (int64_t p = (int64_t)d - n; p < d; ++p) {
         if (c->sk[p] == KIND_F64) {
           return true;
         }
@@ -988,8 +991,8 @@ static GLTANG_Result analyse_once(Ctx * c) {
         c->cur[d - 1] = i;
       }
       else if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && constant_cast(c, i, &(int64_t){0}) == CAST_FOLD_OUT) {
-        c->end_kind[i] = END_REAL;
-        break;                   // an unconditional exit: the interpreter makes the boxed integer or the error
+        c->end_kind[i] = END_REAL;  // not END_EXPECTED: the static decline must not take it (see emit_op_kinds)
+        break;                   // an unconditional, designed exit: the interpreter makes the boxed integer or the error
       }
       else if (!inline_op(c, op, a)) {
         if (op == GLTANG_OP_USE && !c->natives_on && use_load_ok(c, a)) {
@@ -1888,7 +1891,13 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
     return false;
   }
   if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && constant_cast(c, i, &k) == CAST_FOLD_OUT) {
-    // A float constant outside the small-integer range (or a NaN): the interpreter makes it.
+    // A float constant outside the small-integer range (or a NaN): the interpreter makes the boxed
+    // integer or the error from the constant, raw in the frame state and boxed by the rebuild. That
+    // is a box exit by design, as `reads_raw`'s are: it does not count toward the discard limit, so a
+    // function that holds `9223372036854775807.0 as int` is not let go after eight calls. (Its walk
+    // ends as END_REAL all the same, so the static decline does not take a function whose one path
+    // is this cast: the corpus scripts of these constants stay compiled.)
+    c->expected_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
     emit_exit(c, i, d);
     return false;
   }
@@ -2459,7 +2468,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   c->call_member = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(const GLTANG_LibraryMember *));
   c->attr_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
   c->str_side = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint8_t));
-  c->cast_src = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), n * sizeof(uint32_t));
+  c->cast_src = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(uint32_t));
   c->load_ok = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->declined = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), n, sizeof(bool));
   c->global_use = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), ((size_t)program->global_count + 1u) * sizeof(uint32_t));
@@ -2472,7 +2481,6 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   for (size_t i = 0; i < n; ++i) {
     c->depth[i] = -1;
     c->call_k[i] = -1;
-    c->cast_src[i] = PROD_NONE;
   }
   for (uint32_t g = 0; g < program->global_count; ++g) {
     c->global_fn[g] = DECL_NONE;
@@ -2760,8 +2768,8 @@ done:
 
 /*
  * For the tests only: what the compiler's two tables say about an opcode, in a state
- * where every operand position is raw. Bit 0: an instruction at depth 3 (CALL with two
- * arguments) that reads a raw operand is an exit. Bit 1: the instruction has a known
+ * where every operand position is raw. Bit 0: an instruction at depth 4 (CALL with two
+ * arguments, MAP with two pairs) that reads a raw operand is an exit. Bit 1: the instruction has a known
  * effect on the kinds when it flows on. The test walks every opcode, so one added
  * without an entry in either table is seen. Declared in vm/test_hooks.h.
  */
@@ -2772,7 +2780,7 @@ unsigned gltang_vm_jit_test_opcode_policy(unsigned op) {
   Ctx c;
   memset(&c, 0, sizeof(c));
   memset(c.sk, KIND_F64, sizeof(c.sk));
-  unsigned bits = reads_raw(&c, 0, (GLTANG_Opcode)op, 2, 3) ? 1u : 0u;
+  unsigned bits = reads_raw(&c, 0, (GLTANG_Opcode)op, 2, 4) ? 1u : 0u;
   Ctx d;
   memset(&d, 0, sizeof(d));
   d.raw_off = true;  // so that CONST does not read a program this state does not have

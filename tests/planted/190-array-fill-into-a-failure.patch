@@ -1,0 +1,19 @@
+# 190 the array fill stores into whatever the allocation made, a failure too
+# defect: gltang_jit_array_fill does not test that the literal's value is an array, so where the
+#   memory budget refused the allocation it stores the elements into the out-of-memory error
+# caught by: the memory sweep over a compiled function's literals, every budget against the interpreter
+#   (testJit_templates, JitTemplates.ALiteralWhoseAllocation*)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -86,9 +86,7 @@
+ // moving collection updated them); they are stored here, after it, by the interpreter's fill.
+ 
+ void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t count, uint64_t e0, uint64_t e1, uint64_t e2) {
+-  if (!gltang_v_is_kind(array, GLTANG_OBJ_ARRAY)) {
+-    return;
+-  }
++  /* planted: the value is taken for an array whatever it is */
+   const GLTANG_Value elements[GLTANG_JIT_FILL_ELEMENTS] = {e0, e1, e2};
+   gltang_vm_array_fill(exec, array, elements, (size_t)count);
+ }

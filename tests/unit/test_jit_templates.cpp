@@ -47,9 +47,10 @@
 // of a container (the interpreter's copy). A cast to int of a float constant is folded inside the
 // small-integer range and an exit outside it.
 //
-// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167 and 169
-// to 173 here, 168 here under relocation torture, and 156 in testObserver (the frame
-// differential over the output programs); 179 onward for story 4 (documentation/design.md).
+// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167, 169 to
+// 176 and 178 to 190 here (173, 178, 183 and 185 are the interpreter's, seen only by the JIT arm),
+// 168 here under relocation torture, 177 in testJit_floats (the opcode policy) and 156 in
+// testObserver (the frame differential over the output programs).
 
 #include "exec_harness.h"
 #include "jit_harness.h"
@@ -1259,31 +1260,33 @@ TEST(JitTemplates, ACastToStringOfALargeArrayPollsAsOftenAtTheSameFramesAndADeep
 TEST(JitTemplates, LiteralsInALoopAreTheInterpretersValuesWithTheLastKeyWinningAndAStoredContainerCopied) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // A literal longer than one fill call (twenty-one elements, nine pairs), a key that comes again in
-  // another fill call, an empty literal of each kind, a literal of literals, and a stored container
-  // that the literal copies (ADOPT): the caller changes the array afterwards (its SET_INDEX is an
-  // exit, after f has run compiled), and the copy held by the literal does not see it.
+  // another fill call, an empty array, a literal of literals, and a stored array and a stored map that
+  // the literal copies (ADOPT, both of its container kinds): the caller changes each afterwards (its
+  // SET_INDEX and SET_ATTR are exits, after f has run compiled), and the copies held do not see it.
   Scenario sc = scenario(
-      "function f(n, row) {\n"
+      "function f(n, row, mp) {\n"
       "  i = 0; out = \"\"; held = null;\n"
       "  while (i < n) {\n"
       "    a = i; b = \"b\" + i;\n"
       "    l = [a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, b, \"c\", a, i, row];\n"
       "    m = {k: a, j: b, x: 1, y: 2, z: 3, w: 4, k: b, u: 5, v: [a]};\n"
       "    e = []; nest = [[a], {q: [b]}];\n"
-      "    held = [row, b];\n"
+      "    held = [row, b, mp];\n"
       "    out = out + (l as string) + (m as string) + (e as string) + (nest as string) + \";\";\n"
       "    i = i + 1;\n"
       "  }\n"
       "  print(out);\n"
       "  return held;\n"
       "}\n"
-      "r = [3, 4]; h = f(6, r); g = f(2, r); r[0] = 99; print(h); print(g); print(r);\n");
+      "r = [3, 4]; q = {z: 5}; h = f(6, r, q); g = f(2, r, q); r[0] = 99; q.z = 77; print(h); print(g); print(r); print(q);\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, plain.raw);
   EXPECT_NE(jit.raw.find("\"k\": b3, \"j\": b3"), std::string::npos) << "the last `k` wins: " << jit.raw.substr(0, 400);
   EXPECT_EQ(jit.raw.find("[[99"), std::string::npos) << "the stored row was copied, so 99 is not seen through it: " << jit.raw;
+  EXPECT_NE(jit.raw.find("[[3, 4], b5, {\"z\": 5}]"), std::string::npos) << "the stored map was copied, so 77 is not seen through it: " << jit.raw;
+  EXPECT_NE(jit.raw.find("{\"z\": 77}"), std::string::npos) << "the map itself changed: " << jit.raw;
   EXPECT_EQ(jit.stats.deopts, 1u) << "the one exit is the top level's SET_INDEX `r[0] = 99`, after both calls of f";
 }
 
@@ -1317,13 +1320,47 @@ TEST(JitTemplates, ALiteralsElementsSurviveTheAllocationOfItsContainerUnderTortu
   EXPECT_EQ(jit.heap_invalid_pointers, 0u);
 }
 
+TEST(JitTemplates, ALiteralWhoseAllocationTheMemoryBudgetRefusesFailsAsInterpretedAtEveryBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A compiled function that builds an array and a map literal of small integers at every iteration:
+  // after the first, whose string constants are made once, the only allocations of the run are the
+  // literals' own (the containers and their storage). Swept over memory budgets from below the run's
+  // need to above it, with no reserve, every budget gives the interpreter's verdict, and some budget
+  // refuses an allocation inside f after its first iteration, which is a literal's.
+  Scenario sc = scenario(
+      "function f(n) { i = 0; r = 0; while (i < n) { l = [i, i + 1, i + 2, i + 3]; m = {k: i, v: i + 4}; r = r + l[3] + m.v; i = i + 1; } return r; }\n"
+      "x = f(40); print(x);\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  ASSERT_TRUE(measured.finished);
+  Outcome compiled = run(sc, 1);
+  EXPECT_EQ(compiled.stats.deopts, 0u);
+  // Per iteration: the two literals, the two keys' constants and `l[3]`, `m.v`: 6.
+  EXPECT_EQ(compiled.stats.value_calls, 40u * 6u);
+  std::set<std::string> kinds;
+  size_t refused_in_a_literal = 0;
+  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain, jit;
+    expect_same(tight, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << "memory " << budget;
+    kinds.insert(plain.key());
+    // Nothing printed and f's first iteration done: the refusal was an allocation after it, a literal's.
+    refused_in_a_literal += !jit.finished || jit.raw.empty() ? (jit.stats.value_calls > 6u ? 1u : 0u) : 0u;
+  }
+  EXPECT_GE(kinds.size(), 2u) << "the sweep crossed the budget the run needs";
+  EXPECT_GE(refused_in_a_literal, 1u) << "some budget refused a literal's own allocation in compiled code";
+}
+
 TEST(JitTemplates, ACastToIntOfAFloatConstantIsFoldedInsideTheRangeAndAnExitOutsideItAndTheFunctionCompiles) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // Story 2 found that `99999999999999999999999.0 as int` made the whole top level fail to compile:
   // runtime-jit's verifier judges a TRUNC_S of a CONST as it stands, ignoring the guards before it.
   // Now no such TRUNC_S is emitted: inside the small-integer range the cast is folded, and outside it
-  // it is an unconditional exit, the interpreter making the boxed integer or the error. The three
-  // corpus scripts that hold such constants compile.
+  // it is an unconditional exit, the interpreter making the boxed integer or the error from the
+  // constant the rebuild boxes: a designed exit, which does not count toward the discard limit. The
+  // three corpus scripts that hold such constants compile.
   for (const char * name : {"cast-int-too-large-float", "cast-int-too-small-float", "cast-largest-float-that-fits"}) {
     std::ifstream in(std::string(GLTANG_TEST_DATA) + "/corpus/script/" + name + ".tang", std::ios::binary);
     ASSERT_TRUE(in.good()) << name;
@@ -1338,18 +1375,47 @@ TEST(JitTemplates, ACastToIntOfAFloatConstantIsFoldedInsideTheRangeAndAnExitOuts
     EXPECT_EQ(jit.stats.functions_compiled, 1u) << name;
     EXPECT_EQ(jit.stats.entries, 1u) << name;
     EXPECT_EQ(jit.stats.deopts, 1u) << name << ": the out-of-range cast is the one exit";
-    EXPECT_EQ(jit.stats.exits_counted, 1u) << name;
+    EXPECT_EQ(jit.stats.exits_expected, 1u) << name << ": a designed one";
+    EXPECT_EQ(jit.stats.exits_counted, 0u) << name;
   }
-  // Inside the range: folded, no exit, no call.
+  // Inside the range, both bounds: folded, no exit, no call. `-3.9 as int` is `-(3.9 as int)`: a
+  // cast binds tighter than a unary minus; a parenthesized negative literal is one CONST (compile.c),
+  // so `(-576460752303423488.0) as int`, -2^59, is the lowest constant the fold takes.
   {
-    // `-3.9 as int` is `-(3.9 as int)`: a cast binds tighter than a unary minus.
-    Scenario sc = scenario("x = 3.9 as int; y = -3.9 as int; z = 576460752303423424.0 as int; print(x); print(y); print(z);\n");
+    Scenario sc = scenario("x = 3.9 as int; y = -3.9 as int; z = 576460752303423424.0 as int; w = (-576460752303423488.0) as int;\n"
+                           "print(x); print(y); print(z); print(w);\n");
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure());
-    EXPECT_EQ(jit.raw, "3-3576460752303423424");
+    EXPECT_EQ(jit.raw, "3-3576460752303423424-576460752303423488");
     EXPECT_EQ(jit.stats.deopts, 0u);
     EXPECT_EQ(jit.stats.value_calls, 0u) << "a folded cast calls nothing";
+  }
+  // 2^59, the first constant past the range: the exit, and the interpreter's boxed integer.
+  {
+    Scenario sc = scenario("x = 576460752303423488.0 as int; print(x); print(\"|\"); print(x - 1);\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "576460752303423488|576460752303423487");
+    EXPECT_EQ(jit.stats.deopts, 1u);
+    EXPECT_EQ(jit.stats.exits_expected, 1u);
+  }
+  // A function holding such a cast, called many times: one designed exit per call, none counted, and
+  // the function is never discarded (a counted exit would let it go at the eighth call).
+  {
+    Scenario sc = scenario(std::string(kTopLevelLeaves) +
+        "function g(k) { r = 9223372036854775807.0 as int; return k; }\ns = 0; for (i = 0; i < 20; i += 1) { s = s + g(i); } print(s);\n");
+    int g_deopts = -2;
+    sc.after = [&g_deopts](Context & context) { g_deopts = gltang_vm_jit_test_function_deopts(context.execution, 1); };
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "190");
+    EXPECT_EQ(jit.stats.functions_discarded, 0u) << "g was not let go";
+    EXPECT_EQ(jit.stats.exits_expected, 20u) << "one designed exit at each call";
+    EXPECT_EQ(jit.stats.exits_counted, 1u) << "only the top level's";
+    EXPECT_EQ(g_deopts, 0) << "nothing charged to g";
   }
 }
 
@@ -1357,21 +1423,27 @@ TEST(JitTemplates, ARawFloatInALiteralOrCastToStringIsTheDesignedBoxExit) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The helpers are given value words only: a raw float as an element, a map value, ADOPT's operand
   // or the operand of a cast to string or to bool is boxed by the exit and the interpreter runs the
-  // operation (a raw-float to-string is planning/unboxed-float-output.md's). The loop keeps each
-  // function from the static decline.
+  // operation (a raw-float to-string is planning/unboxed-float-output.md's). A fresh element (`a * 2.0`,
+  // with `a` a parameter) has no ADOPT in front of it, so the exit is the literal's own, before its
+  // allocation (no ARRAY or MAP call is made); an element read from a local is not fresh, so its
+  // exit is the ADOPT in front of it. The loop keeps each function from the static decline.
   struct Case {
     const char * name;
     const char * body;
+    uint64_t value_calls;  ///< The helper calls before the exit: the string constants only (a key, "s").
   };
   const Case cases[] = {
-      {"an array element", "x = 1.5 * 2.0; return [x];"},
-      {"an array element beside others", "x = 1.5 * 2.0; return [1, x, \"s\"];"},
-      {"a map value", "x = 1.5 * 2.0; return {k: x};"},
-      {"a cast to string", "x = 1.5 * 2.0; return x as string;"},
-      {"a cast to bool", "x = 0.5 * 0.0; return x as bool;"},
+      {"a fresh array element (ARRAY)", "return [a * 2.0];", 0},
+      {"a fresh array element beside others (ARRAY)", "return [1, a * 2.0, \"s\"];", 1},
+      {"a fresh map value (MAP)", "return {k: a * 1.5};", 1},
+      {"an array element from a local (ADOPT)", "x = a * 2.0; return [x];", 0},
+      {"an array element from a local beside others (ADOPT)", "x = a * 2.0; return [1, x, \"s\"];", 0},
+      {"a map value from a local (ADOPT)", "x = a * 1.5; return {k: x};", 1},
+      {"a cast to string", "x = a * 2.0; return x as string;", 0},
+      {"a cast to bool", "x = a * 0.0; return x as bool;", 0},
   };
   for (const Case & c : cases) {
-    Scenario sc = scenario(std::string("function f() { i = 0; while (i < 2) { i = i + 1; } ") + c.body + " }\nprint(f()); print(\";\"); print(f());\n");
+    Scenario sc = scenario(std::string("function f(a) { i = 0; while (i < 2) { i = i + 1; } ") + c.body + " }\nprint(f(1)); print(\";\"); print(f(2));\n");
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure()) << c.name;
@@ -1379,6 +1451,7 @@ TEST(JitTemplates, ARawFloatInALiteralOrCastToStringIsTheDesignedBoxExit) {
     EXPECT_EQ(jit.stats.exits_expected, 2u) << c.name;
     EXPECT_EQ(jit.stats.exits_counted, 0u) << c.name;
     EXPECT_EQ(jit.stats.functions_declined_expected, 0u) << c.name;
+    EXPECT_EQ(jit.stats.value_calls, 2u * c.value_calls) << c.name << ": no literal, copy or cast call was made before the exit";
   }
 }
 

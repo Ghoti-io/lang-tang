@@ -491,47 +491,52 @@ TEST(JitArith, AnIntegerResultOutsideTheSmallIntegerRangeExitsAndTheInterpreterM
 TEST(JitArith, ACastToIntOfADoubleInsideTheSmallRangeIsCompiledAndEverythingElseExits) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // From a raw double, everything outside the small range exits (a raw value cannot be handed to a
-  // helper). From a value word, since spec-template-compiled story 4, it does not: a float object
+  // helper). From a value word, since spec-template-compiled story 4, nothing exits: a float object
   // outside the range (and NaN, the infinities) is the interpreter's cast called from compiled code,
-  // which makes the boxed integer or the error, so that shape never exits.
+  // which makes the boxed integer or the error, and the shape-1 run says which path ran by the value
+  // calls f made (the run with the cast against the same run without it).
   struct Case {
     const char * value;
-    bool exits;
-    bool exits_from_a_word = false;   ///< The other shape: `a as int` of the word, where 2^59 - 1 is a small integer already.
-    bool differs = false;
+    bool exits;   ///< From a raw double: outside the small range, an exit.
+    bool helper;  ///< From a value word: not a small integer and not a float inside the range, so the cast's helper.
   };
   const Case cases[] = {
-      {"1.9", false},
-      {"-1.9", false},
-      {"-0.5", false},
-      {"0.0", false},
-      {"nz", false},
-      {"576460752303423424.0", false},        // 2^59 - 64: the largest double below 2^59
-      {"-576460752303423488.0", false},       // -2^59: the smallest small integer
-      {"576460752303423488.0", true},         // 2^59: the interpreter makes a boxed integer
-      {"-576460752303423616.0", true},        // -2^59 - 128
-      {"(\"1e18\" as float)", true},
-      {"(\"1e19\" as float)", true},
-      {"pinf", true},
-      {"ninf", true},
-      {"nan", true},
-      {"5", false},
-      {"smax", true, false, true},     // (double)(2^59 - 1) rounds to 2^59: out of range as a double, a small integer as a word
-      {"smin", false},
+      {"1.9", false, false},
+      {"-1.9", false, false},
+      {"-0.5", false, false},
+      {"0.0", false, false},
+      {"nz", false, false},
+      {"576460752303423424.0", false, false},  // 2^59 - 64: the largest double below 2^59
+      {"-576460752303423488.0", false, false}, // -2^59: the smallest small integer
+      {"576460752303423488.0", true, true},    // 2^59: the interpreter makes a boxed integer
+      {"-576460752303423616.0", true, true},   // -2^59 - 128
+      {"(\"1e18\" as float)", true, true},
+      {"(\"1e19\" as float)", true, true},
+      {"pinf", true, true},
+      {"ninf", true, true},
+      {"nan", true, true},
+      {"5", false, false},
+      {"smax", true, false},  // (double)(2^59 - 1) rounds to 2^59: out of range as a double, a small integer as a word
+      {"smin", false, false},
   };
   for (const Case & c : cases) {
     // From a raw operand, and from a value word (the float read from the word).
     for (int shape = 0; shape < 2; ++shape) {
       const char * fn = shape == 0 ? "function f(a) { x = a as float; y = x as int; return y; }" : "function f(a) { y = a as int; return y; }";
-      Scenario sc = scenario(std::string(kPrelude) + fn + "\nprint(f(" + c.value + ")); print(\" \"); print(f(" + c.value + "));\n");
+      const std::string calls = "\nprint(f(" + std::string(c.value) + ")); print(\" \"); print(f(" + c.value + "));\n";
+      Scenario sc = scenario(std::string(kPrelude) + fn + calls);
       Outcome plain, jit;
       expect_same_compiled(sc, &plain, &jit);
       ASSERT_FALSE(HasFailure()) << c.value << " shape " << shape;
       EXPECT_EQ(jit.stats.compile_failures, 0u) << c.value;
       const bool exits = shape == 1 ? false : c.exits;
-      (void)c.exits_from_a_word;
-      (void)c.differs;
-      EXPECT_EQ(jit.stats.deopts > kMain, exits) << c.value << " shape " << shape << ": " << (c.exits ? "an exit" : "compiled to the end");
+      EXPECT_EQ(jit.stats.deopts > kMain, exits) << c.value << " shape " << shape << ": " << (exits ? "an exit" : "compiled to the end");
+      if (shape == 1) {
+        Scenario without = scenario(std::string(kPrelude) + "function f(a) { y = a; return y; }" + calls);
+        Outcome base = run(without, 1);
+        EXPECT_EQ(jit.stats.value_calls - base.stats.value_calls, c.helper ? 2u : 0u)
+            << c.value << ": " << (c.helper ? "the cast's helper, at each of the two calls" : "the inline cast, no call");
+      }
     }
   }
 }
