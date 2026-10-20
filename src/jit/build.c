@@ -36,7 +36,9 @@
  * `LINE`, `RET`, `CALL` of a function the declaration scan can name, and the
  * library: the load of a `use`d path or a library's `.name` and the `CALL` of a
  * library native (a host function), each a call to the engine's own operation
- * (natives.c) with no exit. Each
+ * (natives.c) with no exit; and the output operations, `PRINT` and `PRINT_CONST` as calls of
+ * the interpreter's print through the same table and `CLEAR_RESULT` as a call that is no GC
+ * point. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
  * the word the interpreter would. For everything else, and for an operand that
  * is not what the inline path takes, the function leaves through a guard (a
@@ -229,6 +231,11 @@ static bool float_constant(const Ctx * c, uint32_t index, int64_t * bits) {
 
 static bool use_load_ok(const Ctx * c, uint32_t constant);
 
+/** A string constant, as `PRINT_CONST` names one: its block is what the interpreter prints. */
+static bool string_constant(const Ctx * c, uint32_t index) {
+  return index < c->program->constant_count && c->program->constants[index].kind == GLTANG_CONST_STRING && c->program->constants[index].block;
+}
+
 /** Whether an instruction other than CALL is compiled inline, or is a deoptimization exit. */
 static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
   int64_t unused;
@@ -267,6 +274,15 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
       return a == GLTANG_CAST_TYPE_INTEGER || (a == GLTANG_CAST_TYPE_FLOAT && !c->raw_off);
     case GLTANG_OP_USE:
       return c->natives_on && use_load_ok(c, a);
+    // The output operations are calls of the interpreter's own functions: the two
+    // prints through the native table (so only where natives can be called), the
+    // clearing of the statement result as a call that is no GC point.
+    case GLTANG_OP_PRINT:
+      return c->natives_on;
+    case GLTANG_OP_PRINT_CONST:
+      return c->natives_on && string_constant(c, a);
+    case GLTANG_OP_CLEAR_RESULT:
+      return true;
     case GLTANG_OP_LOAD_GLOBAL:
       return a < c->program->global_count;
     case GLTANG_OP_FUNC:
@@ -311,6 +327,9 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_OR:
     case GLTANG_OP_RET:
     case GLTANG_OP_ATTR:
+    // A raw float printed is boxed by the exit and printed by the interpreter, so its
+    // text is the interpreter's and compiled code never boxes (AD-27).
+    case GLTANG_OP_PRINT:
       return d >= 1 && c->sk[d - 1] == KIND_F64;
     // `%` is integers only: with a raw operand the interpreter reports "not supported".
     case GLTANG_OP_MOD:
@@ -354,6 +373,8 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_FUNC:
     case GLTANG_OP_USE:
     case GLTANG_OP_JMP:
+    case GLTANG_OP_PRINT_CONST:
+    case GLTANG_OP_CLEAR_RESULT:
       return false;
     default:
       // Fail safe: any other opcode, which the compiler does not know the operands of,
@@ -393,6 +414,7 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
       break;
     case GLTANG_OP_NOT:
     case GLTANG_OP_ATTR:
+    case GLTANG_OP_PRINT:  // the operand is replaced by the print's value, null or an error
       set_stack_kind(c, (uint32_t)d - 1u, KIND_REF);
       break;
     case GLTANG_OP_NEG:
@@ -438,6 +460,8 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_AND:
     case GLTANG_OP_OR:
     case GLTANG_OP_RET:
+    case GLTANG_OP_PRINT_CONST:
+    case GLTANG_OP_CLEAR_RESULT:
       break;
     default:
       // An instruction that flows on with a stack effect this function does not know
@@ -821,6 +845,13 @@ static GLTANG_Result analyse_once(Ctx * c) {
       else switch (op) {
         case GLTANG_OP_POLL:
         case GLTANG_OP_LINE:
+        case GLTANG_OP_PRINT_CONST:
+        case GLTANG_OP_CLEAR_RESULT:
+          break;
+        case GLTANG_OP_PRINT:
+          // The value replaces the operand: depth unchanged.
+          if (d < 1) { return GLTANG_ERR_INTERNAL; }
+          c->cur[d - 1] = i;
           break;
         case GLTANG_OP_POP:
           if (d < 1) { return GLTANG_ERR_INTERNAL; }
@@ -1350,6 +1381,22 @@ static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_ATTR, args, 2, c->stack[d - 1u], d);
 }
 
+/**
+ * `PRINT`: the interpreter's print of the operand in slot `d - 1`, which its value (null,
+ * or the error a failed print makes) replaces. The operand is a value word: a raw float
+ * is the designed exit before this (`reads_raw`).
+ */
+static void emit_print(Ctx * c, uint32_t i, uint32_t d) {
+  GRJIT_Operand args[1] = {V(c->stack[d - 1u])};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d);
+}
+
+/** `PRINT_CONST k`: the interpreter's print of the constant's text; it pushes nothing, and its value is discarded as the interpreter discards it. */
+static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->program->constants[a].block)};
+  emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d);
+}
+
 static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
 
 /**
@@ -1512,6 +1559,19 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
     case GLTANG_OP_USE:
       emit_use(c, i, d, a);
+      break;
+
+    // The output operations: the thunks charge the two prints' fuel, as the interpreter
+    // charges an operation it runs; the clear is charged here, since it cannot leave.
+    case GLTANG_OP_PRINT:
+      emit_print(c, i, d);
+      break;
+    case GLTANG_OP_PRINT_CONST:
+      emit_print_const(c, i, d, a);
+      break;
+    case GLTANG_OP_CLEAR_RESULT:
+      add_fuel(c, cost);
+      call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_clear_result);
       break;
 
     case GLTANG_OP_LOAD_GLOBAL:

@@ -52,6 +52,11 @@ void gltang_jit_note_native_guard(GLTANG_Execution * exec) {
   exec->jit->refusal = GLTANG_REFUSAL_NATIVE_GUARD;
 }
 
+void gltang_jit_clear_result(GLTANG_Execution * exec) {
+  ++exec->jit_stats.result_clears;
+  gltang_vm_set_result(exec, GLTANG_V_NULL, false);
+}
+
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {
   if (!gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
     return 0;

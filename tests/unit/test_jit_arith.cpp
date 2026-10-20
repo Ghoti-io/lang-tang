@@ -119,7 +119,10 @@ TEST(JitArith, ALoopOfPlusMinusAndTimesOverARawFloatAndASmallIntegerAllocatesNot
     EXPECT_EQ(jit_long.heap_allocations, jit_short.heap_allocations) << body << ": the compiled loop allocates nothing per iteration";
     EXPECT_GT(plain_long.heap_allocations, plain_short.heap_allocations + 4000u) << body << ": the interpreter allocates a result per operation";
     EXPECT_EQ(jit_short.stats.deopts, jit_long.stats.deopts) << body << ": the exits do not grow with the loop";
-    EXPECT_EQ(jit_long.stats.deopts, kMain + 1u) << body << ": the one exit of the function is the print";
+    // Prints are compiled (spec-template-compiled story 1); a print of a raw float is still the
+    // designed exit that boxes it, so the function's one exit is this print of `s`.
+    EXPECT_EQ(jit_long.stats.deopts, kMain + 1u) << body << ": the one exit of the function is the print of the raw float";
+    EXPECT_EQ(jit_long.stats.exits_expected, 1u) << body << ": and it is the designed exit, the float boxed for the print";
     EXPECT_EQ(jit_long.stats.values_boxed, jit_short.stats.values_boxed) << body;
     EXPECT_EQ(jit_long.stats.conversion_errors, 0u) << body;
     std::printf("  arithmetic slope (%s): compiled allocations %llu at 200 and %llu at 5000; interpreted %llu and %llu\n", body,
@@ -277,9 +280,12 @@ TEST(JitArith, MixedIntegerAndFloatConvertTheIntegerAndKeepTheOrderOfTheOperands
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.compile_failures, 0u);
   // The first print is the only exit of each call; what it boxes is what was live: b, c, d, e, g, h and the
-  // operand slot. An exit earlier (at an operation) would have boxed fewer.
+  // operand slot. An exit earlier (at an operation) would have boxed fewer. Prints are compiled now
+  // (spec-template-compiled story 1), and this one still exits because its operand, b, is a raw float: the
+  // designed exit, the float boxed for the print.
   EXPECT_EQ(jit.stats.values_boxed, 4u * 7u) << "each call exited at its first print, with six locals and the operand raw";
   EXPECT_EQ(jit.stats.deopts, kMain + 4u);
+  EXPECT_EQ(jit.stats.exits_expected, 4u) << "each call's exit is the print of a raw float";
   EXPECT_NE(jit.raw.find("4.5-1.51.53.50.666667-1.5"), std::string::npos) << jit.raw;
 }
 

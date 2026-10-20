@@ -801,7 +801,11 @@ resume_loop:
       }
 
       case GLTANG_OP_PRINT: {
+        // A long print polls inside (its pacing): the frame there stands at the print,
+        // the state and identity compiled code's call of the same function carries.
         SYNC();
+        SAVE_AT_OP();
+        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
         GLTANG_Value r = gltang_vm_op_print(exec, S[sp - 1u]);
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -813,6 +817,8 @@ resume_loop:
 
       case GLTANG_OP_PRINT_CONST: {
         SYNC();
+        SAVE_AT_OP();
+        grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
         GLTANG_Value r = gltang_vm_print_constant(exec, program->constants[a].block);
         if (r == GLTANG_V_UNWIND) {
           goto unwound;

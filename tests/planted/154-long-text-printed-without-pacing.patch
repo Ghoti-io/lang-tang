@@ -1,0 +1,32 @@
+# 154 a compiled text longer than the pacing interval is printed without a poll
+# defect: the `PRINT_CONST` helper prints its text in pieces, each through a sink of its own, so no
+#   piece reaches GLTANG_POLL_BYTES: the runtime poll, and the work it charges, never happen
+# caught by: the large-print test (pacing polls, fuel and polls compared with the interpreter's,
+#   and the scope that must run out inside the text) (testJit_templates)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -183,8 +183,21 @@
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
+   ++exec->jit_stats.output_calls;
+   stand_at_the_print(exec, context);
+-  // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
+-  return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
++  /* planted: a second printer, in pieces too small to pace */
++  const GLTANG_StringBlock * s = (const GLTANG_StringBlock *)(uintptr_t)block;
++  const char * bytes = gltang_string_bytes(s);
++  const size_t length = (size_t)s->byte_length;
++  for (size_t done = 0; done < length;) {
++    size_t n = length - done < 1024u ? length - done : 1024u;
++    GLTANG_Sink sink;
++    gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
++    if (gltang_sink_text(&sink, bytes + done, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED) != GLTANG_ST_OK) {
++      break;
++    }
++    done += n;
++  }
++  exec->out->committed = exec->out->length;
++  return finished(exec, GLTANG_V_NULL, false);
+ }
+ 
+ /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */

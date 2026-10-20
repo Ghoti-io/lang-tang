@@ -75,11 +75,7 @@ static inline const GLTANG_JitFn * record_of(GLTANG_Execution * exec, const GLTA
 
 /** The context's guest stack: a context's is made when the engine registers and is never replaced, so the first hook to need it keeps it (for that context: a hook handed another one looks again). */
 static inline GRCORE_Stack * stack_of(GLTANG_Jit * jit, void * context) {
-  if (jit->stack_context != context) {
-    jit->stack = grcore_context_stack(context);
-    jit->stack_context = context;
-  }
-  return jit->stack;
+  return gltang_jit_stack_of(jit, context);
 }
 
 static uint32_t refuse_push(GLTANG_Jit * jit) {

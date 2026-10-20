@@ -1844,6 +1844,12 @@ breaks nothing as not caught. Observed:
 | 149 operation-without-the-host-flag | a type's operation runs with `in_host` clear | the host-function test (`testCustom`) | a setter called from the operation succeeds |
 | 150 error-operand-asked-of-the-type | an operator other than equality asks the type when the other operand is an error | the error-operand test (`testCustom`) | `shy() < (1 / 0)` is `Not supported`, and the log holds the call |
 | 151 element-equal-error-read-as-false | an error that an element's `equal` answers makes an array comparison false | the container-comparison error test (`testCustom`) | `[f] == [g]` is `false`, not the error |
+| 152 print-skips-its-fuel | the `PRINT` thunk adds no cost | the loop of prints (`testJit_templates`) | the fuel differs from the interpreter's |
+| 153 print-leaves-its-operand | the `PRINT` thunk's value is discarded, so the slot keeps the operand | the loop of prints (`testJit_templates`) | the function returns 99, not null |
+| 154 long-text-printed-without-pacing | the `PRINT_CONST` thunk prints in pieces through sinks of their own, none reaching the pacing interval | the large-print test (`testJit_templates`) | no pacing poll, less fuel, and the scope that must run out inside the text does not |
+| 155 print-position-not-stored | the call site stores no position before a print | the refused delivery and the large print (`testJit_templates`) | the error's origin is another line; the polls' identities differ |
+| 156 interpreted-print-not-at-the-print | the interpreter's prints leave the frame where the last poll left it | the frame differential over the output programs (`testObserver`, `Observer.ACompiledPrint*`) | the poll identity, `pc` and `sp` of a poll inside a long print differ from compiled code's |
+| 157 compiled-print-not-at-the-print | the print thunks leave the guest frame's identity at the last poll | the large-print test (`testJit_templates`) | the identity of a poll inside the print differs |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1851,9 +1857,11 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
+152 to 157 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk.
+
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 151 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 157 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
 runs the hundred and thirty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
@@ -2354,6 +2362,46 @@ interpreter goes on after it; the native ran once. Neither status counts toward 
 backend that refuses natives, or an execution whose table could not be made, leaves the sites as
 exits and counts them (`native_sites_unsupported`), never a fault.
 
+**The output operations (spec-template-compiled story 1, CAP-1).** `PRINT`, `PRINT_CONST` and
+`CLEAR_RESULT` were unconditional exits, and a function whose first operation is one of them was not
+compiled at all (the entry check). Template bodies are mostly these three, so a template's function 0
+was either declined or left compiled code at its first text, and templates gained nothing from the JIT.
+They are now calls of the interpreter's own functions, so there is one implementation of printing:
+`PRINT` and `PRINT_CONST` are `GRJIT_OP_CALL_NATIVE` to two more thunks of the table (`print`, which
+takes the value, and `print_const`, which takes the constant's string block), which call
+`gltang_vm_op_print` and `gltang_vm_print_constant`; `CLEAR_RESULT` is a call that is no GC point to
+`gltang_jit_clear_result`, which is `gltang_vm_set_result(exec, null, false)` (it enters a lost result
+in the error list, which is the execution's own memory, and nothing it does polls or touches the heap,
+so a frame state and a stack map would describe nothing it needs). Output, its capture, the rollback of
+a print that fails, the sink and its delivery (with `in_host` set, as interpreted), the pacing of a
+long print (`sink_pace`, a runtime poll per `GLTANG_POLL_BYTES`) and the error a failed print makes are
+therefore the interpreter's. Each thunk charges its operation's cost once, as the `use` thunk does, and
+the call site stores the instruction's position first (`emit_site`, the interpreter's `SYNC`), so an
+error's origin and a poll's location are the interpreter's. `PRINT` replaces its operand with the
+print's value (null, or the error of a print that failed: an error printed is swallowed and the value is
+null); `PRINT_CONST` pushes nothing and its value is dropped, as the interpreter drops it; `CLEAR_RESULT`
+touches no slot. A thunk's `GLTANG_V_UNWIND` (a pacing poll that stopped the run, a scope that ran out
+inside the text) leaves through the chain deopt with the state after the call, as a native's does, and
+what the print had appended is already rolled back. A print of a raw float is not given to the thunk:
+it is the designed exit that boxes the float (`reads_raw`), so its text is the interpreter's and compiled
+code never boxes (AD-27). The two prints compile only where natives can be called (`natives_on`, as
+`USE`); elsewhere they stay exits, counted as before. `CLEAR_RESULT` is a plain call and compiles
+everywhere. Neither thunk declares the re-enter flag: a sink may not re-enter guest code.
+
+*The frame at a poll inside a print.* A long print polls inside the call, and there the walk shows the
+compiled printer's frame at the print: `pc` the print's index, `sp` with its operand, and the poll
+identity of the site. The interpreter's `PRINT` and `PRINT_CONST` used to leave the guest frame's `pc`,
+`sp` and identity where the last guest poll had left them, so the two tiers showed different frames at
+the same poll, and so did the old exit at a print (the rebuild gives the frame the exit site's
+identity, which the interpreter then printed under). The interpreter's two prints now stand the frame
+at the print before they call (`SAVE_AT_OP` and `grcore_stack_set_identity`, what its `USE`, `ATTR` and
+native `CALL` do for the state), and the thunks set the guest frame's identity from the stored position,
+because a reader of the frame header (`grcore_context_poll_identity`) sees the guest frame and not the
+walk. Neither changes what a program prints, its fuel or its polls; it changes the frame a poll inside
+a print sees, in both tiers, to the print's own. The frame differential over the output programs
+(`output_cases`, testObserver) and the identity of every poll in `testJit_templates` are the gates
+(planted 156 and 157); 156 is in the interpreter, and only the JIT arm can see it.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
@@ -2392,8 +2440,9 @@ returns into it. The discard is applied after the entry's record is left.
 **What is compiled.** Inline: `POLL`, `LINE`, `POP`, `DUP`, `NULL`, `TRUE`,
 `FALSE`, `CONST` (a small integer or a float), `LOAD_LOCAL`, `STORE_LOCAL`,
 `LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `LT`, `LE`, `GT`, `GE`,
-`EQ`, `NE`, `CAST` (to int and to float), `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, and the
-library `USE`, `ATTR` and `CALL` described there.
+`EQ`, `NE`, `CAST` (to int and to float), `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, the
+library `USE`, `ATTR` and `CALL` described there, and the output operations `PRINT`, `PRINT_CONST` and
+`CLEAR_RESULT`.
 Each step mirrors the interpreter's own inline path: both operands carry the
 integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
 small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so
@@ -2402,7 +2451,7 @@ minimum-over-minus-one pair and the quotient's range (`SMALL_MIN / -1` is 2^59, 
 past it), and `MOD` guards a zero divisor; the operand of `NOT`, the jumps, `AND` and `OR`
 must be a boolean. An operation with a statically raw operand is a float operation
 (below). Everything else (indexing, attributes,
-slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `PRINT*`, `ITER_*`,
+slices, the `SET_*`, `STORE_GLOBAL`, `ADOPT`, `ARRAY`, `MAP`, `ITER_*`,
 `DISCARD`, `SET_RESULT`, a `CAST` to bool or to string, a `USE` or `ATTR` that is not a library load, `HALT` and any constant that is
 neither a small integer nor a float) is an unconditional exit at that operation. A tagged value is computed on through `GRJIT_OP_BITCAST`
 (a `REF` reinterpreted as an `I64`, shifted, added, tagged and reinterpreted back).

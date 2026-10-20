@@ -131,14 +131,17 @@ typedef enum GLTANG_JitRefusal {
 /**
  * The natives compiled code calls (runtime-jit's `CALL_NATIVE`), registered once
  * per execution in a table, in this order: the call of a library native with 0 to
- * 15 arguments (the callee is the first parameter), the load of a `use`d path and
- * the `.name` of a library.
+ * 15 arguments (the callee is the first parameter), the load of a `use`d path,
+ * the `.name` of a library, and the two output operations, `PRINT` (the value) and
+ * `PRINT_CONST` (the constant's string block).
  */
 enum {
   GLTANG_JIT_NATIVE_CALL0 = 0,   ///< ... up to GLTANG_JIT_NATIVE_CALL0 + 15.
   GLTANG_JIT_NATIVE_USE = 16,
   GLTANG_JIT_NATIVE_ATTR = 17,
-  GLTANG_JIT_NATIVE_COUNT = 18
+  GLTANG_JIT_NATIVE_PRINT = 18,
+  GLTANG_JIT_NATIVE_PRINT_CONST = 19,
+  GLTANG_JIT_NATIVE_COUNT = 20
 };
 /**
  * @brief The most native stack the thunks, the shared wrapper and the host function's own
@@ -265,6 +268,15 @@ void gltang_jit_retract_to(GLTANG_Execution * exec, size_t count);
 /** @brief Gives back the innermost extension if it is this run's and was made at `level` for `fword`. */
 void gltang_jit_retract_level(GLTANG_Execution * exec, uint64_t level, uint64_t fword);
 
+/** @brief The context's guest stack: a context's is made when the engine registers and is never replaced, so the first to need it keeps it (for that context: one handed another looks again). */
+static inline GRCORE_Stack * gltang_jit_stack_of(GLTANG_Jit * jit, void * context) {
+  if (jit->stack_context != context) {
+    jit->stack = grcore_context_stack(context);
+    jit->stack_context = context;
+  }
+  return jit->stack;
+}
+
 // The hooks (hooks.c), one set for every build.
 extern const GRJIT_CallHooks gltang_jit_hooks;
 
@@ -274,6 +286,13 @@ void gltang_jit_flush(GLTANG_Execution * exec);
 void gltang_jit_note_callee_guard(GLTANG_Execution * exec);
 /** @brief The same for the guard of a library call. No GC point. */
 void gltang_jit_note_native_guard(GLTANG_Execution * exec);
+/**
+ * @brief `CLEAR_RESULT` from compiled code: the interpreter's own
+ *   `gltang_vm_set_result(exec, null, false)`. No GC point and no poll: a lost result it
+ *   replaces is entered in the error list, which is the execution's own memory and not
+ *   the heap, and nothing it does polls.
+ */
+void gltang_jit_clear_result(GLTANG_Execution * exec);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
 

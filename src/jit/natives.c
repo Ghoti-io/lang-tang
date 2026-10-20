@@ -33,6 +33,8 @@
  * - The load of a `use` path and the `.name` of a library: the interpreter's
  *   `gltang_vm_resolve` and `gltang_vm_op_attr`, called as the interpreter calls
  *   them, so the value is the one it makes, whatever the library holds now.
+ * - `PRINT` and `PRINT_CONST`: the interpreter's `gltang_vm_op_print` and
+ *   `gltang_vm_print_constant`, so there is one implementation of printing.
  *
  * Each returns the value and a status: zero, or `GRJIT_NATIVE_UNWIND` for the
  * `GLTANG_V_UNWIND` an operation returns when a runtime poll ordered the run to
@@ -146,6 +148,60 @@ static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_
   return finished(exec, value, false);
 }
 
+// The output operations (spec-template-compiled story 1): `PRINT` and `PRINT_CONST`
+// call the interpreter's own functions, so output, its rollback, the sink, the pacing
+// of a large print and the error a failed print makes are the interpreter's. Neither
+// re-enters guest code: the sink runs inside with `in_host` set, as it does for the
+// interpreter, and may not re-enter.
+
+/**
+ * The guest frame of the compiled printer stands at the print, as the interpreter's
+ * frame does while its print runs: the identity a poll inside the print (its pacing)
+ * reads is the print's own (compiled code stored the offset before the call).
+ */
+static void stand_at_the_print(GLTANG_Execution * exec, void * context) {
+  GRCORE_Stack * stack = gltang_jit_stack_of(exec->jit, context);
+  GRCORE_FrameRef top = grcore_stack_top(stack);
+  if (top.offset) {
+    const uint64_t * slots = grcore_stack_slots(stack, top);
+    (void)grcore_stack_set_identity(stack, top, (GRCORE_PollIdentity){slots[GLTANG_F_FUNCTION], exec->current_offset, exec->engine});
+  }
+}
+
+static GRJIT_NativeResult thunk_print(void * context, uint64_t value) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
+  ++exec->jit_stats.output_calls;
+  stand_at_the_print(exec, context);
+  // The operand is in the call's frame state, as it is on the interpreter's operand
+  // stack while its PRINT runs: the value is replaced by the result, null or an error.
+  return finished(exec, gltang_vm_op_print(exec, value), false);
+}
+
+static GRJIT_NativeResult thunk_print_const(void * context, uint64_t block) {
+  GLTANG_Execution * exec = gltang_vm_execution_of(context);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
+  ++exec->jit_stats.output_calls;
+  stand_at_the_print(exec, context);
+  // The interpreter's PRINT_CONST keeps nothing of the value but an unwind.
+  return finished(exec, gltang_vm_print_constant(exec, (const GLTANG_StringBlock *)(uintptr_t)block), false);
+}
+
+/** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */
+static GRJIT_Result add_native(GRJIT_NativeTable * table, uint64_t address, const GRJIT_Type * params, size_t count, uint32_t expected) {
+  GRJIT_NativeDesc desc;
+  memset(&desc, 0, sizeof(desc));
+  desc.address = address;
+  desc.params = params;
+  desc.param_count = count;
+  desc.result = GRJIT_TYPE_REF;
+  desc.flags = GRJIT_NATIVE_STATUS;
+  desc.stack_bytes = GLTANG_JIT_NATIVE_STACK;
+  uint32_t id = 0;
+  GRJIT_Result r = grjit_native_table_add(table, &desc, &id);
+  return r == GRJIT_OK && id != expected ? GRJIT_ERR_INTERNAL : r;
+}
+
 GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTable ** out) {
   const uint64_t calls[16] = {
     (uint64_t)(uintptr_t)thunk_0, (uint64_t)(uintptr_t)thunk_1, (uint64_t)(uintptr_t)thunk_2, (uint64_t)(uintptr_t)thunk_3,
@@ -210,6 +266,14 @@ GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTabl
     if (r == GRJIT_OK && id != GLTANG_JIT_NATIVE_ATTR) {
       r = GRJIT_ERR_INTERNAL;
     }
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type print_params[1] = {GRJIT_TYPE_REF};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_print, print_params, 1, GLTANG_JIT_NATIVE_PRINT);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type print_const_params[1] = {GRJIT_TYPE_PTR};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_print_const, print_const_params, 1, GLTANG_JIT_NATIVE_PRINT_CONST);
   }
   if (r != GRJIT_OK) {
     grjit_native_table_free(table);

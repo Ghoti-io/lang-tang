@@ -1,0 +1,15 @@
+# 152 the compiled print charges no fuel
+# defect: the helper compiled code calls for `PRINT` does not add the operation's cost to the pending fuel
+# caught by: the loop of prints, whose fuel is compared with the interpreter's (testJit_templates)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -170,7 +170,7 @@
+ 
+ static GRJIT_NativeResult thunk_print(void * context, uint64_t value) {
+   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
++  /* planted: the print's own cost is not charged */
+   ++exec->jit_stats.output_calls;
+   stand_at_the_print(exec, context);
+   // The operand is in the call's frame state, as it is on the interpreter's operand

@@ -407,6 +407,47 @@ std::vector<Case> native_cases() {
   return cases;
 }
 
+/// The output operations in compiled code (spec-template-compiled story 1): `PRINT`,
+/// `PRINT_CONST` and `CLEAR_RESULT` are calls of the interpreter's own functions. A
+/// print longer than the pacing interval polls inside the call, where the frame of the
+/// compiled printer is seen at the print, and must be the interpreter's: the same pc,
+/// sp and slots. Template text, a print of an error, a refused delivery's rollback and
+/// a scope that runs out inside a long text are here too.
+std::vector<Case> output_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step) {
+    Case c;
+    c.name = "output/" + name;
+    c.source = source;
+    c.parts = std::move(parts);
+    c.step = step;
+    cases.push_back(c);
+  };
+  add("a loop of prints",
+      "function f(n) { i = 0; while (i < n) { r = print(i); print(\",\"); i = i + 1; } return i; }\n"
+      "for (j = 0; j < 12; j += 1) { f(4); }\nprint(f(25)); print(f(3));", {}, 13);
+  add("a loop of prints between pauses",
+      "function f(n) { i = 0; while (i < n) { r = print(i); print(\",\"); i = i + 1; } return i; }\n"
+      "for (j = 0; j < 12; j += 1) { f(4); }\nprint(f(25));", {}, 400);
+  add("a large print polls inside the compiled call",
+      "function f(s, n) { r = 0; i = 0; while (i < n) { r = print(s); print(\"|\"); i = i + 1; } return r; }\n"
+      "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\nfor (j = 0; j < 3; j += 1) { x = f(s, 2); } print(x);", {}, 1000000);
+  add("a print of an error and of a value with no text",
+      "function f(e, n) { i = 0; while (i < n) { r = print(e); q = print([1, e]); i = i + 1; } return r; }\n"
+      "for (j = 0; j < 3; j += 1) { x = f(1 / 0, 4); } print(x);", {}, 400);
+  add("template text with code between",
+      "use row; print(\"<ul>\"); for (i = 0; i < 5; i += 1) { print(row()); } print(\"</ul>\");",
+      {{"row", "<li><% if (1 < 2) { %>yes<% } else { %>no<% } %><% k = 0; while (k < 4) { k += 1; } %>-</li>", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}}, 400);
+  {
+    // A text longer than the pacing interval, in a template whose scope runs out inside it.
+    std::string text(20000, 'x');
+    add("a scope that runs out inside a long text",
+        "use big; print(\"[\"); r = big(); print(\"]\"); print(\"after\");",
+        {{"big", "a" + text + "b<% k = 0; %>" + text, 300, GLTANG_SCOPE_SEGMENTS, tt::Mode::Template}}, 23);
+  }
+  return cases;
+}
+
 /// Float programs (spec-runtime-float, CAP-5): +-0, +-inf, NaN, subnormals, the
 /// largest and smallest normal magnitudes, and integers mixed with floats,
 /// inside functions (which tier up) and at the top level. Their float slots and
@@ -669,6 +710,9 @@ std::vector<Case> all_cases() {
   for (Case & c : native_cases()) {
     cases.push_back(std::move(c));
   }
+  for (Case & c : output_cases()) {
+    cases.push_back(std::move(c));
+  }
   for (Case & c : float_carry_cases()) {
     cases.push_back(std::move(c));
   }
@@ -805,6 +849,28 @@ TEST(Observer, AllInstrumentsTogetherAlsoGiveTheSameTrace) {
     EXPECT_TRUE(same(c, plain, kPlain.label, everything, all.label));
   }
 }
+
+#ifdef GLTANG_WITH_JIT
+TEST(Observer, ACompiledPrintThatPollsInsideShowsTheInterpretersFrameAtThePrint) {
+  // The output programs alone, interpreter against compiled code, and the run is not
+  // blind: the prints ran compiled (and the large ones polled inside the compiled call,
+  // where the frame the walk shows is the compiled printer's, at the print).
+  GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
+  uint64_t output_calls = 0, unwinds = 0;
+  for (const Case & c : output_cases()) {
+    Observed plain = observe(c, kPlain);
+    Observed jit = observe(c, kJit);
+    EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving), kJitMoving.label));
+    output_calls += jit.jit.output_calls;
+    unwinds += jit.jit.native_status_unwinds;
+  }
+  if (jit_backend_present()) {
+    EXPECT_GT(output_calls, 100u) << "the prints of the output programs ran in compiled code";
+    EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled print";
+  }
+}
+#endif
 
 TEST(Observer, ATraceRecordsDepthIdentityLocationSlotsAndScopes) {
   Case c;
