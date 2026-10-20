@@ -1088,7 +1088,7 @@ code exits to the interpreter on a custom operand, as on any operand that fails
 its guard (story 10 compiles the dispatch). Finalizers, weak slots, pins and
 in-place byte access are story 7; module identity is stories 11 and 12.
 
-**Measured** (`notes/lang-tang/perf-history.md`, "Story 5").
+**Measured** (`notes/lang-tang/perf-history.md`, "Story 5 ... measured" and "... at the reviewed commit"). On the EVO-X2 an add that a type answers costs 118 ns where the interpreter's integer add costs 29 (4.1 times: a native activation record, a handle scope with two handles, the callback and a new instance, and the bracket is the larger part); an attribute read that a type answers costs 84 ns where a map's costs 48 (1.75 times); a constructor that makes an instance costs a native call and a 24-byte allocation (93 ns against 60). Paths that existed before are level: every existing case is within 1% of the commit before this story in instructions (the largest rise +0.21%) and the ten-run wall-clock A/B against it puts none past its spread + 2%. The first cut was not level (three cases over 1%: `gltang_vm_kind` no longer inlined, a kind switch's dispatch changed by an eleventh arm, and the execution struct past a malloc size class), which is why `custom` sits in the `default` arm of those switches and the struct keeps its size.
 
 ### The seed sequence and the generator per context
 
