@@ -85,6 +85,9 @@ GRCORE_Location gltang_vm_location(const GLTANG_Execution * exec) {
  */
 static void stand_at_the_op(GLTANG_Execution * exec) {
   exec->standing = false;
+  // The uncached lookup the entry into compiled code no longer makes (gltang_jit_stack_of): this
+  // runs only when a poll happens inside an operation, once per operation, and the cache is the
+  // JIT's, which a JIT=no build and an execution with the JIT off do not have.
   GRCORE_Stack * stack = grcore_context_stack(exec->context);
   GRCORE_FrameRef top = grcore_stack_top(stack);
   if (top.offset) {

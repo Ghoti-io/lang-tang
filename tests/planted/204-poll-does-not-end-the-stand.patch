@@ -1,0 +1,21 @@
+# 204 the poll that writes an operation's identity does not end its stand
+# defect: gltang_vm_native_poll writes the identity of the operation that stands and leaves
+#   `exec->standing` set. An operation that returns ends its stand itself, but an `ATTR` whose name
+#   unwound goes to `unwound` and no further, so in the interpreter the stand outlives a template call
+#   that stopped there, and the caller's next runtime poll outside a standing operation writes the
+#   caller's identity (the interpreter's twin of 199, on the one unwinding path; compiled code's helper
+#   always clears)
+# caught by: the scope that runs out inside an attribute's name, swept over memory budgets, which
+#   compares the identity of every poll (testJit_templates, JitTemplates.AScopeThatRunsOutInsideAStanding*)
+#
+--- a/src/vm/execution.c
++++ b/src/vm/execution.c
+@@ -84,7 +84,7 @@
+  * same offset), so later polls inside it find it written.
+  */
+ static void stand_at_the_op(GLTANG_Execution * exec) {
+-  exec->standing = false;
++  /* planted: the stand is not ended by the poll that wrote it */
+   // The uncached lookup the entry into compiled code no longer makes (gltang_jit_stack_of): this
+   // runs only when a poll happens inside an operation, once per operation, and the cache is the
+   // JIT's, which a JIT=no build and an execution with the JIT off do not have.

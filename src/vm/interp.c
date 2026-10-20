@@ -155,8 +155,8 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 // as compiled code's call of it reads (natives.c). The operation only says that it stands: the
 // identity is written by the runtime poll, if one happens inside it (gltang_vm_native_poll, from
 // the frame's function and `current_offset`, which SYNC has set to the operation), so an operation
-// that does not poll stores nothing. STOOD() ends it, right after the operation's call returns
-// (and `unwound` does, for a call that unwound before it).
+// that does not poll stores nothing. STOOD() ends it, right after the operation's call returns; a
+// poll that writes the identity ends it too, which is how an `ATTR` whose name unwound ends it.
 #define STAND_AT_OP() (exec->standing = true)
 #define STOOD() (exec->standing = false)
 #define PUSH(v) (S[sp++] = (v))
@@ -727,6 +727,11 @@ resume_loop:
               r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
               goto call_result;
             }
+            // The frame stands at the call before anything the call allocates can poll (the memory
+            // budget refusing the activation's storage): compiled code's exit at a template call
+            // leaves the rebuilt frame's identity at the call, and the interpreter's poll there
+            // must read the same.
+            grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
             uint32_t callee_program;
             if (!gltang_vm_program_index(exec, member->program, &callee_program)) {
               r = exec->roots[GLTANG_ROOT_OOM];
@@ -739,7 +744,6 @@ resume_loop:
             }
             const GLTANG_Function * top = &member->program->functions[0];
             SAVE();
-            grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
             // Before the callee's frame is pushed: what has been spent so far
             // belongs to the caller, so the fuel is flushed, and then the
             // callee's scope is opened at the top of the stack as it stands.
@@ -952,7 +956,9 @@ resume_loop:
   }
 
 unwound:
-  STOOD();  // an operation that stood and unwound inside (or, for ATTR, in making its name)
+  // No STOOD() here: every unwind of a standing operation came from a runtime poll inside it, and
+  // that poll has already written the identity and ended the stand (gltang_vm_native_poll); an
+  // unwind out of a nested run leaves through the operation's own STOOD() after its call.
   gltang_vm_flush_fuel(exec);
   if (exec->act != exec->run_base_act && exec->act->policy != GLTANG_SCOPE_PAUSE
       && grcore_budget_scope_exhausted(stack, (GRCORE_BudgetScope){exec->act->scope_id})) {

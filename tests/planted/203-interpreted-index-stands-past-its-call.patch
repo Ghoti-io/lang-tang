@@ -1,0 +1,19 @@
+# 203 the interpreter's index still stands after its call has returned
+# defect: the interpreter's `INDEX` does not end its stand (STOOD), so the next runtime poll outside a
+#   standing operation (the memory budget refusing a string constant) writes the constant's position as
+#   the frame's identity, where compiled code's helper writes nothing (the twin of 202; only the JIT
+#   arm sees it)
+# caught by: the memory sweep after a short standing operation, which compares the identity of every
+#   poll with compiled code's (testJit_templates, JitTemplates.AStandingOperationThatDidNotPoll*)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -510,7 +510,7 @@
+         SAVE_AT_OP();
+         STAND_AT_OP();
+         GLTANG_Value r = gltang_vm_op_index(exec, c, i);
+-        STOOD();
++        /* planted: the index still stands after its call */
+         if (r == GLTANG_V_UNWIND) {
+           goto unwound;
+         }

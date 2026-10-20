@@ -1,0 +1,19 @@
+# 202 a compiled index still stands after its call has returned
+# defect: the `INDEX` helper does not clear `exec->standing`, so a short index that did not poll leaves
+#   the stand set, and the next runtime poll outside a standing operation (the memory budget refusing a
+#   string constant) writes the constant's position as the frame's identity, where the interpreter
+#   writes nothing
+# caught by: the memory sweep after a short standing operation, which compares the identity of every
+#   poll with the interpreter's (testJit_templates, JitTemplates.AStandingOperationThatDidNotPoll*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -253,7 +253,7 @@
+   // A string's grapheme is a substring, paced by its bytes.
+   exec->standing = true;
+   GLTANG_Value result = gltang_vm_op_index(exec, container, index);
+-  exec->standing = false;
++  /* planted: the index still stands after its call */
+   return finished(exec, result, false);
+ }
+ 

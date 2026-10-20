@@ -1849,8 +1849,8 @@ breaks nothing as not caught. Observed:
 | 154 long-text-printed-without-pacing | the `PRINT_CONST` thunk prints in pieces through sinks of their own, none reaching the pacing interval | the large-print test (`testJit_templates`) | no pacing poll, less fuel, and the scope that must run out inside the text does not |
 | 155 print-position-not-stored | the call site stores no position before a print | the refused delivery and the large print (`testJit_templates`) | the error's origin is another line; the polls' identities differ |
 | 158 clear-result-skips-its-fuel | the compiled `CLEAR_RESULT` adds no cost | the template whose first operation is text (`testJit_templates`) | the fuel differs from the interpreter's |
-| 156 interpreted-print-not-at-the-print | the interpreter's prints leave the frame where the last poll left it | the frame differential over the output programs (`testObserver`, `Observer.ACompiledPrint*`) | the poll identity, `pc` and `sp` of a poll inside a long print differ from compiled code's |
-| 157 compiled-print-not-at-the-print | the print thunks leave the guest frame's identity at the last poll | the large-print test (`testJit_templates`) | the identity of a poll inside the print differs |
+| 156 interpreted-print-not-at-the-print | the interpreter's prints neither save their position in the frame nor stand, so a poll inside one writes no identity | the frame differential over the output programs (`testObserver`, `Observer.ACompiledPrint*`) | the poll identity, `pc` and `sp` of a poll inside a long print differ from compiled code's |
+| 157 compiled-print-not-at-the-print | the print thunks do not stand, so a poll inside a print writes no identity and reads the last poll's | the large-print test (`testJit_templates`) | the identity of a poll inside the print differs |
 | 159 halt-skips-its-fuel | the compiled `HALT` returns without adding its cost | the warm template, and every test whose fuel is compared (`testJit_templates`) | the fuel differs from the interpreter's |
 | 160 halted-return-counted-as-an-exit | the entry charges a return of the halted word to the function as a counted exit | the warm template called a hundred times (`testJit_templates`) | its function 0 has counted exits and is discarded |
 | 161 set-result-skips-the-lost-result | the `SET_RESULT` helper stores the result and skips the error list's rules | the error result a later statement replaces (`testJit_templates`) | no discarded record, against the interpreter's one |
@@ -1870,6 +1870,7 @@ breaks nothing as not caught. Observed:
 | 175 compiled-index-identity-not-set | the `INDEX` thunk does not stand | the long operations' grapheme index (`testJit_templates`) | the identity of a poll inside the substring differs |
 | 176 add-tests-only-its-left-operand | the slow path of a compiled `+` tests only its left operand for a host-defined value | the host-defined operand's "right of +" row (`testJit_templates`) | f's counted exits are 0, not 3, and the helper is called |
 | 177 apply-kinds-misses-index-and-slice | `apply_kinds` has no entry for `INDEX` and `SLICE` | the opcode policy over both kind tables (`testJit_floats`) | the two opcodes flow on with no known effect on the kinds |
+| 178 interpreter-stands-at-every-operator (retired) | the interpreter stood at a binary operator on two numbers too | was the memory sweep after number operators (`testJit_templates`) | retired by story 4b: a stand lasts only its operation's call and writes nothing unless a poll happens inside it, and an operator of two numbers never polls inside, so the defect cannot reach a later poll; run once more and not caught, as expected, then removed |
 | 179 literal-elements-not-live | a literal's elements are left out of the frame state of its allocating call and stored from plain-word copies | the literal of fresh strings under torture, verify and a moving stack (`testJit_templates`) | the strings read back differ from the interpreter's |
 | 180 out-of-range-constant-cast-folded | a cast to int of a float constant is folded whatever its range | the corpus scripts of out-of-range constant casts (`testJit_templates`) | the output and error list differ from the interpreter's |
 | 181 compiled-cast-to-string-not-at-the-cast | the `CAST` thunk does not stand at a cast to string | the cast to string of a large array (`testJit_templates`) | the identity of a poll inside the rendering differs |
@@ -1889,10 +1890,13 @@ breaks nothing as not caught. Observed:
 | 195 bench-template-top-level-entry-forgotten | the template policy leaves out the top level's entry at a threshold of one | `bench --smoke --only steady-template-rows-compiled-per-row`: entries into compiled code exactly | the harness aborts |
 | 196 bench-template-box-exit-counted | the template policy takes a designed box exit for an exit that counts | `bench --smoke --only steady-template-float-print-compiled-warm-call`: expected and counted exits exactly | the harness aborts |
 | 197 bench-template-discard-cap-off-by-one | the template policy expects a template whose exits count to be entered nine times before its discard, not eight | `bench --smoke --only steady-template-float-label-compiled-warm-call`: entries and counted exits exactly | the harness aborts |
-| 198 poll-inside-an-operation-reports-the-last-poll | the runtime poll does not write the identity of the operation that stands, on either tier | the poll identities located to their lines, each tier on its own (`testJit_templates`, `JitTemplates.APollInsideALongOperation*`) | no poll's identity names the concatenation's line (the tiers still agree) |
-| 199 compiled-print-stands-past-its-call | the `PRINT_CONST` thunk does not clear `exec->standing` | the large-print test (`testJit_templates`) | a later poll in an operation that does not stand writes an identity the interpreter's frame never holds |
+| 198 poll-inside-an-operation-reports-the-last-poll | the runtime poll does not write the identity of the operation that stands, on either tier | the poll identities located to their lines, each tier on its own (`testJit_templates`, `JitTemplates.APollInsideALongOperation*`, the interpreter's in both arms) | no poll's identity names the concatenation's line (the tiers still agree) |
+| 199 compiled-print-stands-past-its-call | the `PRINT_CONST` thunk does not clear `exec->standing` | the large-print test's first program, whose short `print("|")` in f leaves the stand set (`testJit_templates`) | a later poll in an operation that does not stand writes an identity the interpreter's frame never holds |
 | 200 entry-extends-no-single-raw-float | the entry extends the reservation only for a function with more than one raw float at a site | the reservation's capacity across compiled calls and a nested entry (`testJit_floats`) | the capacity at the caller's polls differs, or a rebuild is refused |
 | 201 entry-reads-no-single-argument | the entry reads the guest frame's parameters only for a function with more than one | the fuel-parity test (`testJit`) | a one-parameter function runs compiled with null for its argument |
+| 202 compiled-index-stands-past-its-call | the `INDEX` thunk does not clear `exec->standing` | the memory sweep after a short standing operation (`testJit_templates`, `JitTemplates.AStandingOperationThatDidNotPoll*`) | the refusal's poll writes the constant's position in compiled code only |
+| 203 interpreted-index-stands-past-its-call | the interpreter's `INDEX` has no `STOOD()` | the memory sweep after a short standing operation (`testJit_templates`) | the refusal's poll writes the constant's position in the interpreter only |
+| 204 poll-does-not-end-the-stand | the runtime poll writes the standing operation's identity and leaves the flag set | the scope that runs out inside an attribute's name, swept over memory budgets (`testJit_templates`, `JitTemplates.AScopeThatRunsOutInsideAStanding*`) | in the interpreter the stand outlives the template call that stopped in it, and the caller's next poll writes an identity compiled code's run does not |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1900,14 +1904,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 201 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 204 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and eighty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the hundred and ninety-two that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2661,19 +2665,22 @@ which a short template pays on every call.
 *Position only at a poll.* An operation that may poll partway (a print, a concatenation or repetition
 past the small-integer path, `INDEX`, `SLICE`, every `ATTR`, a cast to string, a copying `ADOPT`) now
 only says that it stands: `exec->standing` is set before its call and cleared after it, in the
-interpreter (`STAND_AT_OP` and `STOOD`, and `unwound` for a call that unwound) and in its thunk. The
+interpreter (`STAND_AT_OP` and `STOOD`) and in its thunk. The
 runtime poll (`gltang_vm_native_poll`, which every pacing poll, refused allocation and host-callback poll
 goes through) writes the identity when, and only when, a poll happens inside a standing operation: the
 top guest frame, which is the operation's (the interpreter's frame, or the guest frame of the compiled
 function calling the thunk), at `current_offset`, which the interpreter's `SYNC` and compiled code's
-call site (`emit_site`) have set to the operation. It is written once per operation (the flag is
-cleared), since nothing else writes that frame's identity while the operation runs. A nested run (a
+call site (`emit_site`) have set to the operation. It is written once per operation (the poll clears
+the flag), since nothing else writes that frame's identity while the operation runs. That clear is
+also what ends the stand of an operation that unwound: every unwind out of a standing operation comes
+from a runtime poll inside it, so the interpreter's `unwound` needs no clear of its own (an `ATTR`
+whose name unwound never reaches its `STOOD()`). A nested run (a
 host callback inside the operation re-entering guest code) saves and clears the flag for its own frames
 and puts it back (`nested.c`), so a poll inside the nested run never writes the caller's identity over
-its own frame. An operation that does not poll stores nothing beyond the frame state it already
-stored. The interpreter's `SAVE_AT_OP` (two plain stores of `pc` and `sp` into its own frame, which
-the frame differential reads at a poll) stays: it costs no call, and the walk reads it where compiled
-code's frame state is the call site's.
+its own frame. What every standing operation still pays, on every run of it, is the flag's set and
+clear (two plain stores, in both tiers) and, in the interpreter, `SAVE_AT_OP` (two plain stores of `pc`
+and `sp` into its own frame, which the frame differential reads at a poll and compares with compiled
+code's call-site frame state); only the identity write, the call into runtime-core, moved to the poll.
 
 What a poll sees changes in one way. A stood operation used to leave its identity in the frame after
 it, so a later poll that reads the identity without writing it (the memory budget refusing an
@@ -2686,7 +2693,31 @@ still stands, for a poll inside its own call. Output, fuel, the number of polls 
 poll are unchanged across tiers (the frame differential, the template and script corpora at threshold
 1, and the identity of every poll compared in `testJit_templates`), and a new test locates every poll's
 identity to its line on each tier on its own, which a comparison of the tiers cannot do: a poll inside
-an operation that reported the last poll before it on both tiers would agree (planted 198).
+an operation that reported the last poll before it on both tiers would agree (planted 198). Its
+interpreter half runs in the JIT=no arm too, since the poll that writes the identity is shared. A
+second sweep puts a short standing operation (an index, a slice, a cast to string, a copying `ADOPT`, a
+retag, a render) before a string constant the memory budget refuses, so that a stand left set after
+its operation would make the refusal's poll write an identity on one tier only (planted 202 and 203);
+a third stops a template's scope at a refusal inside an attribute's name, the one way a standing
+operation unwinds in the interpreter without returning (planted 204).
+
+The second sweep found two differences between the tiers that were there before this story too. The
+compiled `ATTR` held its container on the execution's temp stack while it made the name, and the first
+push onto that stack allocates its storage, which the interpreter's `ATTR` (whose container stays on the
+operand stack) never does: a memory budget could then refuse the name in compiled code and not in the
+interpreter (`s.html` at one budget: the interpreter `null` with three polls, compiled code an error and
+four). The container is now held in a root the execution already has (`GLTANG_ROOT_HELD`), so the
+compiled `ATTR` allocates nothing the interpreter's does not. And the interpreter's template call set
+its frame's identity only after the activation's storage was allocated, where compiled code's exit at
+the call has already left the rebuilt frame at the call, so a refusal of that storage was reported at
+the call in compiled code and at the last poll in the interpreter; the interpreter now stands at the
+call first.
+
+The sweep after operators of two numbers (`JitTemplates.ANumberOperator*`) lost its planted defect with
+178: what it states (an operator of two numbers leaves the poll identity alone on both tiers) now
+holds by construction, since such an operator stands nowhere (`gltang_vm_binary_may_pace`) and any
+stand ends with its operation. The second sweep and planted 202 to 204 guard the ending; the number
+sweep stays as the requirement, with no defect of its own.
 
 *The entry.* Per entry from the interpreter, `gltang_jit_enter` paid, besides the call: the stack
 looked up through runtime-core (`grcore_context_stack`, now the execution's cached `gltang_jit_stack_of`,
@@ -2699,9 +2730,13 @@ instructions, about 450 of the entry's remaining 580) and `grjit_code_call`'s ow
 record is AD-17's (every crossing between the interpreter and compiled code records one) and is not
 removed here; making it cheaper is a change to runtime-core, raised and not made.
 
-Measured by instructions (callgrind, `--toggle-collect` on the case function, `bench --smoke --only
-<row>`, two runs of 2,401 calls each, the whole case divided by 4,802 calls, so it includes each run's
-setup and compilation; local, host GCC 14.2.0, `-O2 -g`, against `.local-template-compiled/`):
+Measured by instructions: `valgrind --tool=callgrind --smc-check=all-non-file
+--toggle-collect=<case function> build/linux/release/apps/bench/bench --smoke --only <row>`, the case
+functions `steady_template_interpreted_warm`, `steady_template_compiled_warm`,
+`steady_template_rows_interpreted` and `steady_template_rows_compiled`, each two runs of 2,401 template
+calls; the figure is the whole case divided by 4,802 calls, so it includes each run's setup and
+compilation. Local, deterministic, compiled by the host's GCC 14.2.0 (`-O2 -g`), with runtime-core
+170daf8; the GCC 16 figures, in time, are story 5's:
 
 | row | `5d280d8` | position at a poll | and the entry |
 |---|---|---|---|
@@ -2710,6 +2745,10 @@ setup and compilation; local, host GCC 14.2.0, `-O2 -g`, against `.local-templat
 | steady-template-rows-interpreted-per-row | 29,351 | 27,570 | 27,570 |
 | steady-template-rows-compiled-per-row | 31,969 | 28,397 | 28,213 |
 
+Measured again after the review's fixes, against runtime-core c1bd859 (its story 4c, a cheaper
+activation record, installed in between), the four rows are 7,197, 7,753, 26,066 and 26,838; that
+difference is 4c's and the review's together and is not split here.
+
 Compiled calls are still more instructions than interpreted ones on these rows; what is left is the
 activation record and the per-op costs both tiers share (`gltang_vm_execution_of` in every thunk, about
 29 instructions, is runtime-core's slot lookup). Story 5 measures time.
@@ -2717,10 +2756,12 @@ activation record and the per-op costs both tiers share (`gltang_vm_execution_of
 Rejected: keeping the old residue (a stood identity that outlives its operation) and writing it lazily,
 which would need every other writer of a frame's identity (a guest poll, a call, a push, a pop, a
 rebuild) to retire the pending one, for no reader that needs it; and making `SAVE_AT_OP` lazy too,
-which would trade two stores for three. Planted 198 to 201 gate it: the identity not written at a poll
-inside an operation that stands (both tiers), a compiled text that still stands after its call, an
-entry that extends the reservation only for more than one raw float, and an entry that reads no single
-argument.
+which would trade two stores for three. Planted 198 to 204 gate it: the identity not written at a poll
+inside an operation that stands (both tiers), a compiled text and a compiled index that still stand
+after their calls, the interpreter's index likewise, a poll that writes the identity and leaves the
+stand set, an entry that extends the reservation only for more than one raw float, and an entry that
+reads no single argument. The entry's extension allocates and comes before the reference to the code
+is taken, so the payload is read again from that reference.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

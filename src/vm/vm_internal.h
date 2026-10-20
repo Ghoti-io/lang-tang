@@ -370,7 +370,11 @@ struct GLTANG_NativeCall {
 /** @brief Where the roots live in GLTANG_Execution::roots. */
 #define GLTANG_ROOT_OOM 0u
 #define GLTANG_ROOT_RANDOM 1u
-#define GLTANG_ROOT_FIXED 2u
+/// The container a compiled `ATTR` holds while it makes the attribute's name (natives.c, attribute()):
+/// a root the execution already has, so holding it allocates nothing the interpreter's `ATTR`, whose
+/// container stays on the operand stack, does not. Null outside that call.
+#define GLTANG_ROOT_HELD 2u
+#define GLTANG_ROOT_FIXED 3u
 
 /** @brief An entry of the error list, and the chain of template calls above it. */
 typedef struct GLTANG_ErrorRecord {

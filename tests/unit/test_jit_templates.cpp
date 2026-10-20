@@ -48,8 +48,9 @@
 // small-integer range and an exit outside it.
 //
 // Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167, 169 to
-// 176, 179 to 191, 198 and 199 here (173, 183, 185 and 191 are the interpreter's, seen only by the JIT
-// arm; 198 is in the runtime poll both tiers share, and only a test of each tier on its own sees it),
+// 176, 179 to 191, 198, 199 and 202 to 204 here (173, 183, 185, 191 and 203 are the interpreter's, seen
+// only by the JIT arm; 198 and 204 are in the runtime poll both tiers share, and only a test of each tier
+// on its own sees 198, whose interpreter half runs in the JIT=no arm too),
 // 168 here under relocation torture, 177 in testJit_floats (the opcode policy) and 156 in
 // testObserver (the frame differential over the output programs).
 
@@ -68,6 +69,81 @@
 #include <vector>
 
 using namespace jt;
+
+namespace {
+
+// One long operation a line, each past the pacing interval, so that every poll inside one names
+// that line and nothing else on it polls (line 3's constant is made by a call that does not stand,
+// so the poll that makes it names whatever was written last, and is not counted): a concatenation,
+// a slice, a print, the index of one grapheme of 6001 bytes, a retag, a render, a cast to string
+// and a copying `ADOPT`. Lines 1 and 2 build the string and the array, polling at their loops'
+// back-edges and inside their concatenations; line 12's short operations poll nowhere.
+std::string long_operations() {
+  std::string grapheme = "e";
+  for (int k = 0; k < 3000; ++k) {
+    grapheme += "\xcc\x81";  // U+0301, combining acute accent
+  }
+  return "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\n"
+         "a = [1, 2, 3, 4]; for (k = 0; k < 10; k += 1) { a = a + a; }\n"
+         "g = \"" + grapheme + "\";\n"
+         "x = s + s;\n"
+         "y = x[1:40000:2];\n"
+         "print(y);\n"
+         "c = g[0];\n"
+         "h = s.html;\n"
+         "r = h.render;\n"
+         "w = a as string;\n"
+         "m = [a];\n"
+         "z = \"<\" + \"li\"; print(z); q = z[0];\n";
+}
+
+/**
+ * Runs long_operations() at `threshold` (0: the interpreter) with a poll handler that makes every
+ * poll take the slow path, and requires the polls inside each long operation to name its line.
+ * An operation that may poll partway writes nothing until a poll happens inside it, and that poll
+ * then writes the operation's identity (story 4b, gltang_vm_native_poll). The tests that compare
+ * the two tiers cannot see a poll that reports an earlier position on both of them (the identity
+ * never written, so the frame still holds the last poll's); this reads each tier on its own.
+ */
+void expect_polls_at_their_operations(long threshold, GLTANG_JitStats * stats) {
+  const std::string source = long_operations();
+  Compiled page(source, Mode::Script, "positions.tang");
+  ASSERT_TRUE(page.ok()) << page.error.message;
+  tt::Config config;
+  config.jit_threshold = threshold;
+  Context context(page.program, config);
+  ASSERT_TRUE(context.ok());
+  Script script;
+  ASSERT_TRUE(script.attach(context.context));
+  ASSERT_TRUE(context.execute());
+  std::map<int, uint64_t> by_line;
+  for (const GRCORE_PollIdentity & id : script.identities) {
+    int line = 0;
+    ASSERT_EQ(gltang_program_locate(page.program, id.function, id.offset, &line), GLTANG_OK) << id.function << "/" << id.offset;
+    ++by_line[line];
+  }
+  const char * const what[] = {"", "the string's loop (the control)", "the array's loop (the control)", "",
+      "the concatenation of 40960 bytes", "the slice", "the print of 20000 bytes", "the index of the long grapheme",
+      "the retag", "the render", "the cast to string", "the copying ADOPT"};
+  EXPECT_GE(by_line[1], 11u) << "threshold " << threshold << ": " << what[1];
+  EXPECT_GE(by_line[2], 10u) << "threshold " << threshold << ": " << what[2];
+  EXPECT_GE(by_line[4], 10u) << "threshold " << threshold << ": " << what[4];
+  for (int line = 5; line <= 11; ++line) {
+    EXPECT_GE(by_line[line], 1u) << "threshold " << threshold << ": no poll names line " << line << ", " << what[line];
+  }
+  EXPECT_EQ(by_line[12], 0u) << "threshold " << threshold << ": short operations, no poll inside";
+  if (stats) {
+    *stats = context.jit_stats();
+  }
+}
+
+}  // namespace
+
+TEST(JitTemplates, APollInsideALongOperationReportsThatOperationsOwnPositionInTheInterpreter) {
+  // Both arms run this, the JIT=no arm included: the interpreter's half of planted 198, whose
+  // defect is in the runtime poll both tiers share.
+  expect_polls_at_their_operations(0, nullptr);
+}
 
 #ifdef GLTANG_WITH_JIT
 
@@ -981,43 +1057,16 @@ TEST(JitTemplates, ALongConcatenationAndALongSlicePollAsOftenAndAScopeThatRunsOu
   }
 }
 
-TEST(JitTemplates, APollInsideALongOperationReportsThatOperationsOwnLineOnEachTier) {
+TEST(JitTemplates, APollInsideALongOperationReportsThatOperationsOwnPositionInCompiledCode) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // An operation that may poll partway records nothing until a poll happens inside it, and that
-  // poll then writes the operation's identity (story 4b: gltang_vm_native_poll, for an operation
-  // that stands). The tests above compare the two tiers, which cannot see a poll inside an
-  // operation that reports an earlier one on both of them (the identity was never written, so the
-  // frame still holds the last poll's): here each poll's identity is located to its line, on each
-  // tier on its own. Line 1's loop polls at its back-edges and inside its concatenations; lines 2
-  // to 4 poll only inside their long concatenation, slice and print. A short operation has no
-  // poll to report it, so no identity names line 5.
-  const std::string source =
-      "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\n"
-      "x = s + \"|\" + s;\n"
-      "y = x[1:40000:2];\n"
-      "print(y);\n"
-      "z = \"<\" + \"li\"; print(z); w = z[0];\n";
-  tt::Compiled page(source, Mode::Script, "jit.tang");
-  ASSERT_TRUE(page.ok());
-  for (long threshold : {0L, 1L}) {
-    Outcome out = run(scenario(source), threshold);
-    ASSERT_TRUE(out.finished) << "threshold " << threshold;
-    std::map<int, uint64_t> by_line;
-    for (const GRCORE_PollIdentity & id : out.identities) {
-      int line = 0;
-      ASSERT_EQ(gltang_program_locate(page.program, id.function, id.offset, &line), GLTANG_OK) << id.function << "/" << id.offset;
-      ++by_line[line];
-    }
-    EXPECT_GE(by_line[1], 11u) << "threshold " << threshold << ": the loop's back-edges (the control)";
-    EXPECT_GE(by_line[2], 10u) << "threshold " << threshold << ": the polls inside the concatenation of 40961 bytes";
-    EXPECT_GE(by_line[3], 5u) << "threshold " << threshold << ": the polls inside the slice";
-    EXPECT_GE(by_line[4], 2u) << "threshold " << threshold << ": the polls inside the print of 20480 bytes";
-    EXPECT_EQ(by_line[5], 0u) << "threshold " << threshold << ": short operations, no poll inside";
-    if (threshold == 1) {
-      EXPECT_EQ(out.stats.deopts, 0u) << "every operation ran compiled";
-      EXPECT_GE(out.stats.value_calls, 4u);
-    }
-  }
+  // The compiled tier on its own (the interpreter's is the test of the same name outside the JIT
+  // arm, which runs in both arms): every long operation runs compiled, and every poll inside one
+  // names its line, which holds no other operation that polls.
+  GLTANG_JitStats stats = {};
+  expect_polls_at_their_operations(1, &stats);
+  EXPECT_EQ(stats.deopts, 0u) << "every operation ran compiled";
+  EXPECT_GE(stats.value_calls, 8u);
+  EXPECT_GE(stats.output_calls, 1u);
 }
 
 TEST(JitTemplates, AStringsIndexAndSliceAreTheInterpretersGraphemesInCompiledCode) {
@@ -1172,9 +1221,11 @@ TEST(JitTemplates, ANumberOperatorTheInterpreterRunsSlowAndCompiledCodeInlineLea
   // allocation, made by a call that stands nowhere) must read the same on both tiers. Story 3 kept the
   // interpreter from standing at an operator of two numbers (gltang_vm_binary_may_pace) because a
   // stand then outlived its operation; since story 4b a stand lasts only the operation's call and
-  // writes nothing unless a poll happens inside it, so that defect (planted 178) is retired, and this
-  // sweep stays as the requirement it states. Swept over memory budgets from below the run's need to
-  // above it.
+  // writes nothing unless a poll happens inside it, so that defect (planted 178) is retired. What this
+  // states now holds by construction (such an operator stands nowhere, and any stand ends with its
+  // operation); the ending is guarded by the sweep after a short standing operation and by the scope
+  // that runs out inside an attribute's name (planted 202 to 204), and this sweep has no planted
+  // defect of its own. Swept over memory budgets from below the run's need to above it.
   Scenario sc = scenario("x = 7; y = x * 3; w = x / 2 + x % 3; s = \"abcdefghijklmnopqrstuvwxyz0123456789\"; print(s); print(y + w);\n");
   sc.memory_reserve = 0;
   Outcome measured = run(sc, 0);
@@ -1195,6 +1246,84 @@ TEST(JitTemplates, ANumberOperatorTheInterpreterRunsSlowAndCompiledCodeInlineLea
   }
   EXPECT_GE(kinds.size(), 2u) << "the sweep crossed the budget the constant needs";
   EXPECT_GE(refused_polls, 1u) << "some budget made the refusal poll, whose identity was compared";
+}
+
+TEST(JitTemplates, AStandingOperationThatDidNotPollLeavesNoIdentityForALaterRefusedAllocation) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // An operation that may poll partway stands only while its own call runs (story 4b): a short
+  // one, which does not poll, must leave the frame's identity as it found it on both tiers. Each
+  // program puts such an operation (a short index, slice, cast to string, copying ADOPT, retag and
+  // render) before a string constant whose allocation the memory budget refuses, made by a call
+  // that stands nowhere, and the refusal's poll reads the frame's identity without writing it. A
+  // stand left set after its operation (a missing clear, on either tier) would make that poll write
+  // the constant's position, which the other tier does not. Swept over memory budgets from below
+  // each run's need to above it.
+  const std::string constant = "t = \"abcdefghijklmnopqrstuvwxyz0123456789\"; print(t); ";
+  const std::vector<std::string> programs = {
+      "s = \"abcdef\"; c = s[1]; " + constant + "print(c);\n",
+      "s = \"abcdef\"; c = s[1:3]; " + constant + "print(c);\n",
+      "a = [1, 2]; c = a as string; " + constant + "print(c);\n",
+      "a = [1, 2]; m = [a]; " + constant + "print(m.size);\n",
+      "s = \"abcdef\"; c = s.html; " + constant + "print(c);\n",
+      "s = \"abcdef\"; c = s.render; " + constant + "print(c);\n",
+  };
+  for (const std::string & source : programs) {
+    Scenario sc = scenario(source);
+    sc.memory_reserve = 0;
+    Outcome measured = run(sc, 0);
+    ASSERT_TRUE(measured.finished) << source;
+    Outcome compiled = run(sc, 1);
+    EXPECT_EQ(compiled.stats.deopts, 0u) << source;
+    EXPECT_GE(compiled.stats.value_calls, 2u) << source << ": the standing operation and the constant, compiled";
+    std::set<std::string> kinds;
+    size_t refused_polls = 0;
+    for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+      Scenario tight = sc;
+      tight.memory_bytes = budget;
+      Outcome plain, jit;
+      expect_same(tight, &plain, &jit);
+      ASSERT_FALSE(HasFailure()) << source << "memory " << budget;
+      kinds.insert(plain.key());
+      refused_polls += plain.polls > measured.polls ? 1u : 0u;
+    }
+    EXPECT_GE(kinds.size(), 2u) << source << ": the sweep crossed the budget the constant needs";
+    EXPECT_GE(refused_polls, 1u) << source << ": some budget made the refusal poll, whose identity was compared";
+  }
+}
+
+TEST(JitTemplates, AScopeThatRunsOutInsideAStandingOperationLeavesNoStandForTheCaller) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A template with a scope of one unit of fuel, which it has spent by its first poll after its
+  // entry, swept over memory budgets: at some of them the memory budget refuses the name of an
+  // attribute (the attribute stands while its name is made, so that refusal's poll is inside it),
+  // the scope has run out at that poll, the call unwinds from inside the attribute and the caller
+  // goes on. The poll that stops the scope writes the attribute's identity and so ends its stand,
+  // on both tiers (the interpreter's `unwound` has no clear of its own for that reason). A stand
+  // left set would make the caller's next runtime poll outside a standing operation write the
+  // caller's identity at that operation: here the refusal of the caller's long constant, made by
+  // the interpreter on both tiers (compiled code left the caller at the template call), where the
+  // frame's identity is the call's.
+  Scenario sc = scenario("use t; r = t(); u = \"" + std::string(8000, 'u') + "\"; print(r); print(u.length);\n");
+  // The attribute's name is long (an attribute a string does not have: its value is an error), so
+  // the heap allocates it alone, and some memory budget refuses it and nothing before it.
+  const std::string name(4000, 'n');
+  sc.parts.push_back(Part{"t", "<% s = \"abcdef\"; c = s." + name + "; %><%= c %>", 1, GLTANG_SCOPE_EMPTY, Mode::Template});
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  ASSERT_TRUE(measured.finished);
+  std::set<std::string> kinds;
+  size_t scope_stops = 0;
+  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain, jit;
+    expect_same(tight, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << "memory " << budget;
+    kinds.insert(plain.key());
+    scope_stops += plain.errors.find(std::to_string((int)GLTANG_ERROR_HOW_SCOPE_LIMIT) + ":") != std::string::npos ? 1u : 0u;
+  }
+  EXPECT_GE(kinds.size(), 3u) << "the sweep crossed the template's allocations and the caller's";
+  EXPECT_GE(scope_stops, 1u) << "some budget stopped the template's scope at a refusal inside it";
 }
 
 TEST(JitTemplates, WhereNativesCannotBeCalledTheValueOperationsStayExitsAndTheOutputIsTheSame) {

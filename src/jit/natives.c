@@ -136,26 +136,25 @@ static GRJIT_NativeResult thunk_use(void * context, uint64_t block) {
 /**
  * The interpreter's `ATTR`: the name made from its constant, then the attribute rule. In the
  * interpreter the container stays on the operand stack for the whole operation: here it is
- * held on the temp stack until the attribute has been read, since the name is made (a GC
- * point, which may move the container: the copy in this frame is then stale, and the one in
- * the temporaries is updated) and the read may allocate (a member's value, a retagged
- * string). The name is cached in the execution's constants, which the collector reads, once
- * it is made.
+ * held in the execution's `GLTANG_ROOT_HELD` root while the name is made (a GC point, which may
+ * move the container: the copy in this frame is then stale, and the one in the root is updated),
+ * and read back from it. The read itself is the interpreter's, given the container as the
+ * interpreter gives it, and the call's frame state keeps the container alive across it. The root
+ * is one the execution already has: the temp stack held it before story 4b, and its first push
+ * allocated the temporaries' storage, which the interpreter's `ATTR` never does, so a memory budget
+ * that refused the name on one tier made it on the other. The name is cached in the execution's
+ * constants, which the collector reads, once it is made. Nothing between the store and the clear
+ * runs guest code, so no other `ATTR` uses the root meanwhile.
  */
 static GLTANG_Value attribute(GLTANG_Execution * exec, GLTANG_Value container, uint64_t constant) {
-  size_t mark = gltang_vm_temp_mark(exec);
-  if (!gltang_vm_temp_push(exec, container)) {
-    return exec->roots[GLTANG_ROOT_OOM];
-  }
+  exec->roots[GLTANG_ROOT_HELD] = container;
   GLTANG_Value name = gltang_vm_constant(exec, (uint32_t)constant);
-  container = gltang_vm_temp_at(exec, mark);
+  container = exec->roots[GLTANG_ROOT_HELD];
+  exec->roots[GLTANG_ROOT_HELD] = 0;
   if (name == GLTANG_V_UNWIND) {
-    gltang_vm_temp_release(exec, mark);
     return name;
   }
-  GLTANG_Value value = gltang_vm_op_attr(exec, container, name);
-  gltang_vm_temp_release(exec, mark);
-  return value;
+  return gltang_vm_op_attr(exec, container, name);
 }
 
 static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {

@@ -472,13 +472,18 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   // interpreter runs the function. Nothing else about the budget is touched.
   GRCORE_ActivationRef record;
   if (grcore_activation_enter(stack, GRCORE_ACTIVATION_JIT, exec->engine, false, NULL, &record) != GRCORE_OK) {
-    gltang_jit_retract_to(exec, ext_base);
+    if (jit->ext_count != ext_base) {  // as at the exit below: only what this entry extended
+      gltang_jit_retract_to(exec, ext_base);
+    }
     return GLTANG_JIT_NOT_ENTERED;
   }
   ++jit->records_open;
   // One reference for the duration of the call, so code discarded during the
   // run (a deopt that was the eighth) is freed only after the call ends.
-  GRCORE_Code * handle = grcore_code_retain(f->code);  // the code whose payload `jc` is
+  GRCORE_Code * handle = grcore_code_retain(f->code);
+  // The payload again, from the reference held for the call: the extension above allocates, and
+  // `jc` was read before it.
+  jc = grcore_code_payload(handle);
   uint64_t args[GLTANG_JIT_MAX_SLOTS];
   uint64_t out[GLTANG_JIT_MAX_SLOTS + 2u];
   {
