@@ -293,6 +293,21 @@ void gltang_jit_note_native_guard(GLTANG_Execution * exec);
  *   execution's own memory) and marked logged in its error object's flags, a plain word.
  */
 void gltang_jit_clear_result(GLTANG_Execution * exec);
+/**
+ * @brief `SET_RESULT` from compiled code: the interpreter's own
+ *   `gltang_vm_set_result(exec, value, listed)`. An earlier result that was lost is
+ *   entered in the error list as discarded, and a listed error result that is not yet
+ *   logged is marked lost. Not a GC point, for the reason `CLEAR_RESULT` is not: it
+ *   allocates only the error list's entries, through the execution's allocator, and
+ *   writes a flag word of an error object; it never polls.
+ */
+void gltang_jit_set_result(GLTANG_Execution * exec, uint64_t value, uint64_t listed);
+/**
+ * @brief `DISCARD` from compiled code: an error value is entered in the error list as
+ *   discarded, at the position `function`, `offset` (stored only for an error, as the
+ *   interpreter's SYNC is). Not a GC point, as above.
+ */
+void gltang_jit_discard(GLTANG_Execution * exec, uint64_t value, uint64_t function, uint64_t offset);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
 

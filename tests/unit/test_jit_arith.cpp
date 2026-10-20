@@ -32,8 +32,10 @@
 //
 // A function that exits eight times is let go, so a test that exits runs each
 // exit in a function (or an execution) of its own. The top level is compiled too, and
-// leaves compiled code once, at its first function declaration: that exit is in every
-// count below as `kMain`, and what a test asserts is the exits beyond it.
+// leaves compiled code once, at its first statement (`scenario` puts kTopLevelLeaves,
+// jit_harness.h, in front of every program): that exit is in every count below as `kMain`,
+// and what a test asserts is the exits beyond it. Until spec-template-compiled story 2 the
+// top level left at its first function declaration, a global store, which is compiled now.
 
 #include "exec_harness.h"
 #include "jit_harness.h"
@@ -61,7 +63,7 @@ const char * const kPrelude =
 const char * const kValues = "[0.0, nz, 1.5, -2.5, pinf, ninf, nan, tiny, big, 3, -3, 9007199254740993, smax, smin, small]";
 const char * const kNonZero = "[1.5, -2.5, pinf, ninf, nan, tiny, big, 3, -3, 9007199254740993, smax, smin, small]";
 
-/// The exit of the top level (it leaves compiled code at its first declaration), which every program counts.
+/// The exit of the top level (kTopLevelLeaves, at its first statement), which every program counts.
 constexpr uint64_t kMain = 1;
 
 /// What a function that reads the specials declares (a function sees a global only by naming it).
@@ -74,10 +76,10 @@ std::string with_globals(std::string function) {
   return function;
 }
 
-/// A scenario for one program.
+/// A scenario for one program, whose top level leaves compiled code at once (kMain).
 Scenario scenario(const std::string & source) {
   Scenario sc;
-  sc.source = source;
+  sc.source = kTopLevelLeaves + source;
   return sc;
 }
 
@@ -882,8 +884,12 @@ TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnit
   Outcome plain, jit;
   expect_same_compiled(sc, &plain, &jit);
   EXPECT_GE(jit.stats.entries, 1u);
-  EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call of f ran its loop compiled and left at the print (a local first assigned a float inside the loop would have merged unequal kinds and left at the first float)";
-  EXPECT_GT(jit.stats.values_boxed, 0u);
+  // Each call of f runs to its return compiled: it left at the `DISCARD` after its print until
+  // spec-template-compiled story 2 compiled it, which is what boxed its live floats. (A local first
+  // assigned a float inside the loop would have merged unequal kinds and left at the first float.)
+  EXPECT_EQ(jit.stats.deopts, kMain) << "each call of f ran compiled to its return";
+  EXPECT_EQ(jit.stats.values_boxed, 0u) << "with no exit in f, no float was boxed";
+  EXPECT_GE(jit.stats.calls + jit.stats.entries, 3u) << "the top level and both calls of f";
   EXPECT_GT(jit.fuel, 500u);
 }
 

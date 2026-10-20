@@ -21,8 +21,10 @@
 /**
  * @file
  *
- * The helpers compiled code calls: the fuel flush and the callee-value note,
- * which are not GC points, and the poll slow path.
+ * The helpers compiled code calls: the fuel flush, the callee-value notes and
+ * the statement-result and discard operations (`CLEAR_RESULT`, `SET_RESULT`,
+ * `DISCARD`, each the interpreter's own function), which are not GC points, and
+ * the poll slow path.
  *
  * The poll helper does not touch the guest frame. The polling frame is paired
  * with its guest frame by the walk (runtime-core, `a/compiled.h`); the abstract
@@ -55,6 +57,21 @@ void gltang_jit_note_native_guard(GLTANG_Execution * exec) {
 void gltang_jit_clear_result(GLTANG_Execution * exec) {
   ++exec->jit_stats.result_clears;
   gltang_vm_set_result(exec, GLTANG_V_NULL, false);
+}
+
+void gltang_jit_set_result(GLTANG_Execution * exec, uint64_t value, uint64_t listed) {
+  gltang_vm_set_result(exec, value, listed != 0);
+}
+
+void gltang_jit_discard(GLTANG_Execution * exec, uint64_t value, uint64_t function, uint64_t offset) {
+  // The interpreter's DISCARD: an error is swallowed, and only then is the position
+  // recorded (its SYNC is inside the same test), so a value that is not an error
+  // leaves `current_function` and `current_offset` as the interpreter leaves them.
+  if (gltang_vm_is_error(value)) {
+    exec->current_function = (uint32_t)function;
+    exec->current_offset = (uint32_t)offset;
+    gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_DISCARDED, value, exec->act);
+  }
 }
 
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {

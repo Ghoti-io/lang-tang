@@ -61,8 +61,13 @@ TEST(Jit, AHotLoopTiersUpAndGivesTheInterpretersOutput) {
   EXPECT_EQ(plain.stats.functions_compiled, 0u);
   EXPECT_EQ(plain.stats.entries, 0u);
   EXPECT_GE(jit.stats.functions_compiled, 1u);
-  EXPECT_GE(jit.stats.entries, 3u);
-  EXPECT_GE(jit.stats.returns, 3u) << "the three calls of sum return from compiled code";
+  // The top level runs to its HALT compiled (spec-template-compiled story 2), so it is
+  // entered once and calls sum from compiled code: each call of sum is a compiled call that
+  // returned, and the top level's HALT the one return to the interpreter.
+  EXPECT_EQ(jit.stats.entries, 1u);
+  EXPECT_EQ(jit.stats.calls, 3u) << "the three calls of sum are made and returned in compiled code";
+  EXPECT_EQ(jit.stats.returns, 1u);
+  EXPECT_EQ(jit.stats.deopts, 0u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
   EXPECT_EQ(jit.stats.slow_polls, 0u) << "nothing was pending";
 }
@@ -230,12 +235,18 @@ TEST(Jit, AFunctionWhoseBodyStartsWithAnOperationCompiledCodeLeavesIsStillCompil
   Outcome e_plain, e_jit, i_plain, i_jit;
   expect_same(exits, &e_plain, &e_jit);
   expect_same(inlined, &i_plain, &i_jit);
+  // The top level is entered once and calls f from compiled code (it no longer leaves at
+  // its declaration of f, spec-template-compiled story 2).
   EXPECT_EQ(e_jit.stats.functions_compiled, 2u) << "the top level and f";
-  EXPECT_EQ(e_jit.stats.entries, 2u);
+  EXPECT_EQ(e_jit.stats.entries, 1u);
+  EXPECT_EQ(e_jit.stats.calls, 1u);
   EXPECT_EQ(e_jit.stats.returns, 0u) << "f leaves at the array";
+  EXPECT_EQ(e_jit.stats.deopts, 1u);
   EXPECT_EQ(i_jit.stats.functions_compiled, 2u);
-  EXPECT_EQ(i_jit.stats.entries, 2u);
-  EXPECT_EQ(i_jit.stats.returns, 1u) << "f returns from compiled code";
+  EXPECT_EQ(i_jit.stats.entries, 1u);
+  EXPECT_EQ(i_jit.stats.calls, 1u) << "f returns from compiled code, to compiled code";
+  EXPECT_EQ(i_jit.stats.deopts, 1u) << "the one exit is the top level's cast to string";
+  EXPECT_EQ(i_jit.stats.returns, 0u);
   EXPECT_EQ(e_jit.stats.compile_failures + i_jit.stats.compile_failures, 0u);
 }
 
@@ -463,7 +474,7 @@ TEST(Jit, ARefusedNativeDepthMeansTheFunctionIsNotEnteredAndTheBudgetIsUntouched
   room.source = kLoop;
   room.native_depth = 4;
   Outcome with_room = run(room, 1);
-  EXPECT_GE(with_room.stats.entries, 3u);
+  EXPECT_GE(with_room.stats.entries + with_room.stats.calls, 3u) << "sum is entered, from the interpreter or from the compiled top level";
   EXPECT_EQ(with_room.native_depth, 0u) << "every record was left";
 }
 
@@ -523,7 +534,8 @@ TEST(Jit, AFunctionWithManyLocalsIsCompiledAndOneWithTooManySlotsIsDeclinedWitho
   expect_same(tall, &plain, &jit);
   EXPECT_EQ(jit.stats.functions_compiled, 2u);
   EXPECT_EQ(jit.stats.compile_failures, 0u);
-  EXPECT_GE(jit.stats.returns, 2u) << "both calls of f return from compiled code";
+  EXPECT_EQ(jit.stats.calls, 2u) << "both calls of f are made from, and return to, the compiled top level";
+  EXPECT_EQ(jit.stats.returns, 1u) << "which returns at its HALT";
 
   // 1,100 locals make more than 1,023 frame slots: f is declined (not a failure,
   // not compiled), only the top level is, and the run is the interpreter's.

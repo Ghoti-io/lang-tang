@@ -1,0 +1,15 @@
+# 162 the compiled STORE_GLOBAL writes the wrong slot
+# defect: the store goes to the variable before the one named (the first stays the first, so the write is in bounds)
+# caught by: the top-level variables of a script and of a template, read back, against the interpreter's (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1638,7 +1638,7 @@
+       // writes, with no barrier: the value is stored as its bits.
+       bitcast(c, t[TMP_A], T[d - 1u]);
+       B(grjit_builder_load(c->b, c->gp, c->ep, (int32_t)offsetof(GLTANG_Execution, globals), 64, false));
+-      B(grjit_builder_store(c->b, c->gp, (int32_t)(a * sizeof(GLTANG_Value)), 64, V(t[TMP_A])));
++      B(grjit_builder_store(c->b, c->gp, (int32_t)((a ? a - 1u : 0u) * sizeof(GLTANG_Value)), 64, V(t[TMP_A])));  /* planted: the slot before */
+       add_fuel(c, cost);
+       break;
+ 

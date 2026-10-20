@@ -1,0 +1,15 @@
+# 163 the compiled DISCARD records nothing
+# defect: the helper drops the value without entering a discarded error in the error list
+# caught by: the bare statement whose value is an error, three entries against the interpreter's (testJit_templates)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -68,7 +68,7 @@
+   if (gltang_vm_is_error(value)) {
+     exec->current_function = (uint32_t)function;
+     exec->current_offset = (uint32_t)offset;
+-    gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_DISCARDED, value, exec->act);
++    /* planted: the error is not entered */
+   }
+ }
+ 

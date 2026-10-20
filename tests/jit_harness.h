@@ -44,6 +44,18 @@ extern "C" int gltang_vm_jit_test_hook(GLTANG_Execution * execution, void * call
 
 namespace jt {
 
+/// A statement that makes a script's top level leave compiled code where it stands, with an
+/// unconditional exit that counts: the empty array literal is one until spec-template-compiled
+/// story 4, and `ITER_INIT` after it (no story of that spec compiles it); the loop over an
+/// empty array prints nothing and makes no error. Being unconditional, it also keeps the static decline (a function whose
+/// every path ends at a designed box exit) from applying to the top level, which a guard
+/// would not. A test whose calls must be made by the interpreter, or whose counts include the
+/// top level's one exit, starts with it. Until spec-template-compiled story 2 a top level left
+/// at its first global store (a declaration, most often), which those tests relied on; this
+/// puts the exit back where it was, on purpose, with no newline so that no line number moves.
+/// If `ITER_INIT` is compiled, change it to an instruction that still exits.
+inline constexpr const char * kTopLevelLeaves = "for (leave : []) { } ";
+
 using tt::Compiled;
 using tt::Config;
 using tt::Context;

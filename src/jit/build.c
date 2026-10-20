@@ -36,9 +36,11 @@
  * `LINE`, `RET`, `CALL` of a function the declaration scan can name, and the
  * library: the load of a `use`d path or a library's `.name` and the `CALL` of a
  * library native (a host function), each a call to the engine's own operation
- * (natives.c) with no exit; and the output operations, `PRINT` and `PRINT_CONST` as calls of
+ * (natives.c) with no exit; the output operations, `PRINT` and `PRINT_CONST` as calls of
  * the interpreter's print through the same table and `CLEAR_RESULT` as a call that is no GC
- * point. Each
+ * point; and the end of a statement and of a template, `SET_RESULT` and `DISCARD` as calls
+ * that are no GC point, `STORE_GLOBAL` as the interpreter's plain store, and `HALT` as a
+ * return of the halted word (jit.h), after which the interpreter runs `HALT`'s body. Each
  * step mirrors the interpreter's own inline path, so a guard that holds computes
  * the word the interpreter would. For everything else, and for an operand that
  * is not what the inline path takes, the function leaves through a guard (a
@@ -133,7 +135,8 @@ typedef struct Ctx {
   GRJIT_VReg flags;               ///< The frame's flags word (the activation's depth), a plain word.
   GRJIT_VReg ep;                  ///< The execution's address, a plain pointer.
   GRJIT_VReg act;                 ///< The execution's activation, for the prologue.
-  GRJIT_VReg gp;                  ///< The globals array, for a global load.
+  GRJIT_VReg gp;                  ///< The globals array, for a global load or store.
+  GRJIT_VReg halted;              ///< The halted word a `HALT` returns (jit.h).
   GRJIT_VReg tmp[TMP_COUNT];
   GRJIT_VReg tmp_f[2];            ///< The `F64` temporaries of a float operation: an unboxed operand lives in one, for that operation only.
   bool need_tmp_f;                ///< The function has a float operation or a cast to int, so declares them.
@@ -284,6 +287,15 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
       return c->natives_on && string_constant(c, a);
     case GLTANG_OP_CLEAR_RESULT:
       return true;
+    // The statement ends (spec-template-compiled story 2): the statement result and the
+    // discard of a value are no-GC calls of the interpreter's own functions, a global
+    // store is the interpreter's plain store, and `HALT` is a return with the halted word,
+    // after which the interpreter runs `HALT`'s body (jit.h).
+    case GLTANG_OP_SET_RESULT:
+    case GLTANG_OP_DISCARD:
+    case GLTANG_OP_HALT:
+      return true;
+    case GLTANG_OP_STORE_GLOBAL:
     case GLTANG_OP_LOAD_GLOBAL:
       return a < c->program->global_count;
     case GLTANG_OP_FUNC:
@@ -331,6 +343,12 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     // A raw float printed is boxed by the exit and printed by the interpreter, so its
     // text is the interpreter's and compiled code never boxes (AD-27).
     case GLTANG_OP_PRINT:
+    // The same for a raw float stored in a global, made the statement result or
+    // discarded: each keeps a value word where the interpreter keeps one, so the float is
+    // boxed by the exit (AD-27), and the interpreter runs the operation.
+    case GLTANG_OP_STORE_GLOBAL:
+    case GLTANG_OP_SET_RESULT:
+    case GLTANG_OP_DISCARD:
       return d >= 1 && c->sk[d - 1] == KIND_F64;
     // `%` is integers only: with a raw operand the interpreter reports "not supported".
     case GLTANG_OP_MOD:
@@ -376,6 +394,8 @@ static bool reads_raw(const Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_JMP:
     case GLTANG_OP_PRINT_CONST:
     case GLTANG_OP_CLEAR_RESULT:
+    // `HALT` reads no operand: whatever is on the stack goes with the frame.
+    case GLTANG_OP_HALT:
       return false;
     default:
       // Fail safe: any other opcode, which the compiler does not know the operands of,
@@ -463,6 +483,10 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_RET:
     case GLTANG_OP_PRINT_CONST:
     case GLTANG_OP_CLEAR_RESULT:
+    case GLTANG_OP_SET_RESULT:   // pops a value word
+    case GLTANG_OP_DISCARD:      // the same
+    case GLTANG_OP_STORE_GLOBAL: // the value stays, a value word, as it was
+    case GLTANG_OP_HALT:
       break;
     default:
       // An instruction that flows on with a stack effect this function does not know
@@ -880,6 +904,20 @@ static GLTANG_Result analyse_once(Ctx * c) {
           break;
         case GLTANG_OP_STORE_LOCAL:
           if (a >= c->lc || d < 1) { return GLTANG_ERR_INTERNAL; }
+          break;
+        case GLTANG_OP_STORE_GLOBAL:
+          // The value stays on the stack, with its producer.
+          if (d < 1) { return GLTANG_ERR_INTERNAL; }
+          break;
+        case GLTANG_OP_SET_RESULT:
+        case GLTANG_OP_DISCARD:
+          if (d < 1) { return GLTANG_ERR_INTERNAL; }
+          after = d - 1;
+          break;
+        case GLTANG_OP_HALT:
+          // A return (of the halted word): the end of a path, as RET is.
+          c->end_kind[i] = END_RETURN;
+          falls = false;
           break;
         case GLTANG_OP_NEG:
         case GLTANG_OP_NOT:
@@ -1576,6 +1614,36 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_clear_result);
       break;
 
+    // The statement ends. Neither call can leave or observe the fuel, so each is charged
+    // here, as CLEAR_RESULT is; the operand is a value word (a raw float was the box exit).
+    case GLTANG_OP_SET_RESULT: {
+      bitcast(c, t[TMP_A], T[d - 1u]);
+      GRJIT_Operand args[3] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I((int64_t)(a & 1u))};
+      add_fuel(c, cost);
+      B(grjit_builder_call(c->b, GRJIT_NO_VREG, (uint64_t)(uintptr_t)gltang_jit_set_result, GRJIT_CALL_NO_GC,
+          GRCORE_SITE_GC_POINT_CALL, args, 3, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+      break;
+    }
+    case GLTANG_OP_DISCARD: {
+      bitcast(c, t[TMP_A], T[d - 1u]);
+      GRJIT_Operand args[4] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I((int64_t)c->function_index), I((int64_t)i)};
+      add_fuel(c, cost);
+      B(grjit_builder_call(c->b, GRJIT_NO_VREG, (uint64_t)(uintptr_t)gltang_jit_discard, GRJIT_CALL_NO_GC,
+          GRCORE_SITE_GC_POINT_CALL, args, 4, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+      break;
+    }
+    case GLTANG_OP_STORE_GLOBAL:
+      // The interpreter's `exec->globals[a] = value`, the running program's variables
+      // read at each store as at each load; the value stays on the stack. The array is
+      // not a heap object (the execution's roots, or a template activation's calloc'd
+      // block, enumerated as roots), so the store is the plain word the interpreter
+      // writes, with no barrier: the value is stored as its bits.
+      bitcast(c, t[TMP_A], T[d - 1u]);
+      B(grjit_builder_load(c->b, c->gp, c->ep, (int32_t)offsetof(GLTANG_Execution, globals), 64, false));
+      B(grjit_builder_store(c->b, c->gp, (int32_t)(a * sizeof(GLTANG_Value)), 64, V(t[TMP_A])));
+      add_fuel(c, cost);
+      break;
+
     case GLTANG_OP_LOAD_GLOBAL:
       // `exec->globals` is the running program's variables, read at each load as
       // the interpreter reads it.
@@ -1776,6 +1844,21 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       add_fuel(c, cost);
       flush_cost(c);
       B(grjit_builder_ret(c->b, V(T[d - 1u])));
+      c->open = false;
+      break;
+
+    case GLTANG_OP_HALT:
+      // A return, not an exit: `HALT`'s fuel is charged here, and the halted word names
+      // the instruction. The interpreter runs `HALT`'s body once compiled code has
+      // returned and its JIT record is left (interp.c, `halt_frame`): the budget scope of a
+      // template call cannot close while they are open, and the output string it makes
+      // allocates, so compiled code gains no GC point and no unwind here. The register is
+      // a reference only so that every return of the function has one type; nothing can
+      // collect between the constant and the return.
+      add_fuel(c, cost);
+      flush_cost(c);
+      B(grjit_builder_const(c->b, c->halted, (int64_t)gltang_jit_halted_word(i)));
+      B(grjit_builder_ret(c->b, V(c->halted)));
       c->open = false;
       break;
 
@@ -2053,6 +2136,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->ep));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->act));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->gp));
+  B(grjit_builder_vreg(c->b, GRJIT_TYPE_REF, &c->halted));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_slot));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->callee_tbl));
   B(grjit_builder_vreg(c->b, GRJIT_TYPE_PTR, &c->jitp));

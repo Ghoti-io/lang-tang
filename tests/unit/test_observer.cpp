@@ -445,6 +445,18 @@ std::vector<Case> output_cases() {
         "use big; print(\"[\"); r = big(); print(\"]\"); print(\"after\");",
         {{"big", "a" + text + "b<% k = 0; %>" + text, 300, GLTANG_SCOPE_SEGMENTS, tt::Mode::Template}}, 23);
   }
+  // The end of a statement and of a template, compiled (spec-template-compiled story 2): a
+  // template's top-level variables, `<%= %>` and its HALT, called many times between pauses,
+  // a scope that runs out in it, and a function of bare statements (DISCARD).
+  add("a template's variables, results and end",
+      "use card; for (i = 0; i < 12; i += 1) { print(card()); } x = 3; x;",
+      {{"card", "<% n = 2; m = n * 3; %>[<%= n %>,<%= m %>]<% k = 0; while (k < 3) { k += 1; } %>.", 100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}}, 17);
+  add("a template whose scope runs out after its statements",
+      "use card; for (i = 0; i < 4; i += 1) { print(card()); } print(\"after\");",
+      {{"card", "<% n = 2; %><%= n %><% k = 0; while (k < 50) { k += 1; } %>", 120, GLTANG_SCOPE_SEGMENTS, tt::Mode::Template}}, 29);
+  add("bare statements in a function",
+      "function f(n) { i = 0; while (i < n) { print(i); i + 1; i = i + 1; } return i; }\n"
+      "for (j = 0; j < 12; j += 1) { f(3); }\nf(5);", {}, 13);
   return cases;
 }
 

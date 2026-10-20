@@ -41,11 +41,35 @@
 /** @brief How an attempt to enter compiled code ended. */
 typedef enum GLTANG_JitExit {
   GLTANG_JIT_NOT_ENTERED, ///< Nothing happened: the interpreter runs the function.
-  GLTANG_JIT_RETURNED,    ///< The function returned a value; its frame is still pushed.
+  GLTANG_JIT_RETURNED,    ///< The function returned a value (or the halted word, ::gltang_jit_halted_word); its frame is still pushed.
   GLTANG_JIT_DEOPTED,     ///< Compiled code left at an operation; the guest frame holds pc, sp and the slots.
   GLTANG_JIT_PAUSED,      ///< A poll in compiled code paused the run; the guest frame is current.
   GLTANG_JIT_UNWOUND      ///< A poll in compiled code unwound the run; the guest frame is current.
 } GLTANG_JitExit;
+
+/**
+ * @brief The word compiled code returns at a `HALT` at bytecode index `offset`: the
+ *   tag `1111`, which is never a value, with the index above it.
+ *
+ * A compiled `HALT` charges its fuel and returns, and the interpreter then runs
+ * `HALT`'s body (interp.c, `halt_frame`), because the budget scope of a template call
+ * cannot be closed while the compiled frame and its JIT record are open. The index is
+ * where the interpreter's `HALT` records its position. It is never 0 (index 0 is the
+ * entry poll), so the word is never ::GLTANG_V_UNWIND, and no value a compiled `RET`
+ * returns has this tag.
+ */
+static inline GLTANG_Value gltang_jit_halted_word(uint32_t offset) {
+  return ((GLTANG_Value)offset << 4) | GLTANG_TAG_MASK;
+}
+
+/** @brief Whether a returned word is the halted word, and the index of its `HALT`. */
+static inline bool gltang_jit_halted(GLTANG_Value returned, uint32_t * offset) {
+  if ((returned & GLTANG_TAG_MASK) != GLTANG_TAG_MASK || returned == GLTANG_V_UNWIND) {
+    return false;
+  }
+  *offset = (uint32_t)(returned >> 4);
+  return true;
+}
 
 /**
  * @brief Makes the execution's JIT state and registers the tier-up handler.

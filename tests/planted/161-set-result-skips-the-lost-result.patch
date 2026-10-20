@@ -1,0 +1,17 @@
+# 161 the compiled SET_RESULT skips the error list's rules
+# defect: the helper stores the statement's value as the result and neither records an earlier lost result as discarded nor marks a listed error result lost
+# caught by: the error result a later statement replaces, whose discarded record is compared with the interpreter's (testJit_templates)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -58,7 +58,9 @@
+ }
+ 
+ void gltang_jit_set_result(GLTANG_Execution * exec, uint64_t value, uint64_t listed) {
+-  gltang_vm_set_result(exec, value, listed != 0);
++  /* planted: the result is stored, and the lost-result rules are skipped */
++  (void)listed;
++  exec->act->result = value;
+ }
+ 
+ void gltang_jit_discard(GLTANG_Execution * exec, uint64_t value, uint64_t function, uint64_t offset) {

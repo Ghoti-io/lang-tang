@@ -18,7 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// The output operations in compiled code (spec-template-compiled story 1, CAP-1).
+// The output operations in compiled code (spec-template-compiled story 1, CAP-1), and the
+// end of a statement and of a template (story 2, CAP-2).
 //
 // `PRINT`, `PRINT_CONST` and `CLEAR_RESULT` run in compiled code as calls of the
 // interpreter's own functions (`gltang_vm_op_print`, `gltang_vm_print_constant`,
@@ -26,14 +27,18 @@
 // one program interpreted and with every function compiled at its first poll, and
 // requires the two runs to be the same run (output, result, error list, fuel, every
 // poll and its identity; jit_harness.h), and then says in numbers that the prints ran
-// compiled: the `output_calls` counter, and no exit beyond the top level's.
+// compiled: the `output_calls` counter, and no exit.
 //
-// The top level of a script leaves compiled code once, at its first function
-// declaration (a global store is not compiled): that exit is `kMain` in every count
-// below. A template's function 0 leaves at its `HALT`, which story 2 compiles.
+// Story 2 compiles `SET_RESULT`, `DISCARD` and `STORE_GLOBAL`, and makes `HALT` a return
+// (the interpreter then runs `HALT`'s body: the budget scope of a template call cannot
+// close while compiled code is open). Before it, a script's top level left compiled code
+// at its first function declaration (a global store), and a template's function 0 at its
+// `HALT`, and the counts here allowed that one exit; now the top level and a template's
+// function 0 run to their end compiled, and each count below is the exits a test makes
+// beyond none.
 //
-// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158 here, and 156 in
-// testObserver (the frame differential over the output programs).
+// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158 and 159 to 162
+// here, and 156 in testObserver (the frame differential over the output programs).
 
 #include "exec_harness.h"
 #include "jit_harness.h"
@@ -41,6 +46,8 @@
 
 #include <ghoti.io/lang-tang/type.h>
 
+#include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -49,9 +56,6 @@ using namespace jt;
 #ifdef GLTANG_WITH_JIT
 
 namespace {
-
-/// The exit of a script's top level, at its first declaration.
-constexpr uint64_t kMain = 1;
 
 Scenario scenario(const std::string & source, Mode mode = Mode::Script) {
   Scenario sc;
@@ -88,10 +92,8 @@ uint64_t native_polls(Context & context, const char * native) {
 TEST(JitTemplates, ALoopOfPrintsRunsCompiledWithNoExitAtAPrintAndTheSameBytesFuelAndPolls) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // `r = print(i)`: a print's value is null, so the function returns null; a print that
-  // left its operand in place would return 99. The value is stored rather than dropped
-  // because a bare `print(i);` in a function ends in `DISCARD` (and at the top level in
-  // `SET_RESULT`), which this story does not compile: that statement still leaves compiled
-  // code after its print, at the `DISCARD`.
+  // left its operand in place would return 99. (A bare `print(i);`, which ends in
+  // `DISCARD`, is story 2's test below.)
   Scenario sc = scenario("function f(n) { r = 1; i = 0; while (i < n) { r = print(i); i = i + 1; } return r; }\nx = f(100);\nx;\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
@@ -104,7 +106,7 @@ TEST(JitTemplates, ALoopOfPrintsRunsCompiledWithNoExitAtAPrintAndTheSameBytesFue
   EXPECT_GT(jit.polls, 100u) << "the loop polled at every iteration, and the polls were compared";
   EXPECT_EQ(jit.stats.functions_compiled, 2u);
   EXPECT_EQ(jit.stats.output_calls, 100u) << "every print was a compiled call of the interpreter's print";
-  EXPECT_EQ(jit.stats.deopts, kMain) << "no print left compiled code";
+  EXPECT_EQ(jit.stats.deopts, 0u) << "no print left compiled code, and the top level ran to its end";
   EXPECT_EQ(jit.stats.functions_discarded, 0u);
   EXPECT_EQ(plain.stats.output_calls, 0u);
 }
@@ -112,7 +114,7 @@ TEST(JitTemplates, ALoopOfPrintsRunsCompiledWithNoExitAtAPrintAndTheSameBytesFue
 TEST(JitTemplates, ATemplateWhoseFirstOperationIsTextIsCompiledAndItsTextAndClearsRunCompiled) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The function's first operation is `PRINT_CONST`, which the entry check used to
-  // decline: the function was not compiled at all. Its one exit now is the `HALT`.
+  // decline: the function was not compiled at all. Its `HALT` was an exit until story 2.
   Scenario sc = scenario("head<% if (1 < 2) { %>yes<% } else { %>no<% } %>tail", Mode::Template);
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
@@ -122,7 +124,8 @@ TEST(JitTemplates, ATemplateWhoseFirstOperationIsTextIsCompiledAndItsTextAndClea
   EXPECT_EQ(jit.stats.entries, 1u);
   EXPECT_EQ(jit.stats.output_calls, 3u) << "the three texts were printed by compiled code";
   EXPECT_GE(jit.stats.result_clears, 1u) << "a text statement clears the template's result, in compiled code";
-  EXPECT_EQ(jit.stats.deopts, 1u) << "the only exit is the HALT (story 2)";
+  EXPECT_EQ(jit.stats.deopts, 0u) << "the HALT is a return (story 2)";
+  EXPECT_EQ(jit.stats.returns, 1u);
 }
 
 TEST(JitTemplates, APrintOfAnErrorLogsItAsPrintedAndAppendsNothing) {
@@ -141,7 +144,7 @@ TEST(JitTemplates, APrintOfAnErrorLogsItAsPrintedAndAppendsNothing) {
   EXPECT_EQ(jit.result, plain.result);
   EXPECT_EQ(jit.result.find("Division by zero"), std::string::npos) << jit.result;
   EXPECT_EQ(jit.stats.output_calls, 2u);
-  EXPECT_EQ(jit.stats.deopts, kMain);
+  EXPECT_EQ(jit.stats.deopts, 1u) << "the top level's one exit is its 1 / 0, where the interpreter makes the error";
 }
 
 TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOutInsideItStopsAtTheSamePoll) {
@@ -160,7 +163,8 @@ TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOut
     EXPECT_GE(paced[1], 5u);
     EXPECT_EQ(jit.raw.size(), 20481u);
     EXPECT_EQ(jit.stats.output_calls, 2u);
-    EXPECT_EQ(jit.stats.deopts, kMain) << "the large print polled inside compiled code and did not leave it";
+    EXPECT_EQ(jit.stats.deopts, 1u) << "the large print polled inside compiled code and did not leave it: the one exit is the "
+                                        "top level's first string concatenation (story 3)";
   }
   // A template whose text is longer than the pacing interval, called with a scope of 60
   // fuel: the scope runs out at a pacing poll inside the compiled `PRINT_CONST`, the
@@ -233,8 +237,8 @@ TEST(JitTemplates, ARefusedDeliveryIsRolledBackAndThePrintsValueIsHostFunctionFa
   EXPECT_EQ(deliveries[1].bytes, deliveries[0].bytes);
   EXPECT_NE(jit.result.find("Host function failed"), std::string::npos) << jit.result;
   EXPECT_NE(jit.errors.find("page:5["), std::string::npos) << "the error's origin is the print's line: " << jit.errors;
-  EXPECT_EQ(jit.stats.output_calls, 5u);
-  EXPECT_EQ(jit.stats.deopts, kMain);
+  EXPECT_EQ(jit.stats.output_calls, 6u) << "f's five, and the top level's print(x), compiled since story 2";
+  EXPECT_EQ(jit.stats.deopts, 0u);
 }
 
 TEST(JitTemplates, ARawFloatPrintedIsTheDesignedExitAndPrintsTheInterpretersText) {
@@ -298,7 +302,7 @@ TEST(JitTemplates, APrintOfAHostDefinedValueAppendsNothingAsInterpreted) {
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, "|");
   EXPECT_EQ(jit.stats.output_calls, 2u);
-  EXPECT_EQ(jit.stats.deopts, kMain);
+  EXPECT_EQ(jit.stats.deopts, 0u);
 }
 
 TEST(JitTemplates, WhereNativesCannotBeCalledAPrintStaysAnExitAndTheOutputIsTheSame) {
@@ -313,8 +317,8 @@ TEST(JitTemplates, WhereNativesCannotBeCalledAPrintStaysAnExitAndTheOutputIsTheS
     EXPECT_EQ(jit.raw, "0,1,2,3,4,0,1,2,3,4,");
     EXPECT_EQ(jit.raw, plain.raw);
     EXPECT_EQ(jit.stats.output_calls, 0u);
-    EXPECT_EQ(jit.stats.deopts, kMain + 2u) << "each call left at its first print, as before the prints were compiled";
-    EXPECT_EQ(jit.stats.exits_counted, kMain + 2u);
+    EXPECT_EQ(jit.stats.deopts, 2u) << "each call left at its first print, as before the prints were compiled";
+    EXPECT_EQ(jit.stats.exits_counted, 2u);
   }
   // A template whose code clears its result before its first text: CLEAR_RESULT is a plain
   // call and compiles even here, and the text is the exit.
@@ -331,6 +335,318 @@ TEST(JitTemplates, WhereNativesCannotBeCalledAPrintStaysAnExitAndTheOutputIsTheS
     EXPECT_GE(jit.stats.result_clears, 1u) << "the clear before the text ran compiled";
     EXPECT_EQ(jit.stats.deopts, 1u) << "the one exit is the first text";
     EXPECT_EQ(jit.stats.exits_counted, 1u);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The end of a statement and of a template (story 2)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A library `t` whose native `fail()` answers with an error value: the one way to make an
+/// error inside compiled code with no exit (a guard exit, as `1 / 0` is, would leave the
+/// rest of the function to the interpreter).
+bool fail_native(GLTANG_NativeCall * call, void *) {
+  gltang_call_return_error(call, GLTANG_ERROR_DIVIDE_BY_ZERO);
+  return true;
+}
+
+void add_failing_library(Context & context) {
+  GLTANG_Library * t = nullptr;
+  ASSERT_EQ(gltang_library_create("t", &t), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(t, "fail", &fail_native, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_library(context.library(), t), GLTANG_OK);
+  gltang_library_release(t);
+}
+
+/// A template part, `card`, called from the script (the execution's own name is `page`) with an ample scope.
+Part card(const std::string & source) {
+  return Part{"card", source, 100000, GLTANG_SCOPE_EMPTY, Mode::Template};
+}
+
+/// The template's function 0, as a program-qualified word (program 1 is the first part).
+constexpr uint64_t kCard0 = uint64_t{1} << 32;
+
+/// What `after` saw of the template's function 0: its counted exits, and whether it was still compiled.
+struct CardState {
+  int deopts = -2;
+  int compiled = -1;
+};
+
+std::function<void(Context &)> watch_card(std::vector<CardState> * seen) {
+  return [seen](Context & context) {
+    CardState st;
+    st.deopts = gltang_vm_jit_test_function_deopts(context.execution, kCard0);
+    st.compiled = gltang_vm_jit_test_discard(context.execution, kCard0);  // last: it lets the code go
+    seen->push_back(st);
+  };
+}
+
+}  // namespace
+
+TEST(JitTemplates, AWarmTemplateOfTextAndAnExpressionIsCalledAHundredTimesWithNoExitAndIsNeverDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The template's function 0 is text, `<%= %>` (PRINT, then SET_RESULT 1) and an assignment
+  // to a top-level variable (STORE_GLOBAL, SET_RESULT 0), and ends at its HALT. Before story 2
+  // each call left compiled code at a SET_RESULT, the store or the HALT, every one a counted
+  // exit, and at the eighth the function was discarded and the calls ran interpreted.
+  Scenario sc = scenario("use card; i = 0; while (i < 100) { print(card()); i = i + 1; }\n");
+  sc.parts.push_back(card("<% x = 40 + 2; %><p><%= x %></p>\n"));
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  std::string expected;
+  for (int i = 0; i < 100; ++i) {
+    expected += "<p>42</p>\n";
+  }
+  EXPECT_EQ(jit.raw, expected);
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0) << "no exit was charged to the template's function 0";
+  EXPECT_EQ(seen[1].compiled, 1) << "it was still compiled after a hundred calls";
+  EXPECT_EQ(jit.stats.exits_expected, 0u);
+  // Template calls from compiled code stay exits (the calls spec's decision): the script's
+  // top level, entered once, leaves at its first template call and the interpreter runs the
+  // rest of it. That is the run's one exit, and it is the script's.
+  EXPECT_EQ(jit.stats.deopts, 1u) << "the script's first template call";
+  EXPECT_EQ(jit.stats.exits_counted, 1u);
+  EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  EXPECT_GE(jit.stats.entries, 100u) << "the template's function 0 was entered at every call";
+  EXPECT_GE(jit.stats.returns, 100u) << "and every call returned at its HALT, counted as a return";
+  EXPECT_GE(jit.stats.output_calls, 300u) << "its two texts and its print, each call";
+}
+
+TEST(JitTemplates, TopLevelVariablesAreStoredAndTheResultSetInCompiledCode) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A script's top level: declarations and assignments are STORE_GLOBAL, expression
+  // statements SET_RESULT, and the program's result is the last one. It runs to its HALT
+  // compiled.
+  {
+    Scenario sc = scenario("function f(a) { return a * 3; }\nn = 4; m = f(n); n + m; m;\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.result, plain.result);
+    EXPECT_NE(jit.result.find("12"), std::string::npos) << jit.result;
+    EXPECT_EQ(jit.stats.deopts, 0u) << "the stores, the results and the HALT made no exit";
+    EXPECT_EQ(jit.stats.returns, 1u) << "the top level's HALT, a return to the interpreter (f returned to compiled code)";
+    EXPECT_EQ(jit.stats.calls, 1u);
+  }
+  // A template's own top-level variables, read back by `<%= %>`.
+  {
+    Scenario sc = scenario("use card; print(card()); print(card());\n");
+    sc.parts.push_back(card("<% n = 3; m = n * 2; %>[<%= n %>,<%= m %>]"));
+    std::vector<CardState> seen;
+    sc.after = watch_card(&seen);
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "[3,6][3,6]");
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[1].deopts, 0);
+    EXPECT_EQ(seen[1].compiled, 1);
+  }
+  // `n = items.length`: the attribute read is an exit until story 3, and what follows it
+  // runs in the interpreter; the run is the same run.
+  {
+    Scenario sc = scenario("use card; print(card());\n");
+    sc.parts.push_back(card("<% items = \"abc\"; n = items.length; %><%= n %>"));
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "3");
+  }
+}
+
+TEST(JitTemplates, AnErrorResultThatALaterStatementReplacesIsRecordedAsDiscardedFromCompiledCode) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `t.fail();` is a listed expression statement: its error is the template's result and
+  // is marked lost (the compiled SET_RESULT 1). The text after it clears the result (the
+  // compiled CLEAR_RESULT, story 1's carried test), which records the lost error as
+  // discarded, with the template's name and the chain of calls above it.
+  Scenario sc = scenario("use card; print(card());\nprint(card());\n");
+  sc.parts.push_back(card("<% use t; t.fail(); %>text"));
+  sc.before = add_failing_library;
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, "texttext");
+  const std::string discarded = "card:1[page:1]" + std::to_string((int)GLTANG_ERROR_HOW_DISCARDED) + ":";
+  EXPECT_NE(jit.errors.find(discarded), std::string::npos) << jit.errors;
+  EXPECT_EQ(jit.errors.find(std::to_string((int)GLTANG_ERROR_HOW_TEMPLATE_RESULT) + ":"), std::string::npos)
+      << "the result at the end was the text's null, not the error: " << jit.errors;
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0) << "the error was made, set, replaced and recorded in compiled code";
+  EXPECT_GE(jit.stats.native_calls, 2u) << "fail() was called from compiled code";
+}
+
+TEST(JitTemplates, AnErrorThatIsATemplatesFinalResultIsRecordedAsLostAcrossTheTemplateBoundary) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The template's last statement leaves an error as its result; the HALT returns from
+  // compiled code, and `HALT`'s body, run by the interpreter after the return, records it
+  // as lost across the template boundary (HOW_TEMPLATE_RESULT) with its chain.
+  Scenario sc = scenario("use card;\nprint(\"[\" + card() + \"]\");\n");
+  sc.parts.push_back(card("before<% use t; t.fail(); %>"));
+  sc.before = add_failing_library;
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, "[before]");
+  const std::string lost = "card:1[page:2]" + std::to_string((int)GLTANG_ERROR_HOW_TEMPLATE_RESULT) + ":";
+  EXPECT_NE(jit.errors.find(lost), std::string::npos) << jit.errors;
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0);
+  EXPECT_EQ(seen[1].compiled, 1);
+}
+
+TEST(JitTemplates, ABareStatementInAFunctionIsDiscardedInCompiledCodeAndTheFunctionIsNotDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `print(i);` in a function ends in DISCARD; called twenty times, its loop of bare prints
+  // makes no exit, so the function is not discarded at its eighth call.
+  {
+    Scenario sc = scenario("function f(n) { i = 0; while (i < n) { print(i); i = i + 1; } return i; }\n"
+                           "k = 0; while (k < 20) { f(3); k = k + 1; }\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    std::string expected;
+    for (int k = 0; k < 20; ++k) {
+      expected += "012";
+    }
+    EXPECT_EQ(jit.raw, expected);
+    EXPECT_EQ(jit.stats.deopts, 0u) << "no exit at a DISCARD";
+    EXPECT_EQ(jit.stats.functions_discarded, 0u);
+    EXPECT_EQ(jit.stats.output_calls, 60u);
+  }
+  // A discarded error: entered in the error list at the statement, from compiled code.
+  {
+    Scenario sc = scenario("function g() {\n  use t;\n  t.fail();\n  return 1;\n}\nk = 0; while (k < 3) { g(); k = k + 1; }\n");
+    sc.before = add_failing_library;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    const std::string discarded = std::to_string((int)GLTANG_ERROR_HOW_DISCARDED) + ":";
+    size_t count = 0;
+    for (size_t at = jit.errors.find(discarded); at != std::string::npos; at = jit.errors.find(discarded, at + 1)) {
+      ++count;
+    }
+    EXPECT_EQ(count, 3u) << jit.errors;
+    EXPECT_NE(jit.errors.find("page:3["), std::string::npos) << "each at the error's origin, the statement's line: " << jit.errors;
+    EXPECT_EQ(jit.stats.native_calls, 3u) << "fail() was called from compiled code";
+    EXPECT_EQ(jit.stats.deopts, 0u);
+  }
+}
+
+TEST(JitTemplates, AScriptsTopLevelAndATemplateModeRunEndAtTheirHaltAsInterpreted) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The main activation's HALT: the run finishes, with its result, output and fuel.
+  for (const char * source : {"x = 5; x + 1;\n", "print(1); return 7;\n", "while (true) { break; }\n", "print(2); x = 3;\n"}) {
+    Scenario sc = scenario(source);
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << source;
+    EXPECT_TRUE(jit.finished) << source;
+    EXPECT_EQ(jit.fuel, plain.fuel) << source;
+    EXPECT_EQ(jit.stats.deopts, 0u) << source;
+    EXPECT_EQ(jit.stats.returns, 1u) << source << ": the HALT is a return";
+  }
+  // A Template mode run is the main activation too.
+  {
+    Scenario sc = scenario("head<% x = 2; %><%= x * 2 %>tail", Mode::Template);
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "head4tail");
+    EXPECT_EQ(jit.stats.deopts, 0u);
+    EXPECT_EQ(jit.stats.returns, 1u);
+  }
+}
+
+TEST(JitTemplates, ARawFloatStoredOrMadeTheResultIsTheDesignedBoxExit) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `y = 1.5 * 2.0` is a raw double in compiled code: storing it in a top-level variable is
+  // the box exit at STORE_GLOBAL, as story 1's print of one is; the interpreter stores the box.
+  // The loop before it keeps the function from the static decline (a function whose every
+  // path ends at a box exit is not compiled at all).
+  {
+    Scenario sc = scenario("use card; print(card()); print(card());\n");
+    sc.parts.push_back(card("<% i = 0; while (i < 2) { i = i + 1; } y = 1.5 * 2.0; %><%= y %>"));
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, plain.raw);
+    EXPECT_GE(jit.stats.exits_expected, 1u) << "the store of the raw float boxed it, by design";
+    EXPECT_GE(jit.stats.values_boxed, 1u);
+  }
+  // The same as a statement result (SET_RESULT) and as a discarded value (DISCARD).
+  {
+    Scenario sc = scenario("function f() { i = 0; while (i < 2) { i = i + 1; } 1.5 * 2.0; return 1; }\nf(); f(); 2.5 * 2.0;\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.result, plain.result);
+    EXPECT_GE(jit.stats.exits_expected, 1u);
+    EXPECT_EQ(jit.stats.exits_counted, 0u) << "the box exits are designed, not counted";
+  }
+}
+
+TEST(JitTemplates, AFailureToBuildATemplatesOutputIsTheInterpretersAtEveryMemoryBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The output string is built by HALT's body after compiled code returned: it allocates
+  // (the string, its grapheme offsets and the sink's buffer), and a memory budget that runs
+  // out there makes the call's value the interpreter's `Out of memory`. The template's text
+  // is 100000 bytes, so printing it charges half the run's fuel and building the result the
+  // other half (both are paced by bytes): an `Out of memory` after more than half the fuel
+  // is a failure while the result was built. Swept from far below the run's peak to above
+  // it, the tiers agree at every budget, and the sweep sees that case.
+  Scenario sc = scenario("use card; a = card(); print(\"|\"); a;\n");
+  sc.parts.push_back(card(std::string(100000, 'y') + "<% k = 1; %>"));
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  Outcome compiled_measured = run(sc, 1);
+  ASSERT_TRUE(measured.finished);
+  ASSERT_TRUE(compiled_measured.finished);
+  const uint64_t low = std::min(measured.memory_peak, compiled_measured.memory_peak) / 8;
+  const uint64_t high = std::max(measured.memory_peak, compiled_measured.memory_peak) + 2000;
+  std::set<std::string> kinds;
+  bool failed_building = false;
+  for (uint64_t i = 0; i < 64; ++i) {
+    Scenario tight = sc;
+    tight.memory_bytes = low + (high - low) * i / 63;
+    Outcome plain = run(tight, 0);
+    Outcome jit = run(tight, 1);
+    kinds.insert(plain.key());
+    EXPECT_EQ(plain.key(), jit.key()) << "memory " << tight.memory_bytes;
+    EXPECT_EQ(plain.polls, jit.polls) << "memory " << tight.memory_bytes;
+    failed_building = failed_building || (plain.result.find("Out of memory") != std::string::npos && plain.fuel > measured.fuel / 2 && plain.fuel < measured.fuel);
+  }
+  EXPECT_GE(kinds.size(), 3u) << "the sweep did not cross both of the budgets it is meant to";
+  EXPECT_TRUE(failed_building) << "no budget ran out while the result was built";
+}
+
+TEST(JitTemplates, EveryFuelBudgetAcrossATemplateCallStopsAtTheSamePollOnBothTiers) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A run that stops at each budget in turn, from too little to enough: the pause (its
+  // location, identity and fuel) is the same on both tiers, before, inside and after the
+  // template's compiled function 0 and its HALT.
+  Scenario sc = scenario("use card; i = 0; while (i < 3) { print(card()); i = i + 1; }\n");
+  sc.parts.push_back(card("<% x = 1; while (x < 4) { x = x + 1; } %>[<%= x %>]"));
+  Outcome whole = run(sc, 0);
+  ASSERT_TRUE(whole.finished);
+  ASSERT_GT(whole.fuel, 20u);
+  for (uint64_t fuel = 1; fuel <= whole.fuel + 1; ++fuel) {
+    Scenario tight = sc;
+    tight.fuel = fuel;
+    Outcome plain = run(tight, 0);
+    Outcome jit = run(tight, 1);
+    ASSERT_EQ(plain.key(), jit.key()) << "fuel " << fuel;
+    ASSERT_EQ(plain.polls, jit.polls) << "fuel " << fuel;
   }
 }
 

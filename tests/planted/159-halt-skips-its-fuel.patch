@@ -1,0 +1,15 @@
+# 159 the compiled HALT charges no fuel
+# defect: the emission of `HALT` returns the halted word without adding the operation's cost
+# caught by: the warm template and every template and script test whose fuel is compared with the interpreter's (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1853,7 +1853,7 @@
+       // allocates, so compiled code gains no GC point and no unwind here. The register is
+       // a reference only so that every return of the function has one type; nothing can
+       // collect between the constant and the return.
+-      add_fuel(c, cost);
++      /* planted: HALT's cost is not charged */
+       flush_cost(c);
+       B(grjit_builder_const(c->b, c->halted, (int64_t)gltang_jit_halted_word(i)));
+       B(grjit_builder_ret(c->b, V(c->halted)));

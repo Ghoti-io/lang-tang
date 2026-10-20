@@ -1,0 +1,19 @@
+# 160 a halted return counted as an exit
+# defect: the entry charges a return of the halted word to the function as a counted exit, so a template is discarded at its eighth call
+# caught by: the warm template called a hundred times: its function 0's counted exits, whether it is still compiled, the exits counted (testJit_templates)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -515,6 +515,12 @@
+       ++exec->jit_stats.returns;
+       *out_value = out[0];
+       result = GLTANG_JIT_RETURNED;
++      /* planted: a halted return is charged as an exit */
++      if ((out[0] & GLTANG_TAG_MASK) == GLTANG_TAG_MASK) {
++        ++exec->jit_stats.exits_counted;
++        jit->exit_fword = fword;
++        counted = true;
++      }
+       break;
+     case GRJIT_EXIT_DEOPT: {
+       // Every compiled frame of the chain has been rebuilt into its guest frame

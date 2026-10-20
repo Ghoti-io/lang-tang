@@ -156,9 +156,9 @@ TEST(JitCalls, EveryParameterCountIsEnteredFromTheInterpreterAndFromCompiledCode
   for (int n = 0; n <= 15; ++n) {
     Scenario sc;
     // `f` is entered by the interpreter at the top level (function 0 leaves
-    // compiled code at the first `print`), and by compiled code from `run`.
+    // compiled code at once, kTopLevelLeaves), and by compiled code from `run`.
     sc.source = sum_function(n, "f") +
-        "function run() { return f(" + call_args(n, "5") + "); }\n"
+        "function run() { return f(" + call_args(n, "5") + "); }\n" + kTopLevelLeaves +
         "print(f(" + call_args(n, "3") + ")); print(run()); print(f(" + call_args(n, "1") + ")); print(run());\n";
     sc.script = true;  // counts the polls and records the identity of each
     Outcome plain, jit;
@@ -228,8 +228,10 @@ TEST(JitCalls, ACalleeThatIsColdWhenItsCallerIsCompiledIsCompiledAtTheFirstCallA
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(plain.raw, "55" "50005000");
   expect_clean_calls(jit, 10000);
-  EXPECT_EQ(jit.stats.compile_at_call, 1u) << "g, once, at the first call from f";
-  EXPECT_EQ(jit.stats.compile_hook_calls, 1u) << "and never asked again: the slot holds g's code";
+  // The top level runs compiled to its end (spec-template-compiled story 2), so f is compiled
+  // at its first call from the top level as g is at its first call from f.
+  EXPECT_EQ(jit.stats.compile_at_call, 2u) << "f and g, each once, at its first call from compiled code";
+  EXPECT_EQ(jit.stats.compile_hook_calls, 2u) << "and never asked again: the slots hold their code";
   // No caller is recompiled: f and g, and the top level.
   EXPECT_LE(jit.stats.functions_compiled, 3u);
 }
@@ -276,8 +278,8 @@ TEST(JitCalls, ACalleeOperandTwoPathsProduceDifferentlyIsNeverACompiledCallSite)
     auto program = [&](const std::string & call) {
       return "function f(x) { return x + 1; }\nfunction g(x) { return x + 2; }\n"
              "function t(c, x) { return " + call + "; }\n"
-             "function drive(n) { s = 0; for (i = 0; i < n; i += 1) { s = s + t([true, false][i - (i / 2) * 2], i); } return s; }\n"
-             "print(drive(30));\n";
+             "function drive(n) { s = 0; for (i = 0; i < n; i += 1) { s = s + t([true, false][i - (i / 2) * 2], i); } return s; }\n" +
+             std::string(kTopLevelLeaves) + "print(drive(30));\n";  // drive is entered by the interpreter
     };
     // The control: one named callee, a compiled call site.
     Scenario control;
@@ -319,8 +321,8 @@ TEST(JitCalls, ACalleeThatCannotBeCompiledIsAnExitOnceRememberedAndNeverCountsAg
   Scenario sc;
   sc.source =
       "function g(x) { return x + 1; }\n"
-      "function caller(i) { return g(i) + 1; }\n"
-      "t = 0; for (k = 0; k < 100; k += 1) { t = t + caller(k); } print(t);\n";
+      "function caller(i) { return g(i) + 1; }\n" +
+      std::string(kTopLevelLeaves) + "t = 0; for (k = 0; k < 100; k += 1) { t = t + caller(k); } print(t);\n";
   sc.script = true;
   Context * seen = nullptr;
   sc.before = [&seen](Context & context) { seen = &context; };
@@ -353,8 +355,8 @@ TEST(JitCalls, ACallToAFunctionWithTooManyFrameSlotsIsAnUnconditionalExitLikeAny
   Scenario sc;
   sc.source =
       "function big(a) {\n" + locals + "  return v0 + v1099;\n}\n"
-      "function caller(i) { return big(i) + 1; }\n"
-      "t = 0; for (k = 0; k < 20; k += 1) { t = t + caller(k); } print(t);\n";
+      "function caller(i) { return big(i) + 1; }\n" +
+      std::string(kTopLevelLeaves) + "t = 0; for (k = 0; k < 20; k += 1) { t = t + caller(k); } print(t);\n";
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   EXPECT_EQ(jit.stats.functions_discarded, 1u);
@@ -373,8 +375,8 @@ TEST(JitCalls, ACalleeValueThatIsNotTheFunctionTheSiteNamesIsAGuardExitCountedAg
   sc.source =
       "flag = false;\n"
       "if (flag) { function f(x) { return x + 1; } }\n"
-      "function call(i) { return f(i); }\n"
-      "t = 0; for (k = 0; k < 10; k += 1) { v = call(k); t = t + 1; } print(t);\n";
+      "function call(i) { return f(i); }\n" +
+      std::string(kTopLevelLeaves) + "t = 0; for (k = 0; k < 10; k += 1) { v = call(k); t = t + 1; } print(t);\n";
   sc.script = true;
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
@@ -667,10 +669,11 @@ TEST(JitCalls, RecursionPastTheGuestDepthBudgetGivesTheSameErrorAtTheSamePollWit
     EXPECT_EQ(plain.polls, jit.polls) << "budget " << budget;
     EXPECT_EQ(plain.errors, jit.errors) << "budget " << budget;
     if (budget >= 50) {
-      // f(0) goes down to the budget: the top level, f's entry from the interpreter
-      // and budget - 1 compiled calls; then g(40) makes 40 more. A depth test
-      // that is off by one in either direction shows here at the first budget.
-      EXPECT_EQ(jit.stats.calls, budget - 1 + 40) << "budget " << budget;
+      // f(0) goes down to the budget: the top level, its compiled call of f (it runs to
+      // its end compiled, spec-template-compiled story 2) and budget - 1 compiled calls of
+      // f by f; then g(40) makes 40 more. A depth test that is off by one in either
+      // direction shows here at the first budget.
+      EXPECT_EQ(jit.stats.calls, 1u + (budget - 1) + 40) << "budget " << budget;
       EXPECT_GE(jit.stats.call_exits_push_refused, 1u) << "budget " << budget << ": the refused push is an exit, and the interpreter makes the call and gets the error";
     }
     EXPECT_EQ(jit.stats.hook_argument_errors, 0u);
@@ -900,7 +903,7 @@ TEST(JitCalls, ARefusedRebuildAtTheEntryEndsTheRunUnwoundAndIsCountedNeverContin
   // and the failure is counted. A hook that ignored the refusal would return
   // DEOPTED, and the stat and the output would say so.
   Scenario sc;
-  sc.source = "print(\"before\"); function g(x) { return x + 1; } print(g(2)); print(\"never\");\n";
+  sc.source = std::string("print(\"before\"); ") + kTopLevelLeaves + "function g(x) { return x + 1; } print(g(2)); print(\"never\");\n";
   sc.fail_rebuild = true;
   Outcome jit = run(sc, 1);
   ASSERT_TRUE(jit.created);
@@ -982,7 +985,7 @@ TEST(JitCalls, TheEighthExitOfAFunctionDiscardsItByReferenceAndLaterCallsAreTheI
   Scenario sc;
   sc.source =
       std::string("function r(n, x) { if (n == 0) { return x + x; } return r(n - 1, x) + 1; }\nM = ") + kSourceMax + ";\n"
-      "t = 0; for (k = 0; k < 14; k += 1) { y = r(3, M); t = t + 1; } print(t); print(r(2, 5));\n";
+      + kTopLevelLeaves + "t = 0; for (k = 0; k < 14; k += 1) { y = r(3, M); t = t + 1; } print(t); print(r(2, 5));\n";
   sc.script = true;
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);

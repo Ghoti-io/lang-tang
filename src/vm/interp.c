@@ -47,6 +47,45 @@
 
 #define H GLTANG_FRAME_HEADER
 
+/**
+ * `HALT`'s body, for the frame of function `fidx` whose `HALT` is at `offset`: the one
+ * implementation, run by the interpreter's `HALT` and, after compiled code returned
+ * with the halted word (jit.h), by the branch that takes a compiled return. Compiled
+ * code cannot run it: runtime-core closes a budget scope only when the frames and
+ * activation records above the scope's base are gone, and the compiled frame and its
+ * JIT record are there until compiled code has returned. The fuel `HALT` costs is
+ * already in `pending_fuel` (added by the dispatch, or by compiled code before it
+ * returned) and is flushed here, once.
+ *
+ * The main activation finishes: its frame is popped and true is returned. A template
+ * call ends: its frame comes off, its budget scope is closed, a final value that is
+ * an error is recorded as lost across the template boundary, the activation is left,
+ * the call's value (what it printed, each segment still tagged with its encoding) is
+ * made into `*text` and the activation freed; false is returned and the caller pushes
+ * `*text` into the caller's frame, or unwinds if it is ::GLTANG_V_UNWIND (making the
+ * string allocates, and can run into a limit or out of memory).
+ */
+static bool halt_frame(GLTANG_Execution * exec, GRCORE_Stack * stack, uint32_t fidx, uint32_t offset, GLTANG_Value * text) {
+  gltang_vm_flush_fuel(exec);
+  if (exec->act == &exec->main_act) {
+    grcore_stack_pop(stack);
+    exec->state = GLTANG_EXECUTION_FINISHED;
+    return true;
+  }
+  // The fuel the call spent was charged to its scope just now, before the scope closes.
+  GLTANG_Activation * done = exec->act;
+  exec->current_function = fidx;
+  exec->current_offset = offset;
+  grcore_stack_pop(stack);
+  (void)grcore_budget_scope_close(stack, (GRCORE_BudgetScope){done->scope_id});
+  // A final value that is an error is lost across the template boundary.
+  gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_TEMPLATE_RESULT, done->result, done);
+  gltang_vm_activation_leave(exec, done);
+  *text = gltang_vm_output_string(exec, &done->out, done->out.length);
+  gltang_vm_activation_free(exec, done);
+  return false;
+}
+
 GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   GRCORE_Stack * stack = grcore_context_stack(context);
   const GLTANG_Program * program;
@@ -128,25 +167,11 @@ resume_loop:
     exec->pending_fuel += gltang_opcode_cost_table[op];
     switch (op) {
       case GLTANG_OP_HALT: {
-        gltang_vm_flush_fuel(exec);
-        if (exec->act == &exec->main_act) {
-          grcore_stack_pop(stack);
-          exec->state = GLTANG_EXECUTION_FINISHED;
+        // The end of the main activation, or of a template call (halt_frame).
+        GLTANG_Value text = GLTANG_V_NULL;
+        if (halt_frame(exec, stack, fidx, (uint32_t)(pc - 1u), &text)) {
           return GRCORE_STEP_FINISHED;
         }
-        // The end of a template call: its frame comes off, its budget scope is
-        // closed, and the call's value is what it printed, each segment still
-        // tagged with its encoding. The fuel it spent was charged to the scope
-        // just now, before the scope closed.
-        GLTANG_Activation * done = exec->act;
-        SYNC();
-        grcore_stack_pop(stack);
-        (void)grcore_budget_scope_close(stack, (GRCORE_BudgetScope){done->scope_id});
-        // A final value that is an error is lost across the template boundary.
-        gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_TEMPLATE_RESULT, done->result, done);
-        gltang_vm_activation_leave(exec, done);
-        GLTANG_Value text = gltang_vm_output_string(exec, &done->out, done->out.length);
-        gltang_vm_activation_free(exec, done);
         frame = grcore_stack_top(stack);
         LOAD_FRAME();
         if (text == GLTANG_V_UNWIND) {
@@ -189,7 +214,25 @@ resume_loop:
           switch (gltang_jit_enter(exec, context, fword, &returned)) {
             case GLTANG_JIT_NOT_ENTERED:
               break;
-            case GLTANG_JIT_RETURNED:
+            case GLTANG_JIT_RETURNED: {
+              uint32_t halt_at = 0;
+              if (gltang_jit_halted(returned, &halt_at)) {
+                // Compiled code reached a `HALT` and returned, having charged its fuel:
+                // the frame is still pushed and the JIT record is left, so `HALT`'s own
+                // body runs now, exactly as the interpreter's `HALT` runs it (a nested
+                // run's entry frame included: the interpreter's `HALT` does not ask).
+                GLTANG_Value text = GLTANG_V_NULL;
+                if (halt_frame(exec, stack, fidx, halt_at, &text)) {
+                  return GRCORE_STEP_FINISHED;
+                }
+                frame = grcore_stack_top(stack);
+                LOAD_FRAME();
+                if (text == GLTANG_V_UNWIND) {
+                  goto unwound;
+                }
+                PUSH(text);
+                break;
+              }
               grcore_stack_pop(stack);
               if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
                 // The entry frame of a nested run (AD-23) returned: the native that
@@ -201,6 +244,7 @@ resume_loop:
               LOAD_FRAME();
               PUSH(returned);
               break;
+            }
             case GLTANG_JIT_DEOPTED:
               // The deopt hook rebuilt every compiled frame of the chain into
               // its guest frame (pc, sp and the slots), and the fuel compiled

@@ -10,6 +10,6 @@
    want.discarded = 0;
 -  want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
 +  want.expected = p == POL_EXPECTED ? (int64_t)calls + 1 : 0;
-   want.counted = 1; /* the top level leaves once, at its first function declaration */
+   want.counted = 1; /* the top level leaves once, at its first statement (BENCH_TOP_LEAVES) */
    if (p == POL_COUNTED) {
      want.discarded = calls >= 8u ? 1 : 0;

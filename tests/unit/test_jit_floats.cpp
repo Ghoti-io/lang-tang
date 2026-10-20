@@ -606,8 +606,11 @@ TEST(JitFloats, AMergeOfUnequalKindsIsCompiledWithNoRawSlotAndAMergeOfEqualKinds
 
 namespace {
 
+// Each top level here starts with kTopLevelLeaves (jit_harness.h), spelled out: the
+// functions are entered by the interpreter, whose entry polls see the reservation at zero,
+// as they were before a top level ran to its end compiled (spec-template-compiled story 2).
 const char * const kChain =
-    "M = 576460752303423487;\n"
+    "for (leave : []) { } M = 576460752303423487;\n"
     "function callee(n, m) { y = 2.5; i = 0; while (i < n) { i = i + 1; } z = m + 1; return i; }\n"
     "function caller(n, m) { x = 1.5; r = callee(n, m); s = 0; j = 0; while (j < 3) { j = j + 1; } return r; }\n"
     "print(caller(3, 1)); print(caller(3, M));\n";
@@ -654,7 +657,7 @@ TEST(JitFloats, ManyCompiledCallsThatReturnLeaveTheReservationAtTheCallersAndThe
   auto source = [](int calls) {
     return "function leaf(a) { y = 2.5; z = 3.5; return a + 1; }\n"
            "function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\n"
-           "print(mid(" + std::to_string(calls) + "));\n";
+           + std::string(kTopLevelLeaves) + "print(mid(" + std::to_string(calls) + "));\n";  // mid entered by the interpreter
   };
   uint64_t allocations[2] = {0, 0};
   const int counts[2] = {50, 800};
@@ -683,8 +686,8 @@ TEST(JitFloats, ANestedEntryThroughANativeExtendsTheReservationAndGivesItBack) {
   GLTANG_REQUIRE_JIT_BACKEND();
   const std::string source =
       "function leaf(a) { y = 2.5; i = 0; while (i < 3) { i = i + 1; } return a + 1; }\n"
-      "function run() { use reenter; x = 1.5; s = 0; i = 0; while (i < 6) { s = s + reenter(leaf, i); i = i + 1; } return s; }\n"
-      "print(run());\n";
+      "function run() { use reenter; x = 1.5; s = 0; i = 0; while (i < 6) { s = s + reenter(leaf, i); i = i + 1; } return s; }\n" +
+      std::string(kTopLevelLeaves) + "print(run());\n";  // run entered by the interpreter
   Scenario sc;
   sc.source = source;
   sc.before = [](Context & c) { c.add_native_library(); };
@@ -769,7 +772,7 @@ namespace {
 const char * const kRefusal =
     "function leaf(a) { y = 2.5; return a + 1; }\n"
     "function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\n"
-    "print(mid(5)); print(mid(5)); print(mid(5));\n";
+    "for (leave : []) { } print(mid(5)); print(mid(5)); print(mid(5));\n";  // kTopLevelLeaves, as kChain
 
 }  // namespace
 
@@ -1322,15 +1325,18 @@ TEST(JitFloats, EveryOpcodeIsInBothOfTheCompilersKindTablesOrIsNotInline) {
   // asks with cast type 2) are exits with a raw operand, which is what the policy shows for them.
   // The output operations (spec-template-compiled story 1) flow on: `PRINT_CONST` and `CLEAR_RESULT`
   // read no operand, and `PRINT` of a raw float is the designed exit (its text is the interpreter's).
+  // Story 2: `HALT` reads no operand (it returns); `STORE_GLOBAL`, `SET_RESULT` and `DISCARD` flow on,
+  // and with a raw operand each is the designed box exit, as `PRINT` is.
   const std::set<unsigned> go_on_with_a_raw_operand = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
       GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
-      GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT, GLTANG_OP_NEG, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE,
+      GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT, GLTANG_OP_HALT, GLTANG_OP_NEG, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_LT, GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE,
       GLTANG_OP_EQ, GLTANG_OP_NE};
   const std::set<unsigned> flows = {GLTANG_OP_POLL, GLTANG_OP_LINE, GLTANG_OP_POP, GLTANG_OP_DUP, GLTANG_OP_NULL, GLTANG_OP_TRUE, GLTANG_OP_FALSE,
       GLTANG_OP_CONST, GLTANG_OP_LOAD_LOCAL, GLTANG_OP_STORE_LOCAL, GLTANG_OP_LOAD_GLOBAL, GLTANG_OP_FUNC, GLTANG_OP_USE, GLTANG_OP_JMP,
       GLTANG_OP_NEG, GLTANG_OP_NOT, GLTANG_OP_ATTR, GLTANG_OP_ADD, GLTANG_OP_SUB, GLTANG_OP_MUL, GLTANG_OP_DIV, GLTANG_OP_MOD, GLTANG_OP_LT,
       GLTANG_OP_LE, GLTANG_OP_GT, GLTANG_OP_GE, GLTANG_OP_EQ, GLTANG_OP_NE, GLTANG_OP_CAST, GLTANG_OP_CALL, GLTANG_OP_JMP_FALSE, GLTANG_OP_JMP_TRUE,
-      GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET, GLTANG_OP_PRINT, GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT};
+      GLTANG_OP_AND, GLTANG_OP_OR, GLTANG_OP_RET, GLTANG_OP_PRINT, GLTANG_OP_PRINT_CONST, GLTANG_OP_CLEAR_RESULT,
+      GLTANG_OP_HALT, GLTANG_OP_STORE_GLOBAL, GLTANG_OP_SET_RESULT, GLTANG_OP_DISCARD};
   for (unsigned op = 0; op < static_cast<unsigned>(GLTANG_OP_COUNT); ++op) {
     unsigned policy = gltang_vm_jit_test_opcode_policy(op);
     const bool reads = (policy & 1u) != 0;
@@ -1486,8 +1492,8 @@ TEST(JitFloats, AnEntryExtensionIsNotTakenByThePopOfAFloatFreeCallAtTheSameDepth
   const std::string source =
       "function deep(n) { y = 2.5; i = 0; while (i < 3) { i = i + 1; } return n + 1; }\n"
       "function mid(n) { i = 0; while (i < 2) { i = i + 1; } return deep(n) + 1; }\n"
-      "function outer(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + mid(i); i = i + 1; } return s; }\n"
-      "print(outer(5));\n";
+      "function outer(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + mid(i); i = i + 1; } return s; }\n" +
+      std::string(kTopLevelLeaves) + "print(outer(5));\n";  // outer entered by the interpreter
   Scenario sc;
   sc.source = source;
   Outcome plain, jit;
@@ -1518,7 +1524,8 @@ TEST(JitFloats, AFunctionDiscardedWhileItsRecordIsOpenStillTakesItsDesignedExitA
   // The function is let go (as a nested run's eighth exit would) at a poll inside its loop, while the run that entered it
   // is still open; its exit at the print is then taken from code whose function has no code any more. The exit is
   // classified from the code that ran: it is designed, and counts toward nothing.
-  const char * source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\nf(3);\n";
+  // The top level leaves at once (kTopLevelLeaves): that is its one counted exit, and f is entered by the interpreter.
+  const char * source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\nfor (leave : []) { } f(3);\n";
   Scenario ref;
   ref.source = source;
   Outcome plain = run(ref, 0);

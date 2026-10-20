@@ -350,6 +350,14 @@ static GLTANG_JitStats last_jit_stats;
  * An interpreted row compiled and entered nothing. A row labelled "compiled" that silently ran in the
  * interpreter would read as a ratio of 1.0; this makes it abort. */
 typedef enum { POL_NORMAL, POL_EXPECTED, POL_COUNTED, POL_DECLINED, POL_REMEMBERED } Policy;
+/* The first statement of every program whose row is checked against a policy: an unconditional exit
+ * (an empty array literal, and the loop's ITER_INIT once arrays are compiled; nothing is printed and no
+ * error made) where the top level leaves compiled code, once, counted. Until spec-template-compiled
+ * story 2 the top level left at its first function declaration, a global store, which is compiled now;
+ * the policies, their figures and planted 78 are written for that one exit, and this puts it back where
+ * it was (every one of these programs begins with its declaration). The template rows have no policy
+ * yet, and run without it (story 5 of that spec adds theirs). */
+#define BENCH_TOP_LEAVES "for (leave : []) { } "
 typedef struct {
   int active;
   int compiled; /* 0 interpreted, 1 compiled, 2 declined */
@@ -374,7 +382,7 @@ static void want_set(int jit_on, Policy p, uint64_t calls) {
   want.declined = (p == POL_DECLINED || p == POL_REMEMBERED) ? 1 : 0;
   want.discarded = 0;
   want.expected = p == POL_EXPECTED ? (int64_t)calls : 0;
-  want.counted = 1; /* the top level leaves once, at its first function declaration */
+  want.counted = 1; /* the top level leaves once, at its first statement (BENCH_TOP_LEAVES) */
   if (p == POL_COUNTED) {
     want.discarded = calls >= 8u ? 1 : 0;
     want.counted += calls < 8u ? (int64_t)calls : 8;
@@ -1782,7 +1790,7 @@ static uint64_t program_fresh(int idx, int jit_on, uint64_t iterations, double *
   const FloatProgram * p = &programs[idx];
   uint64_t n = float_n();
   char source[1024];
-  snprintf(source, sizeof(source), "%s f(%llu);", p->source, (unsigned long long)n);
+  snprintf(source, sizeof(source), BENCH_TOP_LEAVES "%s f(%llu);", p->source, (unsigned long long)n);
   set_expectations(p, n);
   want_set(jit_on, program_policy(idx), 1u);
   uint64_t sink = run_source_with(source, iterations, elapsed, p->is_float ? GLTANG_KIND_FLOAT : GLTANG_KIND_INTEGER, 0,
@@ -1798,7 +1806,7 @@ static uint64_t program_steady(int idx, int jit_on, int which, uint64_t iteratio
   uint64_t n = float_steady_n();
   char source[1280];
   snprintf(source, sizeof(source),
-      "%s use tick; tick(); r = f(%llu); tick(); w = 0; while (w < %llu) { f(%llu); w = w + 1; } tick(); "
+      BENCH_TOP_LEAVES "%s use tick; tick(); r = f(%llu); tick(); w = 0; while (w < %llu) { f(%llu); w = w + 1; } tick(); "
       "i = 0; while (i < %llu) { r = f(%llu); i = i + 1; } tick(); r;",
       p->source, (unsigned long long)n, (unsigned long long)(which == 0 ? 0u : float_warm()), (unsigned long long)n,
       (unsigned long long)(which == 0 ? 0u : float_timed()), (unsigned long long)n);
@@ -1997,7 +2005,7 @@ static void family_script(FamilyKind k, unsigned loop, uint64_t middle, uint64_t
   const char * last = "r;";
   /* The loops after call 1 are cut short for the interval being measured (the stamps stay: five). */
   snprintf(out, size,
-      "%s %s use tick; tick(); r = g(%s); tick(); i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
+      BENCH_TOP_LEAVES "%s %s use tick; tick(); r = g(%s); tick(); i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
       "i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); "
       "i = 0; while (i < %llu) { r = g(%s); i = i + 1; } tick(); %s",
       function, family_prelude(k), arg, (unsigned long long)middle, arg, (unsigned long long)ninth, arg,
@@ -2028,7 +2036,7 @@ static uint64_t family_fresh(FamilyKind k, unsigned loop, int jit_on, uint64_t i
   char function[256];
   char source[512];
   family_function(k, loop, function, sizeof function);
-  snprintf(source, sizeof source, k == FK_TOPONLY ? "%s 0;" : "%s g();", function);
+  snprintf(source, sizeof source, k == FK_TOPONLY ? BENCH_TOP_LEAVES "%s 0;" : BENCH_TOP_LEAVES "%s g();", function);
   GLTANG_ValueKind kind = family_expectation(k, loop);
   want_set(jit_on, family_policy(k, loop), 1u);
   if (jit_on && k == FK_ARG && loop == 0u) {
@@ -2130,7 +2138,7 @@ static uint64_t request_pattern(uint64_t slice, int jit_on, uint64_t iterations,
   char function[256];
   char source[512];
   family_function(FK_CAST, 0u, function, sizeof function);
-  snprintf(source, sizeof source, "%s s = 0; i = 0; while (i < %llu) { s = s + g(); i = i + 1; } s;", function, (unsigned long long)calls);
+  snprintf(source, sizeof source, BENCH_TOP_LEAVES "%s s = 0; i = 0; while (i < %llu) { s = s + g(); i = i + 1; } s;", function, (unsigned long long)calls);
   have_expected_integer = 1;
   expected_integer = (int64_t)(3u * calls);
   want_set(jit_on, POL_NORMAL, 1u);

@@ -1851,6 +1851,11 @@ breaks nothing as not caught. Observed:
 | 158 clear-result-skips-its-fuel | the compiled `CLEAR_RESULT` adds no cost | the template whose first operation is text (`testJit_templates`) | the fuel differs from the interpreter's |
 | 156 interpreted-print-not-at-the-print | the interpreter's prints leave the frame where the last poll left it | the frame differential over the output programs (`testObserver`, `Observer.ACompiledPrint*`) | the poll identity, `pc` and `sp` of a poll inside a long print differ from compiled code's |
 | 157 compiled-print-not-at-the-print | the print thunks leave the guest frame's identity at the last poll | the large-print test (`testJit_templates`) | the identity of a poll inside the print differs |
+| 159 halt-skips-its-fuel | the compiled `HALT` returns without adding its cost | the warm template, and every test whose fuel is compared (`testJit_templates`) | the fuel differs from the interpreter's |
+| 160 halted-return-counted-as-an-exit | the entry charges a return of the halted word to the function as a counted exit | the warm template called a hundred times (`testJit_templates`) | its function 0 has counted exits and is discarded |
+| 161 set-result-skips-the-lost-result | the `SET_RESULT` helper stores the result and skips the error list's rules | the error result a later statement replaces (`testJit_templates`) | no discarded record, against the interpreter's one |
+| 162 store-global-wrong-slot | the compiled `STORE_GLOBAL` writes the variable before the one named | the top-level variables of a script and of a template (`testJit_templates`) | the variables read back differ |
+| 163 discard-skips-the-swallow | the `DISCARD` helper enters no discarded error | the bare statement whose value is an error (`testJit_templates`) | none of the three entries |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1858,14 +1863,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 163 are the end of a statement and of a template compiled, story 2.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 158 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 163 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and forty-eight that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs the hundred and fifty-three that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2404,6 +2409,54 @@ a print sees, in both tiers, to the print's own. The frame differential over the
 (`output_cases`, testObserver) and the identity of every poll in `testJit_templates` are the gates
 (planted 156 and 157); 156 is in the interpreter, and only the JIT arm can see it.
 
+**The end of a statement and of a template (spec-template-compiled story 2, CAP-2).** After story 1
+a template's function 0 still left compiled code at its `HALT` on every call, and at every
+`SET_RESULT` (each `<%= %>` and each top-level assignment) and `STORE_GLOBAL` (each top-level
+variable) before it; a function's bare expression statement left at its `DISCARD`. Each of those exits
+counted toward the eight-exit discard limit, so a template rendered once per row was discarded at its
+eighth call and ran interpreted from then on. Now none of them is an exit:
+
+- `SET_RESULT` and `DISCARD` are calls that are no GC point, as `CLEAR_RESULT` is, of
+  `gltang_jit_set_result` (the interpreter's `gltang_vm_set_result`: an earlier result that was lost
+  is entered as discarded, a listed error result not yet logged is marked lost) and
+  `gltang_jit_discard` (an error value is entered as discarded, at the statement's position, which is
+  stored only for an error, as the interpreter's `SYNC` is). Both allocate only the error list's
+  entries, through the execution's allocator, and never poll.
+- `STORE_GLOBAL` is the interpreter's plain store into `exec->globals`, read at each store as at each
+  load. The array is not a heap object (the execution's roots, or a template activation's block,
+  enumerated as roots), so the store is the value's bits with no barrier, as interpreted; runtime-jit
+  refuses a store of a reference, which is why the value is stored as a word.
+- A raw float operand of any of the three is the designed box exit, as a printed one is: each keeps a
+  value word where the interpreter keeps one, and compiled code never boxes (AD-27).
+- **`HALT` is a return, not an exit.** Compiled code charges `HALT`'s fuel and returns the *halted
+  word* (`gltang_jit_halted_word`, jit.h: the tag `1111`, which is never a value, with the `HALT`'s
+  index above it; the index is never 0, so the word is never `GLTANG_V_UNWIND`). The entry counts it
+  as a return. The interpreter's branch for a compiled return sees the word and runs `HALT`'s own
+  body, `halt_frame` in interp.c, which the interpreted `HALT` runs too: the main activation finishes;
+  a template call pops its frame, closes its budget scope, enters a final error result as lost across
+  the template boundary with its chain, leaves the activation, builds the output string and frees the
+  activation, and the string is pushed into the caller's frame (or the run unwinds, if building it ran
+  into a limit). A nested run's entry frame (AD-23) and a `Template` mode run take the same body, as
+  the interpreted `HALT` does.
+
+*Why the body runs after the return.* runtime-core's `grcore_budget_scope_close` refuses unless the
+frames and activation records above the scope's base are gone, and the compiled frame and its JIT
+record are there until compiled code has returned, so a compiled `HALT` cannot close the template's
+scope. Running the interpreter's own body once compiled code has returned does every part in the
+interpreter's order with no second implementation, and the output string, which allocates, is built
+there too, so compiled code gains no GC point and no unwind at `HALT`. The alternatives were a
+helper that closed the scope from inside compiled code (refused by runtime-core, and a GC point with
+an unwind in the middle of a return) and keeping `HALT` an exit that does not count toward the
+discard limit (it would still pay a rebuild of the frame on every call, for nothing).
+
+A template's function 0 of text, `<%= %>` and top-level assignments now runs from its entry to its
+`HALT` with no exit and is never discarded over many calls (`testJit_templates`, the warm template
+called a hundred times), and a script's top level runs to its end compiled. Template calls from
+compiled code stay exits (the calls spec's decision), so a caller's loop of template calls still
+leaves at its first. Planted 159 to 163 gate it: `HALT`'s fuel, a halted return counted as an exit,
+`SET_RESULT` skipping the error list's rules, a `STORE_GLOBAL` into the wrong slot and a `DISCARD`
+that records nothing.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
@@ -2443,8 +2496,9 @@ returns into it. The discard is applied after the entry's record is left.
 `FALSE`, `CONST` (a small integer or a float), `LOAD_LOCAL`, `STORE_LOCAL`,
 `LOAD_GLOBAL`, `FUNC`, `NEG`, `NOT`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `LT`, `LE`, `GT`, `GE`,
 `EQ`, `NE`, `CAST` (to int and to float), `JMP`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`, `RET` and `CALL` as above, the
-library `USE`, `ATTR` and `CALL` described there, and the output operations `PRINT`, `PRINT_CONST` and
-`CLEAR_RESULT`.
+library `USE`, `ATTR` and `CALL` described there, the output operations `PRINT`, `PRINT_CONST` and
+`CLEAR_RESULT`, and the end of a statement and of a template, `SET_RESULT`, `DISCARD`, `STORE_GLOBAL`
+and `HALT` (a return of the halted word).
 Each step mirrors the interpreter's own inline path: both operands carry the
 integer tag or a guard fails; `ADD`, `SUB` and `NEG` check the result against the
 small-integer range; `MUL` needs both untagged operands inside -2^29..2^29-1 so

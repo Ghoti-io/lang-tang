@@ -113,7 +113,8 @@ typedef uint64_t GLTANG_Value;
  *   nnnn0001  integer, 60 bits signed; the rest are boxed
  *   ...b0010  boolean: 0x02 false, 0x12 true
  *   iiii0011  function value: the function index in the upper bits
- *   ....1111  never a value: GLTANG_V_UNWIND
+ *   ....1111  never a value: GLTANG_V_UNWIND (0x0F), and the word compiled
+ *             code returns at a HALT (jit.h, the HALT's index above the tag)
  */
 #define GLTANG_V_NULL ((GLTANG_Value)0)
 #define GLTANG_V_FALSE ((GLTANG_Value)0x02)
