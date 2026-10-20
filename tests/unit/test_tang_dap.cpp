@@ -224,7 +224,13 @@ class Tang {
     unlink(err_name_.c_str());
   }
 
+  // Every message sent and received is appended here, when set.
+  void record_to(std::string * transcript) { transcript_ = transcript; }
+
   void send(const std::string & body) {
+    if (transcript_) {
+      *transcript_ += "-> " + body + "\n";
+    }
     std::string message = "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     size_t done = 0;
     while (done < message.size()) {
@@ -244,6 +250,9 @@ class Tang {
         if (buffer_.size() >= header_end + 4 + length) {
           std::string body = buffer_.substr(header_end + 4, length);
           buffer_.erase(0, header_end + 4 + length);
+          if (transcript_) {
+            *transcript_ += "<- " + body + "\n";
+          }
           return body;
         }
       }
@@ -415,6 +424,7 @@ class Tang {
   std::vector<std::string> events_;
   int seq_ = 0;
   bool reaped_ = false;
+  std::string * transcript_ = nullptr;
 };
 
 // Runs `tang` with no debugger and returns what it wrote and how it ended.
@@ -731,6 +741,42 @@ static std::vector<std::pair<std::string, std::string>> adapter_calls(const std:
   return calls;
 }
 
+/// One `DebugAdapterExecutable` call of the extension: whether it is the script
+/// arm, and its arguments with `file` (session.configuration.program, which VS
+/// Code fills with the file) as the empty string.
+struct VsCodeArm {
+  bool script = false;
+  std::vector<std::string> arguments;
+};
+
+std::vector<VsCodeArm> vscode_arms(const std::string & extension) {
+  std::vector<VsCodeArm> arms;
+  for (const auto & call : adapter_calls(extension)) {
+    EXPECT_EQ(call.first, "tang") << "the adapter is the tang command";
+    VsCodeArm arm;
+    std::stringstream list(call.second);
+    std::string item;
+    while (std::getline(list, item, ',')) {
+      size_t first = item.find_first_not_of(" \t\r\n");
+      size_t last = item.find_last_not_of(" \t\r\n");
+      if (first == std::string::npos) {
+        continue;
+      }
+      item = item.substr(first, last - first + 1);
+      if (item == "file") {
+        arm.arguments.push_back("");
+      } else if (item.size() >= 2 && item.front() == '"' && item.back() == '"') {
+        arm.arguments.push_back(item.substr(1, item.size() - 2));
+        arm.script = arm.script || arm.arguments.back() == "--script";
+      } else {
+        ADD_FAILURE() << "an argument that is neither a string literal nor `file`: " << item;
+      }
+    }
+    arms.push_back(arm);
+  }
+  return arms;
+}
+
 TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndAScript) {
 #ifndef GLTANG_TEST_DATA
 #error "GLTANG_TEST_DATA must name the tests/ directory; the Makefile defines it"
@@ -747,42 +793,12 @@ TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndA
   EXPECT_NE(manifest.find("\"type\": \"tang\""), std::string::npos);
   EXPECT_NE(manifest.find("\"script\""), std::string::npos) << "the launch configuration has no script attribute";
 
-  const std::string extension = read_file(dir + "/extension.js");
-  const auto calls = adapter_calls(extension);
-  struct Arm {
-    bool script;
-    std::vector<std::string> arguments;  // with `file` as the empty string
-  };
-  std::vector<Arm> arms;
-  for (const auto & call : calls) {
-    EXPECT_EQ(call.first, "tang") << "the adapter is the tang command";
-    Arm arm{false, {}};
-    std::stringstream list(call.second);
-    std::string item;
-    while (std::getline(list, item, ',')) {
-      size_t first = item.find_first_not_of(" \t\r\n");
-      size_t last = item.find_last_not_of(" \t\r\n");
-      if (first == std::string::npos) {
-        continue;
-      }
-      item = item.substr(first, last - first + 1);
-      if (item == "file") {
-        arm.arguments.push_back("");  // session.configuration.program, which VS Code fills with the file
-      } else {
-        ASSERT_GE(item.size(), 2u) << item;
-        ASSERT_EQ(item.front(), '"') << "an argument that is neither a string literal nor `file`: " << item;
-        ASSERT_EQ(item.back(), '"') << item;
-        arm.arguments.push_back(item.substr(1, item.size() - 2));
-        arm.script = arm.script || arm.arguments.back() == "--script";
-      }
-    }
-    arms.push_back(arm);
-  }
+  const std::vector<VsCodeArm> arms = vscode_arms(read_file(dir + "/extension.js"));
   ASSERT_EQ(arms.size(), 2u) << "extension.js has not two DebugAdapterExecutable calls, one for a template and one for a script";
   EXPECT_NE(arms[0].script, arms[1].script) << "one call is for a script and the other for a template";
 
   TempDir temp;
-  for (const Arm & arm : arms) {
+  for (const VsCodeArm & arm : arms) {
     // A script has a statement on line 1; a template has a tag on line 2, which
     // a breakpoint stops at (see the template session above).
     const std::string file = arm.script ? temp.write("vscode-script.tang", "a = 1;\nprint(a);\n")
@@ -806,6 +822,167 @@ TEST(TangDap, TheVsCodeExtensionsCommandLinesStartTheRealCommandForATemplateAndA
     Result result = tang.finish();
     EXPECT_EQ(result.out, "") << "nothing but the protocol is written to stdout";
     EXPECT_EQ(result.status, 0) << result.err;
+  }
+}
+
+// Story 19's done checkpoint (Corey, 2026-10-19): a step through a template
+// from VS Code, as a scripted session. It starts the template command line the
+// extension builds and sends what VS Code sends for the extension's first
+// launch configuration: initialize with VS Code's client arguments, launch
+// with the configuration as VS Code resolves it, the breakpoints of the file,
+// the exception filters (none), configurationDone; then, at each stop, threads,
+// stackTrace, scopes and variables, as the editor's call stack and variables
+// views ask; and the user's stepIn, next, stepOut and continue, and disconnect
+// at the end. With GLTANG_DAP_TRANSCRIPT set, the whole exchange is written
+// there.
+TEST(TangDap, AVsCodeLaunchOfATemplateStepsThroughItAsTheEditorDrivesIt) {
+  const std::string dir = std::string(GLTANG_TEST_DATA) + "/../editors/vscode";
+  std::ifstream in(dir + "/extension.js", std::ios::binary);
+  std::stringstream text;
+  text << in.rdbuf();
+  const std::vector<VsCodeArm> arms = vscode_arms(text.str());
+  const VsCodeArm * arm = nullptr;
+  for (const VsCodeArm & a : arms) {
+    if (!a.script) {
+      arm = &a;
+    }
+  }
+  ASSERT_NE(arm, nullptr) << "extension.js has no template command line";
+
+  TempDir temp;
+  const std::string file = temp.write("vscode-step.tang",
+      "<% function twice(n) {\n"                                     // 1
+      "  r = n * 2;\n"                                               // 2
+      "  return r;\n"                                                // 3
+      "} %><ul>\n"                                                   // 4
+      "<% for (i = 0; i < 2; i += 1) { %><li><%= twice(i) %></li>\n" // 5
+      "<% } %></ul>\n");                                             // 6
+  const Result plain = run_plain({file});
+  ASSERT_EQ(plain.status, 0) << plain.err;
+  ASSERT_EQ(plain.out, "<ul>\n<li>0</li>\n<li>2</li>\n</ul>\n") << "the template itself";
+
+  std::vector<std::string> argv;
+  for (const std::string & a : arm->arguments) {
+    argv.push_back(a.empty() ? file : a);
+  }
+  std::string transcript;
+  Tang tang(argv);
+  tang.record_to(&transcript);
+  auto ok = [](const std::string & reply) { return reply.find("\"success\":true") != std::string::npos; };
+
+  ASSERT_TRUE(ok(tang.request("initialize",
+      "{\"clientID\":\"vscode\",\"clientName\":\"Visual Studio Code\",\"adapterID\":\"tang\","
+      "\"pathFormat\":\"path\",\"linesStartAt1\":true,\"columnsStartAt1\":true,"
+      "\"supportsVariableType\":true,\"supportsVariablePaging\":true,"
+      "\"supportsRunInTerminalRequest\":true,\"locale\":\"en\","
+      "\"supportsProgressReporting\":true,\"supportsInvalidatedEvent\":true,"
+      "\"supportsMemoryReferences\":true,\"supportsArgsCanBeInterpretedByShell\":true,"
+      "\"supportsMemoryEvent\":true,\"supportsStartDebuggingRequest\":true}")));
+  EXPECT_FALSE(tang.event("initialized").empty());
+  ASSERT_TRUE(ok(tang.request("launch",
+      "{\"type\":\"tang\",\"request\":\"launch\",\"name\":\"Debug the current Tang template\","
+      "\"program\":\"" + file + "\",\"script\":false,"
+      "\"__configurationTarget\":6,\"__sessionId\":\"6f0c3a1e-0000-4000-8000-000000000019\"}")));
+  const std::string set = tang.request("setBreakpoints",
+      "{\"source\":{\"name\":\"vscode-step.tang\",\"path\":\"" + file + "\"},"
+      "\"lines\":[5],\"breakpoints\":[{\"line\":5}],\"sourceModified\":false}");
+  ASSERT_TRUE(ok(set)) << set;
+  EXPECT_NE(set.find("\"verified\":true"), std::string::npos) << set;
+  ASSERT_TRUE(ok(tang.request("setExceptionBreakpoints", "{\"filters\":[]}")));
+  ASSERT_TRUE(ok(tang.request("configurationDone")));
+
+  // What the editor asks at every stop: the threads, the call stack, and the
+  // variables of the top frame's first scope.
+  struct View {
+    long line = -1;
+    long frames = -1;
+    std::string variables;
+  };
+  auto view = [&]() {
+    View v;
+    EXPECT_TRUE(ok(tang.request("threads")));
+    const std::string stack = tang.request("stackTrace", "{\"threadId\":1,\"startFrame\":0,\"levels\":20}");
+    v.line = number_after(stack, "\"line\":");
+    v.frames = number_after(stack, "\"totalFrames\":");
+    v.variables = tang.locals(number_after(stack, "\"id\":"));
+    return v;
+  };
+  auto has = [](const View & v, const std::string & name, const std::string & value) {
+    return v.variables.find("\"name\":\"" + name + "\",\"value\":\"" + value + "\"") != std::string::npos;
+  };
+
+  // The breakpoint: the loop's first statement on line 5, before its
+  // initialization has run.
+  std::string stopped = tang.event("stopped");
+  EXPECT_NE(stopped.find("\"reason\":\"breakpoint\""), std::string::npos) << stopped;
+  View at = view();
+  EXPECT_EQ(at.line, 5);
+  EXPECT_EQ(at.frames, 1);
+  EXPECT_TRUE(has(at, "i", "null")) << at.variables;
+
+  // Step in until the call enters twice. Line 5 holds several statements
+  // before the call (the loop's initialization and test, the text, the print
+  // tag), each a stop; a stop on the breakpoint's line says "breakpoint".
+  int steps = 0;
+  do {
+    ASSERT_TRUE(ok(tang.request("stepIn", "{\"threadId\":1}")));
+    stopped = tang.event("stopped");
+    EXPECT_TRUE(stopped.find("\"reason\":\"step\"") != std::string::npos ||
+                stopped.find("\"reason\":\"breakpoint\"") != std::string::npos) << stopped;
+    at = view();
+    ASSERT_LT(++steps, 10) << "stepIn never entered twice";
+  } while (at.frames != 2);
+  EXPECT_EQ(at.line, 1) << "a call polls at its entry, which is the line of the `function`";
+  EXPECT_TRUE(has(at, "n", "0")) << at.variables;
+
+  // Step over: the assignment, not yet run, then the return, with r set.
+  ASSERT_TRUE(ok(tang.request("next", "{\"threadId\":1}")));
+  EXPECT_FALSE(tang.event("stopped").empty());
+  at = view();
+  EXPECT_EQ(at.line, 2);
+  EXPECT_EQ(at.frames, 2);
+  EXPECT_TRUE(has(at, "r", "null")) << at.variables;
+  ASSERT_TRUE(ok(tang.request("next", "{\"threadId\":1}")));
+  EXPECT_FALSE(tang.event("stopped").empty());
+  at = view();
+  EXPECT_EQ(at.line, 3);
+  EXPECT_EQ(at.frames, 2);
+  EXPECT_TRUE(has(at, "r", "0")) << at.variables;
+
+  // Step out: the caller's statement (the print tag, with the text after it)
+  // finishes, and the next poll in the caller is the loop's close on line 6.
+  ASSERT_TRUE(ok(tang.request("stepOut", "{\"threadId\":1}")));
+  EXPECT_FALSE(tang.event("stopped").empty());
+  at = view();
+  EXPECT_EQ(at.line, 6);
+  EXPECT_EQ(at.frames, 1);
+
+  // Continue: the breakpoint again, in the second iteration, then the end.
+  bool second = false;
+  int stops = 0;
+  for (;;) {
+    ASSERT_TRUE(ok(tang.request("continue", "{\"threadId\":1}")));
+    const std::string next = tang.next_stop_or_end();
+    if (next != "stopped") {
+      EXPECT_EQ(next, "terminated");
+      break;
+    }
+    at = view();
+    EXPECT_EQ(at.line, 5);
+    second = second || has(at, "i", "1");
+    ASSERT_LT(++stops, 20);
+  }
+  EXPECT_TRUE(second) << "the breakpoint did not stop in the second iteration";
+  EXPECT_TRUE(ok(tang.request("disconnect", "{\"restart\":false}")));
+  const Result r = tang.finish();
+  EXPECT_EQ(r.out, "") << "nothing but the protocol is written to stdout";
+  EXPECT_EQ(r.err, plain.out) << "the page, on stderr under the debugger";
+  EXPECT_EQ(r.status, 0);
+
+  if (const char * path = std::getenv("GLTANG_DAP_TRANSCRIPT")) {
+    std::ofstream out(path, std::ios::binary);
+    out << transcript;
+    EXPECT_TRUE(out.good()) << "cannot write the transcript to " << path;
   }
 }
 
