@@ -1,0 +1,17 @@
+# 213 the fast path of a string's print does not look at the temporaries' room
+# defect: the fast path takes a string's print whose temporary the interpreter's print would push into storage that
+#   must first be allocated, so a memory budget that refuses that allocation fails the print on one tier only
+# caught by: the memory sweep over a first print of a string (testJit_templates,
+#   JitTemplates.AStringPrintedWhereItsTemporaryCannotBeHeld*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -760,7 +760,7 @@
+ }
+ 
+ bool gltang_vm_print_string_fast(GLTANG_Execution * exec, GLTANG_Value v) {
+-  if (!gltang_v_is_kind(v, GLTANG_OBJ_STRING) || exec->temp_count >= exec->temp_capacity) {
++  if (!gltang_v_is_kind(v, GLTANG_OBJ_STRING) /* planted: no room test */) {
+     return false;
+   }
+   const char * bytes;

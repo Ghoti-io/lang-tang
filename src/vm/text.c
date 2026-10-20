@@ -627,6 +627,11 @@ static void output_rollback(GLTANG_OutBuf * out) {
   }
 }
 
+/** Whether a print that finishes is handed to the host's sink: only the main activation's output is. */
+static bool output_delivers(const GLTANG_Execution * exec) {
+  return exec->sink && exec->out == &exec->main_act.out;
+}
+
 /**
  * Gives the output sink what a print has just finished: the segments from the
  * last delivered point to the end of the output, each as the bytes of one run of
@@ -635,7 +640,7 @@ static void output_rollback(GLTANG_OutBuf * out) {
  */
 static bool output_deliver(GLTANG_Execution * exec) {
   GLTANG_OutBuf * out = exec->out;
-  if (!exec->sink || out != &exec->main_act.out || out->length <= exec->sink_delivered) {
+  if (!output_delivers(exec) || out->length <= exec->sink_delivered) {
     return true;
   }
   const size_t from = exec->sink_delivered;
@@ -697,6 +702,71 @@ GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_Stri
   }
   output_rollback(exec->out);
   return gltang_vm_failure_value(exec, st);
+}
+
+// ---------------------------------------------------------------------------
+// The fast paths of compiled code (spec-template-compiled story 4d)
+// ---------------------------------------------------------------------------
+//
+// A second implementation, of the common case only, of the two functions above, which compiled
+// code calls without the native-call bracket and which must equal them in every observable. Each
+// answers false, having changed nothing, unless the print is one in which the function above
+// would only copy the bytes: then it copies them as that function would and answers true. What
+// the function above does beyond the copy, and why none of it can happen here:
+//
+// - a poll: `sink_pace` polls only once a print's bytes reach GLTANG_POLL_BYTES (`pace_since`
+//   starts at 0 for each print), so a text of fewer bytes never polls;
+// - an allocation: `output_prepare` grows nothing when the bytes and their terminator fit the
+//   capacity, and `output_add_segment` adds nothing when the last segment has the text's tag;
+//   `output_string`'s temporary is pushed into storage that has room;
+// - the sink: `output_deliver` does nothing unless output_delivers();
+// - a failure, a rollback, an error swallowed (the operand is a string): none.
+//
+// The fuel and the counters are the caller's (src/jit/helpers.c), charged only when the answer is
+// true. tests/unit/test_jit_templates.cpp holds each condition to the slow path it must take.
+
+/** The copy of a print of one run of `length` bytes tagged `type`, if nothing else would happen. */
+static bool print_run_fast(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+  GLTANG_OutBuf * out = exec->out;
+  if (length >= GLTANG_POLL_BYTES || output_delivers(exec) || !out->segment_count
+      || out->segments[out->segment_count - 1u].type != type || out->length + length + 1u > out->capacity) {
+    return false;
+  }
+  memcpy(out->bytes + out->length, bytes, length);
+  out->length += length;
+  out->bytes[out->length] = '\0';
+  out->committed = out->length;
+  return true;
+}
+
+/** The bytes and the tag of a string's one segment, as `sink_block` and `output_string` find them. */
+static bool one_run(const GLTANG_StringBlock * s, const char ** bytes, size_t * length, GLTANG_String_Type * type) {
+  if (s->segment_count != 1u) {
+    return false;
+  }
+  const uint64_t segment = gltang_string_segments(s)[0];
+  const size_t from = gltang_string_byte_offset(s, GLTANG_SEGMENT_FIRST(segment));
+  *bytes = gltang_string_bytes(s) + from;
+  *length = gltang_string_byte_offset(s, (size_t)s->grapheme_length) - from;
+  *type = GLTANG_SEGMENT_TYPE(segment);
+  return true;
+}
+
+bool gltang_vm_print_constant_fast(GLTANG_Execution * exec, const GLTANG_StringBlock * s) {
+  const char * bytes;
+  size_t length;
+  GLTANG_String_Type type;
+  return one_run(s, &bytes, &length, &type) && print_run_fast(exec, bytes, length, type);
+}
+
+bool gltang_vm_print_string_fast(GLTANG_Execution * exec, GLTANG_Value v) {
+  if (!gltang_v_is_kind(v, GLTANG_OBJ_STRING) || exec->temp_count >= exec->temp_capacity) {
+    return false;
+  }
+  const char * bytes;
+  size_t length;
+  GLTANG_String_Type type;
+  return one_run(gltang_vm_string(v), &bytes, &length, &type) && print_run_fast(exec, bytes, length, type);
 }
 
 GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBuf * out, size_t length) {

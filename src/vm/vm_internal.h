@@ -858,6 +858,8 @@ GLTANG_Value gltang_vm_map_new(GLTANG_Execution * exec, size_t capacity);
 GLTANG_Value gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const GLTANG_Value * pairs, size_t count);
 /** @brief The value for a string key; `*found` says whether the key is there. */
 GLTANG_Value gltang_vm_map_get(GLTANG_Value map, const char * key, size_t length, bool * found);
+/** @brief gltang_vm_map_get with the key's gltang_vm_string_hash already known. */
+GLTANG_Value gltang_vm_map_get_hashed(GLTANG_Value map, const char * key, size_t length, uint64_t hash, bool * found);
 /** @brief Sets a key; returns the map, or a failure value. */
 GLTANG_Value gltang_vm_map_set(GLTANG_Execution * exec, GLTANG_Value map, GLTANG_Value key, GLTANG_Value v);
 GLTANG_Value gltang_vm_deep_copy(GLTANG_Execution * exec, GLTANG_Value v);
@@ -914,6 +916,15 @@ typedef enum {
 GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, int depth, bool * too_deep);
 GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_StringBlock * s);
+/**
+ * @brief The common case of gltang_vm_print_constant, for compiled code (spec-template-compiled
+ *   story 4d): the copy of a text that cannot poll, allocate, deliver or fail. Must equal that
+ *   function wherever it answers true; on false it has changed nothing and the caller makes the
+ *   slow call. Charges no fuel. Not a GC point.
+ */
+bool gltang_vm_print_constant_fast(GLTANG_Execution * exec, const GLTANG_StringBlock * s);
+/** @brief The same for gltang_vm_op_print of a string (whose value is then null). */
+bool gltang_vm_print_string_fast(GLTANG_Execution * exec, GLTANG_Value v);
 /** @brief The text a value becomes in a `+` with a string; null/function are `Not supported`. */
 GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v);
 
@@ -926,6 +937,14 @@ GLTANG_Value gltang_vm_op_neg(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type);
 GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index);
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name);
+/**
+ * @brief The common case of `ATTR` by the constant `index` (whose bytes are `name`, `length`, and
+ *   its gltang_vm_string_hash `hash`) for compiled code (spec-template-compiled story 4d): a map
+ *   that holds the key, once the constant has been made. Must equal gltang_vm_constant then
+ *   gltang_vm_op_attr wherever it answers; it answers GLTANG_V_UNWIND, having done nothing, for
+ *   anything else (not a map, the name not made yet, the key absent). Not a GC point.
+ */
+GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash);
 /** @brief The attribute rule on a name given as bytes. */
 GLTANG_Value gltang_vm_op_attr_named(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length);
 GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container, unsigned flags, const GLTANG_Value * parts);

@@ -1897,6 +1897,15 @@ breaks nothing as not caught. Observed:
 | 202 compiled-index-stands-past-its-call | the `INDEX` thunk does not clear `exec->standing` | the memory sweep after a short standing operation (`testJit_templates`, `JitTemplates.AStandingOperationThatDidNotPoll*`) | the refusal's poll writes the constant's position in compiled code only |
 | 203 interpreted-index-stands-past-its-call | the interpreter's `INDEX` has no `STOOD()` | the memory sweep after a short standing operation (`testJit_templates`) | the refusal's poll writes the constant's position in the interpreter only |
 | 204 poll-does-not-end-the-stand | the runtime poll writes the standing operation's identity and leaves the flag set | the scope that runs out inside an attribute's name, swept over memory budgets (`testJit_templates`, `JitTemplates.AScopeThatRunsOutInsideAStanding*`) | in the interpreter the stand outlives the template call that stopped in it, and the caller's next poll writes an identity compiled code's run does not |
+| 205 fast-text-skips-its-fuel | the JIT side of a fast `PRINT_CONST` does not charge the operation's cost | the template of texts and a short string (`testJit_templates`, `JitTemplates.TextsAndAShortStringAfterACallsFirstPrint*`): fuel against the interpreter's | the two runs' fuel differs |
+| 206 fast-print-ignores-the-sink | the fast path does not ask `output_delivers` | the loop of texts with a host sink (`JitTemplates.ATextTheHostsSinkIsGiven*`): the deliveries | the sink is given one text in compiled code |
+| 207 fast-print-takes-the-pacing-length | the fast path's bound is `length > GLTANG_POLL_BYTES` | the strings at and below the pacing interval (`JitTemplates.ATextThatDoesNotFitTheOutput*`): the polls | a poll fewer in compiled code |
+| 208 fast-print-ignores-the-tag | no test of the output's last segment's tag | the texts and HTML strings that alternate (`JitTemplates.ATextAfterAnotherTag*`): the rendered output | plain text rendered escaped |
+| 209 fast-print-does-not-commit | the fast path leaves `committed` where it was | the memory sweep over a long print after a fast one (`JitTemplates.APrintThatFailsAfterFastTexts*`) | the rollback drops the fast print's bytes in compiled code |
+| 210 fast-print-of-two-runs | the fast path does not require one run | the string of two runs after an HTML string (`JitTemplates.ATextAfterAnotherTag*`) | the plain run rendered escaped |
+| 211 fast-attribute-before-its-name | the map's fast path does not require its name made | the loop of a map's attribute (`JitTemplates.AMapsAttributeIsTheFastPath*`): heap objects made | one string fewer in compiled code |
+| 212 fast-print-room-without-the-terminator | the room test leaves out the terminator | the sixteen-byte texts (`JitTemplates.ATextThatDoesNotFitTheOutput*`): the count the requirement gives | one fast print too many, the terminator written past the capacity |
+| 213 fast-string-print-ignores-the-temporaries | the string's fast path ignores the temporaries' room | the memory sweep over a first print of a string (`JitTemplates.AStringPrintedWhereItsTemporaryCannotBeHeld*`) | a budget refuses the print on one tier only |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1904,14 +1913,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 213 are story 4d's fast paths: 205 in the JIT's helper and the rest in the vm's fast functions, which only compiled code calls, so only the JIT arm runs their tests.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 204 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 213 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and ninety-two that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the two hundred and one that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2762,6 +2771,69 @@ after their calls, the interpreter's index likewise, a poll that writes the iden
 stand set, an entry that extends the reservation only for more than one raw float, and an entry that
 reads no single argument. The entry's extension allocates and comes before the reference to the code
 is taken, so the payload is read again from that reference.
+
+**Fast paths for the common template ops (spec-template-compiled story 4d).** After story 4b a
+compiled template op was still the call of the interpreter's own function through the native table
+(the bracket: the pending fuel, two frame states, `CALL_NATIVE`, a GC point), and callgrind put most of
+a compiled print's cost on the C side of that call (the thunk, `gltang_vm_execution_of`, the sink's
+`gltang_sink_text`, `output_prepare`, `output_deliver`): about 165 instructions for a text into an
+output that has room. So, by Corey's amendment of the spec's one-implementation rule for these ops only,
+compiled code now does the common case of three ops itself, through a second implementation of that
+case written beside the interpreter function it must equal, and calls the interpreter's function, the
+slow path, for everything else:
+
+| Op | Fast path, and the function it must equal | Taken only when (otherwise the slow call, unchanged) |
+|---|---|---|
+| `PRINT_CONST` | `gltang_vm_print_constant_fast` (`src/vm/text.c`), beside `gltang_vm_print_constant` | the text is one run of fewer than `GLTANG_POLL_BYTES` bytes (no poll: `sink_pace` polls only once a print's bytes reach it), the output's last segment has its tag (no segment added), the bytes and their terminator fit the capacity (no growth), and `output_delivers` is false (no sink, or not the main activation's output: the one predicate `output_deliver` uses) |
+| `PRINT` | `gltang_vm_print_string_fast` (`text.c`), beside `gltang_vm_op_print` | the operand is a string (so the error swallow is a no-op and the render is `output_string`), the same four conditions, and the temporaries have a free cell (`output_string`'s push would not allocate); the value is null |
+| `ATTR` of a value not known to be a library | `gltang_vm_map_attr_fast` (`src/vm/ops.c`), beside `attr()` | the operand is a map, the name constant is already made (`exec->constants[k]`: the interpreter's `ATTR` would make nothing) and the map holds the key; the name's FNV-1a hash is computed when the function is compiled |
+
+Compiled code stores the position (`emit_site`, as the interpreter's `SYNC` stores it at the three ops
+whichever way they go), adds its pending fuel, and makes a plain call of the JIT side
+(`gltang_jit_print_const_fast`, `gltang_jit_print_fast`, `gltang_jit_map_attr_fast` in
+`src/jit/helpers.c`: no frame state, no GC point, since nothing on a fast path allocates or polls),
+which charges the op's cost and counts it (`output_calls` or `value_calls` as the slow path does, and
+`fast_prints` or `fast_attrs`) only when the case was taken. On "not taken" compiled code makes the
+native-table call it made before, without storing the position again. A text that can never be the fast
+path (more than one run, or the pacing length or more) is only the call. Nothing on a fast path polls,
+allocates, stands, delivers or fails, so no poll, frame, identity, heap object or memory charge can
+differ from the interpreter's, and the slow path is the call it was.
+
+Rejected: emitting the copy in IR (the text's bytes as immediate stores, the tests inline), which would
+save the plain call and about twenty instructions a print but puts a second copy of appending in the
+emitter, where no planted patch of `text.c` reaches it; integer prints; a segment added where the
+segment array has room (outside the spec's simple case: a text after another tag stays the slow path);
+and the first print of a template call, which grows the call's fresh output and so always allocates.
+
+Measured by the instrument of story 4b (callgrind, `--toggle-collect=<case function>`, the whole case
+over 4,802 calls; host GCC 14.2.0, runtime-core 5766df9), each fast path added in turn:
+
+| row | `77197d0` | + text | + string print | + map attribute |
+|---|---|---|---|---|
+| steady-template-interpreted-warm-call | 7,291 | | | 7,292 |
+| steady-template-compiled-warm-call | 7,852 | 7,676 | 7,676 | 7,677 |
+| steady-template-rows-interpreted-per-row | 26,407 | | | 26,407 |
+| steady-template-rows-compiled-per-row | 27,139 | 26,779 | 26,565 | 26,147 |
+
+Each lowers the compiled count of the row whose ops it serves (the warm row prints three texts and no
+string or attribute), so all three are kept. The per-row compiled call is now 260 instructions below the
+interpreted one. The warm row is still 385 above it: its first text grows a fresh output on every call
+(the slow path, about 750 instructions, the same on both tiers), its other two are now about 50 each,
+and what is left over is the entry and leave of compiled code (runtime-core's activation record and
+`grjit_code_call`, about 290), `gltang_jit_note_poll`'s lookup of the template's record at every entry
+poll (about 50, the interpreter's tier-up bookkeeping) and about 170 more in glibc's `malloc` for the
+same number of calls (the JIT's own allocations change the heap the per-call activation is carved
+from), none of it an op's.
+
+`tests/unit/test_jit_templates.cpp` holds each condition to its slow path (a host sink, a template's
+output with a sink, a full buffer at the terminator's byte, the pacing length, another tag, a string of
+two runs, a map's attribute before its name is made, a missing key, a string and a library, a print
+that fails after a fast one at every memory budget, and the temporaries' first allocation at every
+memory budget), each comparing the tiers, their heap objects and the fast-path count. Planted 205 to
+213 gate it: a fast text that charges no fuel, a fast print that ignores the sink, the pacing bound
+inclusive, no tag test, `committed` not moved, a string of two runs taken as one, a map's attribute
+before its name is made, a room test without the terminator, and a string's print that ignores the
+temporaries' room.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

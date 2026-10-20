@@ -360,6 +360,24 @@ void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t cou
  *   failure), which compiled code then takes as the container.
  */
 uint64_t gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1);
+/**
+ * @brief The fast path of a compiled `PRINT_CONST` of the program's text `block`
+ *   (spec-template-compiled story 4d): gltang_vm_print_constant_fast, and then the operation's
+ *   fuel and counters. Not a GC point: nothing on it allocates or polls.
+ * @return 1 if the text was printed; 0 if nothing was done, and compiled code then makes the
+ *   native-table call of `PRINT_CONST`.
+ */
+uint64_t gltang_jit_print_const_fast(GLTANG_Execution * exec, uint64_t block);
+/** @brief The same for a compiled `PRINT` of `value` (gltang_vm_print_string_fast): 1 if printed, whose value is then null. */
+uint64_t gltang_jit_print_fast(GLTANG_Execution * exec, uint64_t value);
+/**
+ * @brief The fast path of a compiled `ATTR` by the constant `constant` (its program block `block`,
+ *   whose bytes hash to `hash`) of a value not known to be a library: gltang_vm_map_attr_fast,
+ *   then the operation's fuel and counters. Not a GC point.
+ * @return The attribute, or GLTANG_V_UNWIND if nothing was done (compiled code then makes the
+ *   native-table call of `ATTR`).
+ */
+uint64_t gltang_jit_map_attr_fast(GLTANG_Execution * exec, uint64_t container, uint64_t constant, uint64_t block, uint64_t hash);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
 

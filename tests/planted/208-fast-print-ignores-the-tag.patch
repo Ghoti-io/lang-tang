@@ -1,0 +1,17 @@
+# 208 the fast path appends to a segment of another tag
+# defect: the fast path does not compare the text's tag with the output's last segment's, so plain text after an
+#   HTML string is appended to the HTML segment and rendered escaped
+# caught by: the texts and HTML strings that alternate, whose rendered output is compared with the interpreter's and
+#   with the expected text (testJit_templates, JitTemplates.ATextAfterAnotherTag*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -729,7 +729,7 @@
+ static bool print_run_fast(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+   GLTANG_OutBuf * out = exec->out;
+   if (length >= GLTANG_POLL_BYTES || output_delivers(exec) || !out->segment_count
+-      || out->segments[out->segment_count - 1u].type != type || out->length + length + 1u > out->capacity) {
++      || (out->segments[out->segment_count - 1u].type != type && 0) /* planted: no tag test */ || out->length + length + 1u > out->capacity) {
+     return false;
+   }
+   memcpy(out->bytes + out->length, bytes, length);

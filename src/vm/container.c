@@ -279,11 +279,15 @@ static void map_append(GLTANG_Execution * exec, GLTANG_MapObject * map, GLTANG_V
   ++map->count;
 }
 
-GLTANG_Value gltang_vm_map_get(GLTANG_Value map, const char * key, size_t length, bool * found) {
+GLTANG_Value gltang_vm_map_get_hashed(GLTANG_Value map, const char * key, size_t length, uint64_t hash, bool * found) {
   const GLTANG_MapObject * m = gltang_vm_map(map);
-  int64_t entry = map_find(m->store.typed, key, length, gltang_vm_string_hash(key, length));
+  int64_t entry = map_find(m->store.typed, key, length, hash);
   *found = entry >= 0;
   return entry >= 0 ? m->store.typed->slots[2 * entry + 1] : GLTANG_V_NULL;
+}
+
+GLTANG_Value gltang_vm_map_get(GLTANG_Value map, const char * key, size_t length, bool * found) {
+  return gltang_vm_map_get_hashed(map, key, length, gltang_vm_string_hash(key, length), found);
 }
 
 GLTANG_Value gltang_vm_map_set(GLTANG_Execution * exec, GLTANG_Value map, GLTANG_Value key, GLTANG_Value v) {

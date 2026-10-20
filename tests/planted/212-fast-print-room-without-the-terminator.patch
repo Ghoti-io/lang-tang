@@ -1,0 +1,18 @@
+# 212 the fast path's room test leaves out the terminator
+# defect: the fast path copies a text that fills the output's capacity exactly, with no room for the terminator the
+#   interpreter's print makes room for (it grows the output first), and writes the terminator one past it
+# caught by: the 32 sixteen-byte texts, whose fast-path count is the requirement written out (one too many: the 32nd
+#   fills the output exactly)
+#   (testJit_templates, JitTemplates.ATextThatDoesNotFitTheOutput*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -729,7 +729,7 @@
+ static bool print_run_fast(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+   GLTANG_OutBuf * out = exec->out;
+   if (length >= GLTANG_POLL_BYTES || output_delivers(exec) || !out->segment_count
+-      || out->segments[out->segment_count - 1u].type != type || out->length + length + 1u > out->capacity) {
++      || out->segments[out->segment_count - 1u].type != type || out->length + length /* planted: no terminator */ > out->capacity) {
+     return false;
+   }
+   memcpy(out->bytes + out->length, bytes, length);

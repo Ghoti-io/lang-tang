@@ -1601,21 +1601,85 @@ static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_ATTR, args, 2, c->stack[d - 1u], d);
 }
 
+/*
+ * The fast paths (spec-template-compiled story 4d). For a text, a print and a map's attribute,
+ * compiled code first makes a plain call (no native-call bracket, no frame state, no GC point) of
+ * the vm's second implementation of the operation's common case (helpers.c, over text.c and ops.c),
+ * which does the operation only where nothing but its result can follow from it (no poll, no
+ * allocation, no delivery to a sink, no failure) and otherwise does nothing; only then does compiled
+ * code make the native-table call it made before, the slow path, which is the interpreter's own
+ * function. The position is stored before the plain call, as the interpreter's SYNC stores it at the
+ * three operations whichever way they go, and the slow call does not store it again. The fuel
+ * pending in compiled code is added before the call, and the operation's own cost is charged by
+ * whichever path does it.
+ */
+
+/** The position, the pending fuel and the plain call `helper(exec, args...)`, its answer in the temporary `TMP_R`. */
+static void emit_fast_call(Ctx * c, uint32_t i, uint64_t helper, const GRJIT_Operand * args, size_t argc) {
+  GRJIT_Operand all[5];
+  all[0] = I((int64_t)(intptr_t)c->exec);
+  for (size_t k = 0; k < argc; ++k) {
+    all[1u + k] = args[k];
+  }
+  emit_site(c, i);
+  flush_cost(c);
+  B(grjit_builder_call(c->b, c->tmp[TMP_R], helper, GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, all, argc + 1u,
+      (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+}
+
+/** Branches on `taken` to `fast` and otherwise to `slow`, both new, and leaves `slow` current. */
+static void branch_fast_or_slow(Ctx * c, GRJIT_Operand taken, GRJIT_BlockId * fast, GRJIT_BlockId * slow) {
+  new_block(c, fast);
+  new_block(c, slow);
+  B(grjit_builder_br_if(c->b, taken, *fast, *slow));
+  c->open = false;
+  set_block(c, *slow);
+}
+
 /**
  * `PRINT`: the interpreter's print of the operand in slot `d - 1`, which its value (null,
  * or the error a failed print makes) replaces. The operand is a value word: a raw float
- * is the designed exit before this (`reads_raw`).
+ * is the designed exit before this (`reads_raw`). A short string whose print cannot poll,
+ * allocate or deliver is the fast path, and its value is null as the interpreter's is.
  */
 static void emit_print(Ctx * c, uint32_t i, uint32_t d) {
   GRJIT_Operand args[1] = {V(c->stack[d - 1u])};
-  emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d);
+  GRJIT_BlockId fast, slow, join;
+  emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_fast, args, 1);
+  branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
+  new_block(c, &join);
+  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d, false);
+  branch_to(c, join);
+  set_block(c, fast);
+  B(grjit_builder_const(c->b, c->stack[d - 1u], (int64_t)GLTANG_V_NULL));
+  branch_to(c, join);
+  set_block(c, join);
+}
+
+/**
+ * Whether a text can ever be the fast path: one segment of fewer bytes than a print paces by
+ * (`sink_pace`). The rest of the test is made when it runs (gltang_vm_print_constant_fast, which
+ * makes this one again), so a text that fails this one is only the call, as before.
+ */
+static bool text_may_be_fast(const GLTANG_StringBlock * s) {
+  return s->segment_count == 1u && s->byte_length < GLTANG_POLL_BYTES;
 }
 
 /** `PRINT_CONST k`: the interpreter's print of the constant's text; it pushes nothing, and its value is discarded as the interpreter discards it. */
 static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   // The block is the program's (gcu_calloc'd by compile.c, freed with the program, never in the heap), and the execution holds the program while its code runs.
-  GRJIT_Operand args[1] = {I((int64_t)(intptr_t)c->program->constants[a].block)};
-  emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d);
+  const GLTANG_StringBlock * block = c->program->constants[a].block;
+  GRJIT_Operand args[1] = {I((int64_t)(intptr_t)block)};
+  if (!text_may_be_fast(block)) {
+    emit_native(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d);
+    return;
+  }
+  GRJIT_BlockId fast, slow;
+  emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_const_fast, args, 1);
+  branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
+  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d, false);
+  branch_to(c, fast);  // the fast path does nothing more: both go on from it
+  set_block(c, fast);
 }
 
 // ---------------------------------------------------------------------------
@@ -1686,11 +1750,34 @@ static void emit_slice(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native(c, i, d, GLTANG_JIT_NATIVE_SLICE, args, 5, c->stack[at], at + 1u);
 }
 
-/** `ATTR name` of a value that is not known to be a library: the interpreter's attribute rule; the value replaces the operand. */
+/**
+ * `ATTR name` of a value that is not known to be a library: the interpreter's attribute rule; the
+ * value replaces the operand. A map that holds the name, once the name has been made, is the fast
+ * path (gltang_vm_map_attr_fast), with the name's hash computed here; anything else is the test
+ * for a host-defined operand and the call, as before.
+ */
 static void emit_value_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
-  guard_not_custom(c, i, d, d - 1u);
   GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};
-  emit_native(c, i, d, GLTANG_JIT_NATIVE_VALUE_ATTR, args, 2, c->stack[d - 1u], d);
+  if (!string_constant(c, a)) {
+    guard_not_custom(c, i, d, d - 1u);
+    emit_native(c, i, d, GLTANG_JIT_NATIVE_VALUE_ATTR, args, 2, c->stack[d - 1u], d);
+    return;
+  }
+  const GLTANG_StringBlock * name = c->program->constants[a].block;
+  const uint64_t hash = gltang_vm_string_hash(gltang_string_bytes(name), (size_t)name->byte_length);
+  GRJIT_Operand fast_args[4] = {V(c->stack[d - 1u]), I((int64_t)a), I((int64_t)(intptr_t)name), I((int64_t)hash)};
+  GRJIT_BlockId fast, slow, join;
+  emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_map_attr_fast, fast_args, 4);
+  cmp(c, GRJIT_CMP_NE, c->tmp[TMP_C], V(c->tmp[TMP_R]), I((int64_t)GLTANG_V_UNWIND));
+  branch_fast_or_slow(c, V(c->tmp[TMP_C]), &fast, &slow);
+  new_block(c, &join);
+  guard_not_custom(c, i, d, d - 1u);
+  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_VALUE_ATTR, args, 2, c->stack[d - 1u], d, false);
+  branch_to(c, join);
+  set_block(c, fast);
+  bitcast(c, c->stack[d - 1u], c->tmp[TMP_R]);
+  branch_to(c, join);
+  set_block(c, join);
 }
 
 /**

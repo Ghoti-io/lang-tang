@@ -106,6 +106,43 @@ uint64_t gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0,
   return gltang_vm_map_fill(exec, map, pairs, k1 ? 2u : 1u);
 }
 
+// The fast paths (spec-template-compiled story 4d): the common case of a text, a short string's
+// print and a map's attribute, done by the vm's second implementation of it (text.c, ops.c) with
+// no native-call bracket. Each charges its operation's fuel and counts it only when it was done, so
+// that the slow call compiled code makes otherwise charges and counts it instead, once either way.
+
+uint64_t gltang_jit_print_const_fast(GLTANG_Execution * exec, uint64_t block) {
+  if (!gltang_vm_print_constant_fast(exec, (const GLTANG_StringBlock *)(uintptr_t)block)) {
+    return 0;
+  }
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
+  ++exec->jit_stats.output_calls;
+  ++exec->jit_stats.fast_prints;
+  return 1;
+}
+
+uint64_t gltang_jit_print_fast(GLTANG_Execution * exec, uint64_t value) {
+  if (!gltang_vm_print_string_fast(exec, value)) {
+    return 0;
+  }
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
+  ++exec->jit_stats.output_calls;
+  ++exec->jit_stats.fast_prints;
+  return 1;
+}
+
+uint64_t gltang_jit_map_attr_fast(GLTANG_Execution * exec, uint64_t container, uint64_t constant, uint64_t block, uint64_t hash) {
+  const GLTANG_StringBlock * name = (const GLTANG_StringBlock *)(uintptr_t)block;
+  GLTANG_Value v = gltang_vm_map_attr_fast(exec, container, (uint32_t)constant, gltang_string_bytes(name), (size_t)name->byte_length, hash);
+  if (v == GLTANG_V_UNWIND) {
+    return v;
+  }
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
+  ++exec->jit_stats.value_calls;
+  ++exec->jit_stats.fast_attrs;
+  return v;
+}
+
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {
   if (!gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
     return 0;

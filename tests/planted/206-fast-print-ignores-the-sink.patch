@@ -1,0 +1,17 @@
+# 206 the fast path copies a print the host's sink is to be given
+# defect: the fast path of a print does not ask whether the output is delivered (`output_delivers`), so a print of
+#   the main activation's output with a sink attached is copied and never handed to the sink
+# caught by: the loop of texts with a sink, whose deliveries are compared with the interpreter's
+#   (testJit_templates, JitTemplates.ATextTheHostsSinkIsGiven*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -728,7 +728,7 @@
+ /** The copy of a print of one run of `length` bytes tagged `type`, if nothing else would happen. */
+ static bool print_run_fast(GLTANG_Execution * exec, const char * bytes, size_t length, GLTANG_String_Type type) {
+   GLTANG_OutBuf * out = exec->out;
+-  if (length >= GLTANG_POLL_BYTES || output_delivers(exec) || !out->segment_count
++  if (length >= GLTANG_POLL_BYTES || /* planted: no sink test */ !out->segment_count
+       || out->segments[out->segment_count - 1u].type != type || out->length + length + 1u > out->capacity) {
+     return false;
+   }

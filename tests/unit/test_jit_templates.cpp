@@ -47,8 +47,12 @@
 // of a container (the interpreter's copy). A cast to int of a float constant is folded inside the
 // small-integer range and an exit outside it.
 //
+// Story 4d gives a text, a print of a short string and a map's attribute by a constant name a fast
+// path: the common case done in compiled code by a second implementation of it, with the
+// interpreter's function the slow path for everything else; the tests at the end hold each condition.
+//
 // Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167, 169 to
-// 176, 179 to 191, 198, 199 and 202 to 204 here (173, 183, 185, 191 and 203 are the interpreter's, seen
+// 176, 179 to 191, 198, 199, 202 to 204 and 205 to 213 here (173, 183, 185, 191 and 203 are the interpreter's, seen
 // only by the JIT arm; 198 and 204 are in the runtime poll both tiers share, and only a test of each tier
 // on its own sees 198, whose interpreter half runs in the JIT=no arm too),
 // 168 here under relocation torture, 177 in testJit_floats (the opcode policy) and 156 in
@@ -58,6 +62,7 @@
 #include "jit_harness.h"
 #include "test_helpers.h"
 
+#include <ghoti.io/lang-tang/bytecode.h>
 #include <ghoti.io/lang-tang/type.h>
 
 #include <fstream>
@@ -1756,6 +1761,275 @@ TEST(JitTemplates, WhereNativesCannotBeCalledCastsAndLiteralsStayExitsAndTheOutp
   EXPECT_EQ(jit.result, plain.result);
   EXPECT_EQ(jit.stats.value_calls, 0u);
   EXPECT_GE(jit.stats.deopts, 1u);
+}
+
+// ---------------------------------------------------------------------------
+// The fast paths (story 4d): a text, a print of a short string and a map's attribute by a
+// constant name are done in compiled code, by a second implementation of the common case
+// (text.c, ops.c), with no call through the native table, wherever the interpreter's function
+// would do nothing but the copy or the lookup. Everything else is the slow path, the call of the
+// interpreter's function as before. Each test forces the slow path one way and says so in numbers
+// (`fast_prints`, `fast_attrs`), beside the tiers compared as everywhere else, and the heap objects
+// made: a fast path may make none the slow one would.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// expect_same, and the two runs made the same heap objects.
+void expect_same_heap(const Scenario & sc, Outcome * plain, Outcome * jit) {
+  expect_same(sc, plain, jit);
+  EXPECT_EQ(plain->heap_allocations, jit->heap_allocations) << "a fast path made, or skipped, a heap object";
+}
+
+/**
+ * How many of the prints of a run of texts of `lengths`, one after another into one empty output,
+ * the fast path can take: the bytes and their terminator fit what the output has (it starts empty
+ * and grows by doubling from 64 bytes, text.c `grow`), the output already has a segment of the
+ * text's tag (all one tag here, so every print but the first), and the text is shorter than the
+ * pacing interval. The requirement the fast path is held to, written out, not the code's own loop.
+ */
+uint64_t texts_the_fast_path_takes(const std::vector<size_t> & lengths) {
+  size_t length = 0, capacity = 0;
+  uint64_t fast = 0;
+  bool segment = false;
+  for (size_t n : lengths) {
+    if (segment && n < GLTANG_POLL_BYTES && length + n + 1u <= capacity) {
+      ++fast;
+    }
+    else {
+      size_t grown = capacity ? capacity : 64u;
+      while (grown < length + n + 1u) {
+        grown *= 2u;
+      }
+      capacity = grown;
+    }
+    length += n;
+    segment = segment || n != 0;
+  }
+  return fast;
+}
+
+}  // namespace
+
+TEST(JitTemplates, TextsAndAShortStringAfterACallsFirstPrintAreTheFastPathWithTheInterpretersOutputAndFuel) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Each call's output starts empty, so its first text grows it (the slow path); the string and the
+  // text after it fit and carry its tag, and are copied by the fast path.
+  Scenario sc = scenario("use card; i = 0; while (i < 20) { print(card()); i = i + 1; }\n");
+  sc.parts.push_back(card("<% s = \"x\" + \"y\"; %><p><%= s %></p>\n"));
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same_heap(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  std::string expected;
+  for (int i = 0; i < 20; ++i) {
+    expected += "<p>xy</p>\n";
+  }
+  EXPECT_EQ(jit.raw, expected);
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0);
+  EXPECT_EQ(seen[1].compiled, 1);
+  EXPECT_EQ(jit.stats.output_calls, 60u) << "three compiled prints a call, by either path";
+  EXPECT_EQ(jit.stats.fast_prints, 40u) << "the string and the second text of each call; the first text grew the output";
+  EXPECT_EQ(plain.stats.fast_prints, 0u);
+}
+
+TEST(JitTemplates, ATextTheHostsSinkIsGivenIsTheSlowPathAndATemplatesTextWhichIsNotDeliveredIsNot) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The main activation's output is delivered to the sink at every print (output_deliver), so with a
+  // sink no print of it is the fast path; without one, every text after the first is. A template's
+  // output is never delivered, so its texts are the fast path with a sink too.
+  const std::string script = "function f(n) { i = 0; while (i < n) { print(\"ab\"); i = i + 1; } return i; }\nf(10);\n";
+  for (int with_sink = 0; with_sink < 2; ++with_sink) {
+    Scenario sc = scenario(script);
+    std::vector<Delivery> deliveries;
+    deliveries.reserve(2);
+    if (with_sink) {
+      sc.before = [&](Context & context) {
+        deliveries.emplace_back();
+        ASSERT_EQ(gltang_execution_set_output_sink(context.execution, sink_fn, &deliveries.back()), GLTANG_OK);
+      };
+    }
+    Outcome plain, jit;
+    expect_same_heap(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "abababababababababab");
+    EXPECT_EQ(jit.stats.output_calls, 10u);
+    if (with_sink) {
+      ASSERT_EQ(deliveries.size(), 2u);
+      EXPECT_EQ(deliveries[0].bytes, "abababababababababab");
+      EXPECT_EQ(deliveries[1].bytes, deliveries[0].bytes) << "compiled code's prints were each delivered as the interpreter's";
+      EXPECT_EQ(deliveries[1].calls, deliveries[0].calls);
+      EXPECT_EQ(jit.stats.fast_prints, 0u) << "a delivered print is never the fast path";
+    }
+    else {
+      EXPECT_EQ(jit.stats.fast_prints, 9u) << "the control: the same texts without a sink, every one after the first";
+    }
+  }
+  {
+    Scenario sc = scenario("use card; i = 0; while (i < 10) { x = card(); i = i + 1; }\nprint(x);\n");
+    sc.parts.push_back(card("<p><% k = 1; %></p>"));
+    std::vector<Delivery> deliveries;
+    deliveries.reserve(2);
+    sc.before = [&](Context & context) {
+      deliveries.emplace_back();
+      ASSERT_EQ(gltang_execution_set_output_sink(context.execution, sink_fn, &deliveries.back()), GLTANG_OK);
+    };
+    Outcome plain, jit;
+    expect_same_heap(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    ASSERT_EQ(deliveries.size(), 2u);
+    EXPECT_EQ(deliveries[0].bytes, "<p></p>");
+    EXPECT_EQ(deliveries[1].bytes, deliveries[0].bytes);
+    EXPECT_EQ(jit.stats.fast_prints, 10u) << "each call's second text: a template's output is not the sink's";
+  }
+}
+
+TEST(JitTemplates, ATextThatDoesNotFitTheOutputOrReachesThePacingIntervalIsTheSlowPathWithTheSamePolls) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Sixteen bytes 32 times: the output grows to 64 bytes and doubles after, and each text that would
+  // fill it exactly (the 4th, 8th, 16th and 32nd) has no room for its terminator, so it grows it. The
+  // count ends on such a text, so that a room test one byte short is a count one too many.
+  {
+    Scenario sc = scenario("function f(n) { i = 0; while (i < n) { print(\"0123456789abcdef\"); i = i + 1; } return i; }\nf(32);\n");
+    Outcome plain, jit;
+    expect_same_heap(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw.size(), 512u);
+    EXPECT_EQ(jit.stats.output_calls, 32u);
+    EXPECT_EQ(jit.stats.fast_prints, texts_the_fast_path_takes(std::vector<size_t>(32, 16)));
+    EXPECT_EQ(jit.stats.fast_prints, 27u) << "32 less the five that grew the output: the 1st, 4th, 8th, 16th and 32nd";
+  }
+  // A string one byte short of the pacing interval never polls inside its print, and one of the
+  // interval's own length polls once inside, at its end: only the first can be the fast path, once
+  // the output has room for it. (Strings in variables, so that each is a `PRINT` of a value, which
+  // compiled code tests only when it runs; a text that long is never even tried, build.c.)
+  {
+    const std::string below(GLTANG_POLL_BYTES - 1u, 'b');
+    const std::string at(GLTANG_POLL_BYTES, 'a');
+    Scenario sc = scenario("function f(n, b, a) { i = 0; while (i < n) { print(b); print(a); i = i + 1; } return i; }\nf(6, \"" + below + "\", \"" + at + "\");\n");
+    Outcome plain, jit;
+    expect_same_heap(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw.size(), 6u * (2u * GLTANG_POLL_BYTES - 1u));
+    Scenario shorter = scenario("function f(n, b, a) { i = 0; while (i < n) { print(b); print(b); i = i + 1; } return i; }\nf(6, \"" + below + "\", \"\");\n");
+    Outcome shorter_plain = run(shorter, 0);
+    EXPECT_EQ(plain.polls, shorter_plain.polls + 6u) << "each print of the interval's length polled once inside, and the others never";
+    std::vector<size_t> lengths;
+    for (int k = 0; k < 6; ++k) {
+      lengths.push_back(below.size());
+      lengths.push_back(at.size());
+    }
+    EXPECT_EQ(jit.stats.fast_prints, texts_the_fast_path_takes(lengths));
+    EXPECT_GE(jit.stats.fast_prints, 2u) << "the short one, once the output had room for it";
+  }
+}
+
+TEST(JitTemplates, ATextAfterAnotherTagAndAStringOfTwoTagsAreTheSlowPathAndTheTagsAreTheInterpreters) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The text and the HTML string alternate, so each print starts a segment (no fast path); then two
+  // HTML strings in a row (the second is the fast path), a string of two runs after an HTML one,
+  // whose second run is plain text (the slow path, which keeps both tags), and a text that goes on
+  // in the plain text that string ended with (the fast path).
+  Scenario sc = scenario("<% h = \"<b>\".html; two = h + \"[<i>]\"; %>[<i>]<%= h %>[<i>]<%= h %><%= h %><%= two %>|", Mode::Template);
+  Outcome plain, jit;
+  expect_same_heap(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, "[<i>]<b>[<i>]<b><b><b>[<i>]|");
+  EXPECT_EQ(jit.rendered, "[<i>]&lt;b&gt;[<i>]&lt;b&gt;&lt;b&gt;&lt;b&gt;[<i>]|");
+  EXPECT_EQ(jit.stats.output_calls, 7u);
+  EXPECT_EQ(jit.stats.fast_prints, 2u) << "the second of the two HTML strings in a row, and the last text";
+}
+
+TEST(JitTemplates, AMapsAttributeIsTheFastPathOnceItsNameIsMadeAndAMissingKeyOrAnotherKindIsTheSlowPath) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // At the first iteration no name has been made, so each attribute is the slow path, which makes it;
+  // after that `m.name` is the fast path; `m.missing` (null, the slow path), a string's `.length`
+  // and a library's member through a variable are not. (No `== null`: that comparison is an exit.)
+  Scenario sc = scenario(
+      "use t;\n"
+      "function f(n, lib) {\n"
+      "  m = {name: \"ann\", age: 7}; s = \"text\"; out = 0; i = 0;\n"
+      "  while (i < n) {\n"
+      "    a = m.name; b = m.missing; c = s.length; d = lib.items;\n"
+      "    out = out + a.length + c; held = [b, d];\n"
+      "    i = i + 1;\n"
+      "  }\n"
+      "  return out;\n"
+      "}\n"
+      "x = f(12, t);\n"
+      "x;\n");
+  sc.before = add_items_library;
+  Outcome plain, jit;
+  expect_same_heap(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_NE(jit.result.find("84"), std::string::npos) << jit.result;
+  EXPECT_EQ(jit.stats.deopts, 0u);
+  EXPECT_EQ(jit.stats.fast_attrs, 11u) << "`m.name` after its first iteration, and nothing else";
+  EXPECT_EQ(plain.stats.fast_attrs, 0u);
+}
+
+TEST(JitTemplates, APrintThatFailsAfterFastTextsRollsBackToTheSameByteOnBothTiersAtEveryMemoryBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A template's output is never delivered, so the one way a print of it fails is memory: the long
+  // string after a text and a short string must grow the output, and a budget that refuses the
+  // growth fails the print, which rolls back what it appended to the end of the last print that
+  // finished. The short string was the fast path, which must have moved that point as the slow path
+  // does. (Texts side by side are one text: compile.c joins them.) Swept from an eighth of the run's
+  // peak to above it; the tiers agree at every budget, and the sweep sees the rolled-back print.
+  Scenario sc = scenario("use card; x = card(); print(\"|\"); x;\n");
+  sc.parts.push_back(card("<% s = \"two\"; b = \"0123456789\"; k = 0; while (k < 8) { b = b + b; k += 1; } %><p>one</p><%= s %><%= b %><p>three</p>"));
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  Outcome compiled = run(sc, 1);
+  ASSERT_TRUE(measured.finished);
+  ASSERT_TRUE(compiled.finished);
+  EXPECT_EQ(compiled.stats.fast_prints, 2u) << "the short string, and the last text";
+  const uint64_t peak = std::max(measured.memory_peak, compiled.memory_peak);
+  bool rolled_back = false;
+  std::set<std::string> kinds;
+  for (uint64_t i = 0; i <= 128; ++i) {
+    const uint64_t budget = peak / 8 + (peak - peak / 8 + 2000) * i / 128;
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain = run(tight, 0);
+    Outcome jit = run(tight, 1);
+    kinds.insert(plain.key());
+    EXPECT_EQ(plain.key(), jit.key()) << "memory " << budget;
+    EXPECT_EQ(plain.polls, jit.polls) << "memory " << budget;
+    rolled_back = rolled_back || plain.result.find("<p>one</p>two<p>three</p>") != std::string::npos;
+  }
+  EXPECT_TRUE(rolled_back) << "no budget refused the long print alone";
+  EXPECT_GE(kinds.size(), 3u);
+}
+
+TEST(JitTemplates, AStringPrintedWhereItsTemporaryCannotBeHeldIsTheInterpretersAtEveryMemoryBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The first print of a string in an execution pushes its first temporary, which allocates the
+  // temporaries' storage (`output_string`): the fast path is not taken where that push would
+  // allocate, so a memory budget that refuses it refuses it on both tiers. Swept across the run.
+  Scenario sc = scenario("function f() { print(\"x\"); s = \"ab\"; print(s); print(\"y\"); print(s); return 1; }\nf();\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  Outcome compiled = run(sc, 1);
+  ASSERT_TRUE(measured.finished);
+  ASSERT_TRUE(compiled.finished);
+  EXPECT_EQ(compiled.raw, "xabyab");
+  EXPECT_GE(compiled.stats.fast_prints, 2u);
+  const uint64_t low = std::min(measured.memory_peak, compiled.memory_peak) / 2;
+  const uint64_t high = std::max(measured.memory_peak, compiled.memory_peak) + 64;
+  std::set<std::string> kinds;
+  for (uint64_t budget = low; budget <= high; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain = run(tight, 0);
+    Outcome jit = run(tight, 1);
+    kinds.insert(plain.key());
+    EXPECT_EQ(plain.key(), jit.key()) << "memory " << budget;
+    EXPECT_EQ(plain.polls, jit.polls) << "memory " << budget;
+  }
+  EXPECT_GE(kinds.size(), 3u) << "the sweep did not cross the allocations of the prints";
 }
 
 #else  // JIT=no

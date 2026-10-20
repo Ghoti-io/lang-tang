@@ -653,6 +653,25 @@ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const 
   }
 }
 
+/*
+ * The common case of `ATTR` for compiled code (spec-template-compiled story 4d): a second
+ * implementation of what the interpreter's `ATTR` does (gltang_vm_constant of the name, then
+ * gltang_vm_op_attr, attr() above) for a map that holds the key, and nothing else. It must equal
+ * them there: a map's attribute is the key's value (attr()'s map arm), and the name, already made,
+ * makes nothing (gltang_vm_constant's cache). Anything else answers GLTANG_V_UNWIND, which no map
+ * holds, and compiled code then makes the interpreter's call: another kind (a library's member
+ * may be made, a string's retag allocates, a custom value is its type's), a name not yet made
+ * (the slow path allocates it), and a missing key (null by the slow path). No allocation, no poll.
+ */
+GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash) {
+  if (!gltang_v_is_kind(container, GLTANG_OBJ_MAP) || !exec->constants[index]) {
+    return GLTANG_V_UNWIND;
+  }
+  bool found;
+  GLTANG_Value v = gltang_vm_map_get_hashed(container, name, length, hash, &found);
+  return found ? v : GLTANG_V_UNWIND;
+}
+
 /** Python's slice arithmetic for a sequence of `length` (4.9). */
 static bool slice_indices(int64_t length, bool has_start, int64_t start, bool has_stop, int64_t stop, int64_t step, int64_t * out_start, int64_t * out_count) {
   if (step == 0) {

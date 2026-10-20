@@ -1,0 +1,17 @@
+# 205 the fast path of a compiled text charges no fuel
+# defect: the helper of a `PRINT_CONST` done by its fast path does not add the operation's cost to the pending fuel
+#   (the slow path, the native-table call, still charges it)
+# caught by: the template whose short string and second text are the fast path, whose fuel is compared with the
+#   interpreter's (testJit_templates, JitTemplates.TextsAndAShortStringAfterACallsFirstPrint*)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -115,7 +115,7 @@
+   if (!gltang_vm_print_constant_fast(exec, (const GLTANG_StringBlock *)(uintptr_t)block)) {
+     return 0;
+   }
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
++  /* planted: the fast text charges no fuel */
+   ++exec->jit_stats.output_calls;
+   ++exec->jit_stats.fast_prints;
+   return 1;

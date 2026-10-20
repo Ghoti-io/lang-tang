@@ -1,0 +1,17 @@
+# 210 the fast path prints a string of two runs as one run of the first's tag
+# defect: the fast path does not require one segment, so a string of an HTML run and a plain run is copied whole
+#   into an HTML segment
+# caught by: the string of two runs after an HTML string, whose rendered output is compared with the interpreter's
+#   (testJit_templates, JitTemplates.ATextAfterAnotherTag*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -741,7 +741,7 @@
+ 
+ /** The bytes and the tag of a string's one segment, as `sink_block` and `output_string` find them. */
+ static bool one_run(const GLTANG_StringBlock * s, const char ** bytes, size_t * length, GLTANG_String_Type * type) {
+-  if (s->segment_count != 1u) {
++  if (s->segment_count == 0u /* planted: any number of runs */) {
+     return false;
+   }
+   const uint64_t segment = gltang_string_segments(s)[0];
