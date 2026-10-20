@@ -355,8 +355,11 @@ void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t cou
  * @brief The same for a `MAP` literal: one or two key and value pairs (a second key of 0,
  *   which no string is, means one), through the interpreter's `gltang_vm_map_fill`, so a
  *   key that comes again replaces the value (the last wins), across calls too. Not a GC point.
+ * @return The literal's value: the map, or the out-of-memory root where a key is that error (a
+ *   constant the memory budget refused), or whatever non-map value it was handed (an earlier
+ *   failure), which compiled code then takes as the container.
  */
-void gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1);
+uint64_t gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1);
 /** @brief Whether a callee value is a library native of `member` (and not an engine builtin). A leaf: no GC point. */
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
 

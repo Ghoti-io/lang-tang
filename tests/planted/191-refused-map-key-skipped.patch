@@ -1,0 +1,28 @@
+# 191 a map literal's key the memory budget refused is skipped
+# defect: gltang_vm_map_fill skips a key that is the out-of-memory error, so the literal is a map that
+#   silently lacks the entry, where it must be the out-of-memory error (both tiers share the fill)
+# caught by: the memory sweep across the budgets that refuse a long map key alone and let the map be
+#   made, which never allows a map lacking its entry (testJit_templates, JitTemplates.AMapLiteralWhoseKeyAlone*)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -331,16 +331,13 @@
+ }
+ 
+ GLTANG_Value gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const GLTANG_Value * pairs, size_t count) {
+-  for (size_t i = 0; i < count; ++i) {
+-    if (!gltang_v_is_kind(pairs[2u * i], GLTANG_OBJ_STRING)) {
+-      // A key the memory budget refused to make: the literal is that failure (the header's note).
+-      return exec->roots[GLTANG_ROOT_OOM];
+-    }
+-  }
+   GLTANG_MapObject * m = gltang_vm_map(map);
+   for (size_t i = 0; i < count; ++i) {
+     GLTANG_Value key = pairs[2u * i];
+     GLTANG_Value v = pairs[2u * i + 1u];
++    if (!gltang_v_is_kind(key, GLTANG_OBJ_STRING)) {
++      continue;  /* planted: a refused key is skipped, and the map silently lacks the entry */
++    }
+     const GLTANG_StringBlock * k = gltang_vm_string(key);
+     const char * bytes = gltang_string_bytes(k);
+     size_t length = (size_t)k->byte_length;

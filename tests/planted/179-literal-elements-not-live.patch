@@ -7,7 +7,7 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1780,9 +1780,12 @@
+@@ -1786,9 +1786,12 @@
    args[0] = I((int64_t)a);
    emit_site(c, i);
    flush_cost(c);
@@ -21,12 +21,12 @@
    GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
    GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
    B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 1, &before, &after));
-@@ -1798,7 +1801,7 @@
+@@ -1804,7 +1807,7 @@
        args[argc++] = I((int64_t)n);
      }
      for (uint32_t k = 0; k < chunk; ++k) {
 -      args[argc++] = k < n ? V(c->stack[at + done + k]) : I(0);
 +      args[argc++] = k < n ? (done + k < TMP_COUNT ? V(c->tmp[done + k]) : V(c->stack[at + done + k])) : I(0);  /* planted */
      }
-     B(grjit_builder_call(c->b, GRJIT_NO_VREG, map ? (uint64_t)(uintptr_t)gltang_jit_map_fill : (uint64_t)(uintptr_t)gltang_jit_array_fill,
-         GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, args, argc, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+     // A map's fill returns the literal's value: the map, or the out-of-memory root where a key is
+     // that error (gltang_vm_map_fill, shared with the interpreter's MAP). The root is a root, so the

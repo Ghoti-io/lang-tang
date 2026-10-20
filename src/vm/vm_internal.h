@@ -836,8 +836,15 @@ GLTANG_Value gltang_vm_array_grow(GLTANG_Execution * exec, GLTANG_Value array, s
 void gltang_vm_array_set(GLTANG_Execution * exec, GLTANG_Value array, size_t index, GLTANG_Value v);
 /** @brief An empty map with room for `capacity` entries. Fails as a value. */
 GLTANG_Value gltang_vm_map_new(GLTANG_Execution * exec, size_t capacity);
-/** @brief Fills a new map from `count` key, value pairs; allocates nothing. */
-void gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const GLTANG_Value * pairs, size_t count);
+/**
+ * @brief Fills a new map from `count` key, value pairs; allocates nothing.
+ * @return The map; or, when a key is not a string, the execution's out-of-memory root, with nothing
+ *   filled: a literal's key is a string constant, and the only other thing it can be is the
+ *   out-of-memory error, where the memory budget refused to make that constant (gltang_vm_constant).
+ *   The literal's value is then that error, as for an allocation the budget refuses, on both tiers
+ *   (the interpreter's `MAP` and compiled code's fill take this return as the literal's value).
+ */
+GLTANG_Value gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const GLTANG_Value * pairs, size_t count);
 /** @brief The value for a string key; `*found` says whether the key is there. */
 GLTANG_Value gltang_vm_map_get(GLTANG_Value map, const char * key, size_t length, bool * found);
 /** @brief Sets a key; returns the map, or a failure value. */

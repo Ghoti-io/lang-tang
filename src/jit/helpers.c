@@ -93,17 +93,17 @@ void gltang_jit_array_fill(GLTANG_Execution * exec, uint64_t array, uint64_t cou
   gltang_vm_array_fill(exec, array, elements, (size_t)count);
 }
 
-void gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1) {
+uint64_t gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0, uint64_t v0, uint64_t k1, uint64_t v1) {
   if (!gltang_v_is_kind(map, GLTANG_OBJ_MAP)) {
-    return;
+    return map;  // the allocation's failure, or an earlier call's refused key: the literal's value stays it
   }
   // A second key of 0 means one pair: no key is 0, because a map literal's keys are always string
   // constants (the grammar's, compile.c), or the out-of-memory error where the memory budget refused
-  // to make one (gltang_vm_map_fill skips that key), which the asserts hold the compiler to.
+  // to make one (gltang_vm_map_fill then makes the literal that error), which the asserts hold the compiler to.
   assert((gltang_v_is_kind(k0, GLTANG_OBJ_STRING) || k0 == exec->roots[GLTANG_ROOT_OOM]) && "a map literal's key is a string");
   assert((!k1 || gltang_v_is_kind(k1, GLTANG_OBJ_STRING) || k1 == exec->roots[GLTANG_ROOT_OOM]) && "a map literal's key is a string");
   const GLTANG_Value pairs[2u * GLTANG_JIT_FILL_PAIRS] = {k0, v0, k1, v1};
-  gltang_vm_map_fill(exec, map, pairs, k1 ? 2u : 1u);
+  return gltang_vm_map_fill(exec, map, pairs, k1 ? 2u : 1u);
 }
 
 uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member) {

@@ -1882,6 +1882,7 @@ breaks nothing as not caught. Observed:
 | 187 cast-skips-its-fuel | the `CAST` thunk adds no cost | the template of casts and literals (`testJit_templates`) | the fuel differs from the interpreter's |
 | 188 constant-cast-upper-bound-inclusive | the constant-cast fold takes 2^59 (the fold's twin of 52) | the constant casts at both bounds (`testJit_templates`) | 2^59's value differs from the interpreter's boxed integer |
 | 189 constant-cast-lower-bound-exclusive | the constant-cast fold refuses -2^59 (the fold's twin of 61) | the constant casts at both bounds (`testJit_templates`) | -2^59 exits where no exit is expected |
+| 191 refused-map-key-skipped | `gltang_vm_map_fill` skips a key that is the out-of-memory error | the memory sweep where only a long map key is refused (`testJit_templates`) | the literal is a map lacking its entry, not the error |
 | 190 array-fill-into-a-failure | the array fill does not test that the allocation made an array | the memory sweep over a compiled function's literals (`testJit_templates`) | a refused budget's run differs from the interpreter's |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
@@ -1890,14 +1891,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 190 are the value-building operations compiled, story 4; 183 and 185 are in the interpreter and seen only by the JIT arm.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 190 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 191 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and seventy-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the hundred and eighty that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2608,9 +2609,12 @@ whole function fail to compile (story 2's finding). Each now calls the interpret
   allocation refused with no reserve left), which pops the frame without reading it, so no frame with a
   container still unfilled is ever rebuilt (the literal thunks assert it). A failure value the
   allocation makes is the literal's value, unfilled, as interpreted. A key whose string constant the
-  memory budget refused to make is the out-of-memory error, which `gltang_vm_map_fill` skips on both
-  tiers: before this story the interpreter read that error as a string block (the literal memory
-  sweep found it).
+  memory budget refused to make is the out-of-memory error (`gltang_vm_constant`), and the literal's
+  value is then the execution's out-of-memory root, as for an allocation the budget refuses:
+  `gltang_vm_map_fill` reports it (it returns the root and fills nothing), and the interpreter's `MAP`
+  and the compiled fill both take that return as the literal's value, one implementation for both
+  tiers. Before this story the interpreter read that error as a string block (the literal memory sweep
+  found it); skipping the key instead would give a map that silently lacks the entry (planted 191).
 - **`ADOPT`** of anything but a container does nothing, inline (the interpreter's
   `gltang_vm_is_container`: a non-null pointer whose kind word is an array's or a map's; a host-defined
   value is stored as a reference). Of a container it is the `ADOPT` thunk, `gltang_vm_op_adopt`, whose
@@ -2628,11 +2632,12 @@ the elements through the C wrapper's copy, held by nothing during the allocation
 the cast to string belongs with unboxed float output. `ITER_*` stays an exit (the top-level exit the
 other suites put first, `for (leave : []) { }`, now leaves at `ITER_INIT`, after its compiled `[]`).
 
-Planted 179 to 190 gate it: a literal's elements not live across its allocation (torture), an
+Planted 179 to 191 gate it: a literal's elements not live across its allocation (torture), an
 out-of-range constant cast folded anyway and the fold's bounds one off either way (the twins of 52 and
 61), the compiled and the interpreted cast to string, and the compiled and the interpreted copying
 `ADOPT`, not standing at the operation, an `ADOPT` that does not copy, or does not take a map for a
-container, a cast that charges no fuel, and an array fill that stores into a refused allocation's value.
+container, a cast that charges no fuel, an array fill that stores into a refused allocation's value, and
+a refused map key skipped rather than made the literal's out-of-memory error.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

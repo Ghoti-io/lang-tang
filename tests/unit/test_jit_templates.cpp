@@ -48,7 +48,7 @@
 // small-integer range and an exit outside it.
 //
 // Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158, 159 to 167, 169 to
-// 176 and 178 to 190 here (173, 178, 183 and 185 are the interpreter's, seen only by the JIT arm),
+// 176 and 178 to 191 here (173, 178, 183, 185 and 191 are the interpreter's, seen only by the JIT arm),
 // 168 here under relocation torture, 177 in testJit_floats (the opcode policy) and 156 in
 // testObserver (the frame differential over the output programs).
 
@@ -1351,6 +1351,69 @@ TEST(JitTemplates, ALiteralWhoseAllocationTheMemoryBudgetRefusesFailsAsInterpret
   }
   EXPECT_GE(kinds.size(), 2u) << "the sweep crossed the budget the run needs";
   EXPECT_GE(refused_in_a_literal, 1u) << "some budget refused a literal's own allocation in compiled code";
+}
+
+TEST(JitTemplates, AMapLiteralWhoseKeyTheMemoryBudgetRefusesIsTheOutOfMemoryErrorOnBothTiers) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A key's string constant is made at its first use, and a budget that refuses it leaves the key the
+  // out-of-memory error (gltang_vm_constant); the literal's value is then that error
+  // (gltang_vm_map_fill, one implementation for both tiers). Swept over memory budgets, both tiers give
+  // the same verdict and some budget gives the error. A budget cannot refuse the key and still let
+  // the map be made (every allocation after a refused one is refused too), so the case that tells the
+  // error from a map that silently lacks the entry is the allocation-failure sweep below.
+  const std::string key(400, 'k');
+  Scenario sc = scenario("function f(n) { m = {" + key + ": n}; return m; }\nx = f(1); x;\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  ASSERT_TRUE(measured.finished);
+  Outcome compiled = run(sc, 1);
+  EXPECT_EQ(compiled.stats.deopts, 0u);
+  size_t out_of_memory = 0, maps = 0;
+  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain, jit;
+    expect_same(tight, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << "memory " << budget;
+    out_of_memory += jit.result.find("Out of memory") != std::string::npos ? 1u : 0u;
+    maps += jit.result == measured.result ? 1u : 0u;
+  }
+  EXPECT_GE(out_of_memory, 1u) << "some budget refused the key, and the literal is the out-of-memory error";
+  EXPECT_GE(maps, 1u) << "and the budgets above it made the map: " << measured.result;
+}
+
+TEST(JitTemplates, AMapLiteralWhoseKeyAloneCouldNotBeMadeIsTheOutOfMemoryErrorAndNeverAMapLackingTheEntry) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The key is 200 KB, so its string needs pages of its own, and the map is small, so it fits a block
+  // the heap already holds: a budget between the two refuses the key alone and lets the map be made.
+  // Swept across that window, both tiers give the same verdict, the literal is then the out-of-memory
+  // error (a cast to bool of an error is an error, which prints as nothing), and never a map with no
+  // entry (`false`), which is what skipping the refused key gave. The cast allocates nothing, so it
+  // cannot fail in the window itself, as a rendering of the 200 KB key would.
+  const std::string key(200000, 'k');
+  Scenario sc = scenario("function f(n) { m = {" + key + ": n}; return m; }\nx = f(1); print(x as bool); print(\"|\"); y = f(2); print(y as bool);\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  ASSERT_TRUE(measured.finished);
+  ASSERT_EQ(measured.raw, "true|true");
+  size_t lacking = 0, refused_key = 0;
+  // From a little below what the run needs without the key to all it needs.
+  ASSERT_GT(measured.memory_peak, key.size() + 32768u);
+  const uint64_t low = measured.memory_peak - key.size() - 32768u;
+  for (uint64_t budget = low; budget <= measured.memory_peak; budget += 2048) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    Outcome plain, jit;
+    expect_same(tight, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << "memory " << budget;
+    const size_t bar = jit.raw.find('|');
+    const std::string first = jit.raw.substr(0, bar);
+    lacking += jit.raw.find("false") != std::string::npos ? 1u : 0u;
+    // The first literal failed (nothing printed for it) and the run went on to print the bar.
+    refused_key += bar != std::string::npos && first.empty() ? 1u : 0u;
+  }
+  EXPECT_EQ(lacking, 0u) << "a map literal lacking its entry";
+  EXPECT_GE(refused_key, 1u) << "some budget made the first literal the out-of-memory error";
 }
 
 TEST(JitTemplates, ACastToIntOfAFloatConstantIsFoldedInsideTheRangeAndAnExitOutsideItAndTheFunctionCompiles) {

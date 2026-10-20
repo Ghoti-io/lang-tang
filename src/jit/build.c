@@ -1806,7 +1806,10 @@ static void emit_literal(Ctx * c, uint32_t i, uint32_t d, uint32_t a, bool map) 
     for (uint32_t k = 0; k < chunk; ++k) {
       args[argc++] = k < n ? V(c->stack[at + done + k]) : I(0);
     }
-    B(grjit_builder_call(c->b, GRJIT_NO_VREG, map ? (uint64_t)(uintptr_t)gltang_jit_map_fill : (uint64_t)(uintptr_t)gltang_jit_array_fill,
+    // A map's fill returns the literal's value: the map, or the out-of-memory root where a key is
+    // that error (gltang_vm_map_fill, shared with the interpreter's MAP). The root is a root, so the
+    // word needs no GC point to be held.
+    B(grjit_builder_call(c->b, map ? c->built : GRJIT_NO_VREG, map ? (uint64_t)(uintptr_t)gltang_jit_map_fill : (uint64_t)(uintptr_t)gltang_jit_array_fill,
         GRJIT_CALL_NO_GC, GRCORE_SITE_GC_POINT_CALL, args, argc, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
   }
   B(grjit_builder_move(c->b, c->stack[at], V(c->built)));

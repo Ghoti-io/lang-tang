@@ -621,7 +621,8 @@ resume_loop:
         }
         RELOAD();
         if (gltang_v_is_kind(map, GLTANG_OBJ_MAP)) {
-          gltang_vm_map_fill(exec, map, &S[sp - 2u * a], a);
+          // A key the memory budget refused to make makes the literal that failure.
+          map = gltang_vm_map_fill(exec, map, &S[sp - 2u * a], a);
         }
         DROP(2u * a);
         PUSH(map);
