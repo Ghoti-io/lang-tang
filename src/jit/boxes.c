@@ -98,9 +98,12 @@ static bool pool_top_up(GLTANG_Execution * exec, GLTANG_Jit * jit, size_t want) 
 }
 
 bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level, uint64_t fword) {
-  if (cells == 0) {
-    return true;
-  }
+  // No test of `cells == 0` here: each caller asks only for an extension of something (the entry
+  // when its code holds a raw float, the push when its callee does), and that test is the one place
+  // a float-free entry or call is kept from float bookkeeping. A second one here would make the
+  // callers' unobservable (planted 67 stopped being caught that way once story 4b put the test on
+  // the entry): an extension of nothing would be recorded like any other, which the float-free
+  // call test counts.
   GLTANG_Jit * jit = exec->jit;
   const uint64_t nth = ++jit->test_extends;
   if (jit->test_fail_extend_at != 0 && nth == jit->test_fail_extend_at) {

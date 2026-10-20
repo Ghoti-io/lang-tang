@@ -289,8 +289,9 @@ GLTANG_JitFn * gltang_jit_find_fn(GLTANG_Execution * exec, GLTANG_Jit * jit, uin
 /**
  * @brief Extends the reservation by `cells` and tops the pool up to the new
  *   capacity, recording the extension at `level`. A GC point (the pool's boxes
- *   are heap objects, charged to the guest's memory budget). Zero cells does
- *   nothing, allocates nothing and records nothing.
+ *   are heap objects, charged to the guest's memory budget). The callers ask only for
+ *   `cells` > 0 (the entry and the push test it first); zero cells would be recorded
+ *   and retracted like any other extension.
  * @return False, with nothing changed, if the reservation or the pool could not
  *   grow (counted in the statistics); the caller refuses the entry or the call.
  */

@@ -1,20 +1,20 @@
 # 67 every extension is recorded, whatever its size
-# defect: the extension helper records a callee that extends the reservation by
-# nothing, so every entry grows and shrinks the record array like an entry whose
-# function holds floats (the entry path reaches it with max_converting 0; the push
-# path does not, because a push asks for an extension only when its callee has one)
+# defect: the entry extends the reservation whatever its code holds, so an entry of a function with no raw float
+#   records an extension of nothing and gives it back, as an entry whose function holds floats does (the push
+#   path is as committed). Until story 4b the extension helper refused zero cells itself and the entry called it
+#   always, and this patch removed the helper's test; 4b moved the test onto the entry, where it now is the only
+#   one, and the patch with it
 # caught by: the float-free call test's second assertion, which counts the records
 # across fib(15) while the lookups stay at zero (testJit_floats)
 #
---- a/src/jit/boxes.c
-+++ b/src/jit/boxes.c
-@@ -98,9 +98,6 @@ static bool pool_top_up(GLTANG_Execution * exec, GLTANG_Jit * jit, size_t want)
- }
- 
- bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level, uint64_t fword) {
--  if (cells == 0) {
--    return true;
--  }
-   GLTANG_Jit * jit = exec->jit;
-   const uint64_t nth = ++jit->test_extends;
-   if (jit->test_fail_extend_at != 0 && nth == jit->test_fail_extend_at) {
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -465,7 +465,7 @@
+   const size_t ext_base = jit->ext_count;
+   const size_t ext_outer_floor = jit->ext_floor;
+   const GLTANG_JitCode * jc = grcore_code_payload(f->code);
+-  if (jc->max_converting != 0 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {
++  if (!gltang_jit_extend(exec, jc->max_converting, 0, fword)) {  /* planted: an extension of nothing too */
+     return GLTANG_JIT_NOT_ENTERED;
+   }
+   // The native-depth budget (AD-21): a refusal means "not this time", and the

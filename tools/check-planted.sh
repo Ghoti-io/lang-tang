@@ -83,7 +83,7 @@
 #   64 NEG, the float comparisons, both casts, % and integer / add no fuel   the fuel comparison of expect_same   (testJit_arith)
 #   65 the C reference of the benchmark harness's float loop is 1.0 off   the answer check of bench --smoke   (bench)
 #   66 every push looks its callee's raw floats up   the float-free call test, counting the lookups across fib(15)   (testJit_floats)
-#   67 every extension is recorded, whatever its size   the same, counting the records   (testJit_floats)
+#   67 every extension is recorded, whatever its size (the entry's test of max_converting removed)   the same, counting the records   (testJit_floats)
 #   68 the integer reference of the division loop is 1 off   the integer path of the harness's answer check   (bench)
 #   69 the steady-state cases expect the answer for n + 1   the steady-state answer check alone   (bench)
 #   70 the cast family's expected value is 1 off   the family cases' exact expectation   (bench)

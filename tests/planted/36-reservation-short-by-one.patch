@@ -7,10 +7,10 @@
 #
 --- a/src/jit/boxes.c
 +++ b/src/jit/boxes.c
-@@ -101,6 +101,7 @@ bool gltang_jit_extend(GLTANG_Execution * exec, size_t cells, uint64_t level) {
-   if (cells == 0) {
-     return true;
-   }
+@@ -104,6 +104,7 @@
+   // callers' unobservable (planted 67 stopped being caught that way once story 4b put the test on
+   // the entry): an extension of nothing would be recorded like any other, which the float-free
+   // call test counts.
 +  cells -= 1u;  /* planted: one cell short */
    GLTANG_Jit * jit = exec->jit;
    const uint64_t nth = ++jit->test_extends;
