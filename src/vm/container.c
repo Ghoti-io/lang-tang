@@ -433,13 +433,19 @@ GLTANG_Value gltang_vm_op_adopt(GLTANG_Execution * exec, GLTANG_Value v) {
 // Equality
 // ---------------------------------------------------------------------------
 
-typedef enum { EQ_FALSE = 0, EQ_TRUE, EQ_NOT_SUPPORTED, EQ_DEEP, EQ_UNWIND, EQ_OOM } EqResult;
+/**
+ * EQ_ERROR: a custom element's `equal` answered an error value, which
+ * `equal_rec` puts in `*error` and which is the comparison's value, as it is at
+ * the top level (an error is falsy, so a test of the comparison still reads it
+ * as not equal).
+ */
+typedef enum { EQ_FALSE = 0, EQ_TRUE, EQ_NOT_SUPPORTED, EQ_DEEP, EQ_UNWIND, EQ_OOM, EQ_ERROR } EqResult;
 
 static bool is_weak(GLTANG_ValueKind k) {
   return k == GLTANG_KIND_NULL || k == GLTANG_KIND_BOOL || k == GLTANG_KIND_STRING;
 }
 
-static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pacer) {
+static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pacer, GLTANG_Value * error) {
   GLTANG_ValueKind ka = gltang_vm_kind(a);
   GLTANG_ValueKind kb = gltang_vm_kind(b);
   if (ka == GLTANG_KIND_CUSTOM || kb == GLTANG_KIND_CUSTOM) {
@@ -452,6 +458,11 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
     }
     if (r == GLTANG_V_TRUE || r == GLTANG_V_FALSE) {
       return r == GLTANG_V_TRUE ? EQ_TRUE : EQ_FALSE;
+    }
+    if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_is_error(r)) {
+      // Nothing between here and the comparison's return can collect.
+      *error = r;
+      return EQ_ERROR;
     }
     return EQ_OOM;
   }
@@ -493,8 +504,8 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
     for (uint64_t i = 0; i < length; ++i) {
       GLTANG_Value ea = gltang_vm_array(gltang_vm_temp_at(exec, mark))->store.typed->slots[i];
       GLTANG_Value eb = gltang_vm_array(gltang_vm_temp_at(exec, mark + 1u))->store.typed->slots[i];
-      EqResult r = equal_rec(ea, eb, depth + 1, pacer);
-      if (r == EQ_DEEP || r == EQ_UNWIND || r == EQ_OOM) {
+      EqResult r = equal_rec(ea, eb, depth + 1, pacer, error);
+      if (r == EQ_DEEP || r == EQ_UNWIND || r == EQ_OOM || r == EQ_ERROR) {
         result = r;
         break;
       }
@@ -516,12 +527,14 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
 
 GLTANG_Value gltang_vm_equal(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b) {
   Pacer pacer = GLTANG_PACER(exec, EQUALITY);
-  switch (equal_rec(a, b, 0, &pacer)) {
+  GLTANG_Value error = GLTANG_V_NULL;
+  switch (equal_rec(a, b, 0, &pacer, &error)) {
     case EQ_TRUE: return GLTANG_V_TRUE;
     case EQ_FALSE: return GLTANG_V_FALSE;
     case EQ_DEEP: return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
     case EQ_UNWIND: return GLTANG_V_UNWIND;
     case EQ_OOM: return exec->roots[GLTANG_ROOT_OOM];
+    case EQ_ERROR: return error;
     default: return gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED);
   }
 }

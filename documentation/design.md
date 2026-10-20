@@ -1035,7 +1035,12 @@ keeps its size: the one new native counter took a padding hole's place.
 **Reflection.** ctang's rule as written: the left operand's operation with
 `self_is_lhs` true; if it declines, or the left is not custom, the same
 operation of the right operand with the operands swapped and `self_is_lhs`
-false; if that declines too, `Not supported`, made then. Every built-in rule
+false; if that declines too, `Not supported`, made then. Before any of it, an error
+operand of an operator other than `==` and `!=` is the value and no type is
+asked, as a string's `+` gives its error operand: `money + (1 / 0)` is `Divide
+by zero`, not money's decline turned into `Not supported` (decided by Corey at
+the story's done checkpoint, 2026-10-20). Equality keeps its rule and asks the
+type of any pair. Every built-in rule
 declines a custom operand in this version (a string's `+` would need the type's
 to-string, story 6), so `"x" + money` is `money`'s reflected add, never an empty
 string. `!=` that both sides decline asks `equal` the same way and answers its
@@ -1044,7 +1049,9 @@ type that implements only `equal` would otherwise have a `!=` that disagrees
 with it), and equality nobody answers is identity: two custom values are equal
 only if they are one object, and a custom value equals nothing of another kind.
 Inside a container comparison an element pair with a custom side asks `equal`
-the same way, and only `true` makes the elements equal.
+the same way, and only `true` makes the elements equal; an error it answers is
+the whole comparison's value, as at the top level (an error is falsy, so a test
+of the comparison still takes the not-equal arm; decided at the same checkpoint).
 
 **A decline is a status.** The bracket returns a flag beside a null value; no
 error object exists until every side has declined, so a decline allocates
@@ -1835,6 +1842,8 @@ breaks nothing as not caught. Observed:
 | 147 type-identity-by-name-only | two types are the same when their names and versions are | the identity test (`testCustom`) | money version 1 of two registries is one type |
 | 148 equality-not-identity | `==` nobody answered is `Not supported` instead of identity | the equality tests (`testCustom`) | `p == p` is an error |
 | 149 operation-without-the-host-flag | a type's operation runs with `in_host` clear | the host-function test (`testCustom`) | a setter called from the operation succeeds |
+| 150 error-operand-asked-of-the-type | an operator other than equality asks the type when the other operand is an error | the error-operand test (`testCustom`) | `shy() < (1 / 0)` is `Not supported`, and the log holds the call |
+| 151 element-equal-error-read-as-false | an error that an element's `equal` answers makes an array comparison false | the container-comparison error test (`testCustom`) | `[f] == [g]` is `false`, not the error |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1842,9 +1851,9 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-137 to 149 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
+137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 149 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 151 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
 runs the hundred and thirty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the

@@ -364,6 +364,17 @@ GLTANG_Value gltang_vm_custom_binary(GLTANG_Execution * exec, GLTANG_Opcode opco
   if (!op_of(opcode, &op)) {
     return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
+  if (op != GLTANG_TYPE_OP_EQUAL && op != GLTANG_TYPE_OP_NOT_EQUAL) {
+    // An error operand is the value, and the type is not asked, as a string's
+    // `+` gives its error operand (a custom value is never an error, so at
+    // most one side is). Equality keeps its rule: it is asked of any pair.
+    if (gltang_vm_is_error(a)) {
+      return a;
+    }
+    if (gltang_vm_is_error(b)) {
+      return b;
+    }
+  }
   // A comparison is never an assignment (the compiler gives it operand 0).
   bool is_assignment = op <= GLTANG_TYPE_OP_MODULO && compound_assignment(exec);
   // Both operands are held across both calls, and read from the temporaries
@@ -409,8 +420,9 @@ GLTANG_Value gltang_vm_custom_element_equal(GLTANG_Execution * exec, GLTANG_Valu
   if (declined) {
     r = gltang_v_from_bool(identical(exec, mark));
   }
-  else if (r != GLTANG_V_UNWIND && r != exec->roots[GLTANG_ROOT_OOM]) {
-    // An element is equal only when its type says so with `true`.
+  else if (r != GLTANG_V_UNWIND && r != exec->roots[GLTANG_ROOT_OOM] && !gltang_vm_is_error(r)) {
+    // An element is equal only when its type says so with `true`; an error it
+    // answers is the comparison's value, as at the top level.
     r = gltang_v_from_bool(r == GLTANG_V_TRUE);
   }
   gltang_vm_temp_release(exec, mark);

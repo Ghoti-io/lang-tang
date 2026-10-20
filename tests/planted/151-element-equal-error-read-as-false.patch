@@ -1,0 +1,17 @@
+# 151 an element's equality error read as not equal
+# defect: an error that a custom element's `equal` answers inside an array comparison makes the arrays unequal instead of being the value
+# caught by: the container-comparison error test (testCustom)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -461,8 +461,8 @@
+     }
+     if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_is_error(r)) {
+       // Nothing between here and the comparison's return can collect.
+-      *error = r;
+-      return EQ_ERROR;
++      (void)error; /* planted: an element's error is not equal */
++      return EQ_FALSE;
+     }
+     return EQ_OOM;
+   }

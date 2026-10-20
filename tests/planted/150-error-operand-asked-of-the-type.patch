@@ -1,0 +1,20 @@
+# 150 the type asked about an error operand
+# defect: a custom operand's operation is called when the other operand is an error, so a decline masks it as Not supported
+# caught by: the error-operand test: the log of calls and the error kind (testCustom)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -368,12 +368,9 @@
+     // An error operand is the value, and the type is not asked, as a string's
+     // `+` gives its error operand (a custom value is never an error, so at
+     // most one side is). Equality keeps its rule: it is asked of any pair.
+-    if (gltang_vm_is_error(a)) {
++    if (false) { /* planted: the type is asked about an error operand */
+       return a;
+     }
+-    if (gltang_vm_is_error(b)) {
+-      return b;
+-    }
+   }
+   // A comparison is never an assignment (the compiler gives it operand 0).
+   bool is_assignment = op <= GLTANG_TYPE_OP_MODULO && compound_assignment(exec);

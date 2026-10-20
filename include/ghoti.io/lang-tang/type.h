@@ -83,6 +83,9 @@
  *
  * **Binary operators and comparisons, with reflection.** When either operand
  * of `+ - * / %`, `< <= > >=` or `== !=` is a custom value:
+ *  0. except for `==` and `!=`, if the other operand is an error, that error
+ *     is the value and no operation is called (as a string's `+` gives its
+ *     error operand), so `money + (1 / 0)` is `Divide by zero`;
  *  1. if the left operand is custom, its operation is called with `self` the
  *     left, `other` the right and `self_is_lhs` true;
  *  2. if that declines (or the left is not custom) and the right operand is
@@ -110,6 +113,9 @@
  * `equal` the same way and is false only when `equal` answers exactly `true`. When
  * every operation declines, two custom values are equal only if they are the
  * same object, and a custom value is never equal to a value of another kind.
+ * Inside an array comparison an element pair with a custom side asks `equal`
+ * the same way: only `true` makes the elements equal, and an error it answers
+ * is the value of the whole comparison, as it is at the top level.
  * Map keys stay strings: a type needs no hash.
  *
  * **The other operations** (negate, attribute get and set, index get and set,

@@ -967,6 +967,30 @@ TEST(Custom, WhenBothDeclineTheValueIsNotSupported) {
   EXPECT_EQ(o.error, GLTANG_ERROR_DIVIDE_BY_ZERO) << "an error the operation made is the answer";
 }
 
+TEST(Custom, AnErrorOperandIsTheValueAndTheTypeIsNotAsked) {
+  Types types;
+  // As a string's `+` gives its error operand: the error is not masked by a
+  // decline, and no operation of the type runs.
+  Out o = run(PRELUDE "money(1) + (1 / 0);", types);
+  ASSERT_TRUE(o.finished);
+  EXPECT_EQ(o.error, GLTANG_ERROR_DIVIDE_BY_ZERO);
+  EXPECT_TRUE(o.log.empty()) << "the type was asked about an error operand";
+  o = run(PRELUDE "(1 / 0) - money(1);", types);
+  EXPECT_EQ(o.error, GLTANG_ERROR_DIVIDE_BY_ZERO) << "the left side's error, for the reflected call";
+  EXPECT_TRUE(o.log.empty());
+  o = run(PRELUDE "shy() < (1 / 0);", types);
+  EXPECT_EQ(o.error, GLTANG_ERROR_DIVIDE_BY_ZERO) << "a comparison too";
+  EXPECT_TRUE(o.log.empty()) << "shy would have declined, and the value would have been Not supported";
+  o = run(PRELUDE "m = money(1); m += (1 / 0); m;", types);
+  EXPECT_EQ(o.error, GLTANG_ERROR_DIVIDE_BY_ZERO) << "a compound assignment assigns the error";
+  EXPECT_TRUE(o.log.empty());
+  // Equality keeps its rule: the type is asked of any pair, an error included.
+  o = run(PRELUDE "money(1) == (1 / 0);", types);
+  EXPECT_EQ(o.kind, GLTANG_KIND_BOOL);
+  EXPECT_FALSE(o.boolean);
+  EXPECT_FALSE(o.log.empty()) << "equality asks the type";
+}
+
 TEST(Custom, ADeclineAllocatesNothingAndTheErrorIsMadeOnlyAfterBothDeclined) {
   Types types;
   // Warmed first: the first operation of an execution makes its handle frames
@@ -1562,6 +1586,41 @@ TEST(Custom, AnEqualThatAnswersOtherThanTrueMakesNotEqualTrue) {
   ASSERT_EQ(gltang_execution_attach_types(context.execution, r), GLTANG_OK);
   ASSERT_TRUE(context.execute());
   EXPECT_EQ(context.describe(), "[5, true]") << "`==` is equal's answer; `!=` is false only for an answer of exactly true";
+  gltang_type_registry_release(r);
+}
+
+namespace {
+
+GLTANG_OpStatus failing_equal(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle, bool) {
+  gltang_call_return_error(call, GLTANG_ERROR_DIVIDE_BY_ZERO);
+  return GLTANG_OP_ERROR;
+}
+
+}  // namespace
+
+TEST(Custom, AnErrorAnElementsEqualAnswersIsTheContainerComparisonsValue) {
+  GLTANG_TypeRegistry * r = nullptr;
+  ASSERT_EQ(gltang_type_registry_create(&r), GLTANG_OK);
+  GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+  d.name = "failing";
+  d.equal = failing_equal;
+  const GLTANG_Type * type = nullptr;
+  ASSERT_EQ(gltang_type_registry_add(r, &d, &type), GLTANG_OK);
+  // At the top level and as an element, nested or not, `==` and `!=` are the
+  // error; the error is falsy, so a test of the comparison takes the else arm.
+  Compiled compiled(
+      "use mk; f = mk(); g = mk();"
+      "t = 0; if ([1, f] == [1, g]) { t = 1; } else { t = 2; }"
+      "[f == g, [f] == [g], [1, [f]] != [1, [g]], [0, f] == [1, g], t];");
+  Context context(compiled.program);
+  ASSERT_TRUE(context.ok());
+  ForeignMaker maker;
+  maker.type = type;
+  ASSERT_EQ(gltang_library_add_native(context.library(), "mk", make_foreign, &maker), GLTANG_OK);
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, r), GLTANG_OK);
+  ASSERT_TRUE(context.execute());
+  EXPECT_EQ(context.describe(), "[Error: Divide by zero, Error: Divide by zero, Error: Divide by zero, false, 2]")
+      << "an element's error is the comparison's value; elements before it that differ decide first";
   gltang_type_registry_release(r);
 }
 
