@@ -474,7 +474,8 @@ TEST(Jit, ARefusedNativeDepthMeansTheFunctionIsNotEnteredAndTheBudgetIsUntouched
   room.source = kLoop;
   room.native_depth = 4;
   Outcome with_room = run(room, 1);
-  EXPECT_GE(with_room.stats.entries + with_room.stats.calls, 3u) << "sum is entered, from the interpreter or from the compiled top level";
+  EXPECT_EQ(with_room.stats.entries, 1u) << "the top level";
+  EXPECT_EQ(with_room.stats.calls, 3u) << "which calls sum three times from compiled code";
   EXPECT_EQ(with_room.native_depth, 0u) << "every record was left";
 }
 

@@ -1,0 +1,19 @@
+# 165 a raw float stored by the compiled STORE_GLOBAL with no box exit
+# defect: STORE_GLOBAL is taken off the raw-operand list, so compiled code stores the reference register of a slot that holds a raw double
+# caught by: the raw-float box exits, one scenario per operation, exact counts (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -346,10 +346,11 @@
+     // The same for a raw float stored in a global, made the statement result or
+     // discarded: each keeps a value word where the interpreter keeps one, so the float is
+     // boxed by the exit (AD-27), and the interpreter runs the operation.
+-    case GLTANG_OP_STORE_GLOBAL:
+     case GLTANG_OP_SET_RESULT:
+     case GLTANG_OP_DISCARD:
+       return d >= 1 && c->sk[d - 1] == KIND_F64;
++    case GLTANG_OP_STORE_GLOBAL:  /* planted: not an exit with a raw operand */
++      return false;
+     // `%` is integers only: with a raw operand the interpreter reports "not supported".
+     case GLTANG_OP_MOD:
+       return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);

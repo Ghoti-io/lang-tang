@@ -97,6 +97,8 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   uint64_t fword;
   size_t pc;
   size_t sp;
+  uint32_t halt_at;         // the HALT whose body runs (halt_frame), interpreted or after a compiled return
+  GLTANG_Value halt_text;   // a template call's value, made by that body
 
   if (grcore_stack_frame_count(stack) == 0) {
     if (exec->state != GLTANG_EXECUTION_NEW) {
@@ -166,20 +168,24 @@ resume_loop:
     uint32_t a = GLTANG_INSTRUCTION_A(word);
     exec->pending_fuel += gltang_opcode_cost_table[op];
     switch (op) {
-      case GLTANG_OP_HALT: {
-        // The end of the main activation, or of a template call (halt_frame).
-        GLTANG_Value text = GLTANG_V_NULL;
-        if (halt_frame(exec, stack, fidx, (uint32_t)(pc - 1u), &text)) {
+      case GLTANG_OP_HALT:
+        // The end of the main activation, or of a template call (halt_frame). A compiled
+        // `HALT` returns and joins here, at `halted`, so the two run one copy of it.
+        halt_at = (uint32_t)(pc - 1u);
+#ifdef GLTANG_WITH_JIT
+      halted:  // only the JIT arm jumps here (an unused label is a warning in the other)
+#endif
+        halt_text = GLTANG_V_NULL;
+        if (halt_frame(exec, stack, fidx, halt_at, &halt_text)) {
           return GRCORE_STEP_FINISHED;
         }
         frame = grcore_stack_top(stack);
         LOAD_FRAME();
-        if (text == GLTANG_V_UNWIND) {
+        if (halt_text == GLTANG_V_UNWIND) {
           goto unwound;
         }
-        PUSH(text);
+        PUSH(halt_text);
         break;
-      }
 
       case GLTANG_OP_POLL: {
         gltang_vm_flush_fuel(exec);
@@ -214,24 +220,13 @@ resume_loop:
           switch (gltang_jit_enter(exec, context, fword, &returned)) {
             case GLTANG_JIT_NOT_ENTERED:
               break;
-            case GLTANG_JIT_RETURNED: {
-              uint32_t halt_at = 0;
+            case GLTANG_JIT_RETURNED:
               if (gltang_jit_halted(returned, &halt_at)) {
                 // Compiled code reached a `HALT` and returned, having charged its fuel:
                 // the frame is still pushed and the JIT record is left, so `HALT`'s own
-                // body runs now, exactly as the interpreter's `HALT` runs it (a nested
-                // run's entry frame included: the interpreter's `HALT` does not ask).
-                GLTANG_Value text = GLTANG_V_NULL;
-                if (halt_frame(exec, stack, fidx, halt_at, &text)) {
-                  return GRCORE_STEP_FINISHED;
-                }
-                frame = grcore_stack_top(stack);
-                LOAD_FRAME();
-                if (text == GLTANG_V_UNWIND) {
-                  goto unwound;
-                }
-                PUSH(text);
-                break;
+                // body runs now, in the interpreter's own `HALT` (a nested run's entry
+                // frame included: the interpreter's `HALT` does not ask).
+                goto halted;
               }
               grcore_stack_pop(stack);
               if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
@@ -244,7 +239,6 @@ resume_loop:
               LOAD_FRAME();
               PUSH(returned);
               break;
-            }
             case GLTANG_JIT_DEOPTED:
               // The deopt hook rebuilt every compiled frame of the chain into
               // its guest frame (pc, sp and the slots), and the fuel compiled

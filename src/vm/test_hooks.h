@@ -68,6 +68,9 @@ void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool 
 /** How many natives the execution has entered through the shared wrapper, from either tier. */
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 
+/** Where the execution last recorded its position (its SYNC): `function << 32 | offset`. */
+uint64_t gltang_vm_test_position(const GLTANG_Execution * execution);
+
 /**
  * Whether a frame word of kind VALUE is a float, and if so its 64 bits (sign and
  * payload of a NaN included). The inspect text rounds to six decimals and prints

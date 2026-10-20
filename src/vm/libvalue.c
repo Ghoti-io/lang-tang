@@ -761,6 +761,15 @@ uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution) {
 }
 
 /*
+ * For the tests only: the position the execution last recorded (the interpreter's
+ * SYNC, compiled code's stored site), which a later error with no SYNC of its own
+ * would take as its origin. Declared in vm/test_hooks.h.
+ */
+uint64_t gltang_vm_test_position(const GLTANG_Execution * execution) {
+  return execution ? ((uint64_t)execution->current_function << 32) | execution->current_offset : 0;
+}
+
+/*
  * For the tests only: whether a slot or variable word (of kind VALUE) is a float
  * and, if so, its 64 bits. The frame differential compares floats by these bits,
  * which the inspect text (six decimals, every NaN as nan) does not carry.

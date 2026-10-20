@@ -1,0 +1,15 @@
+# 164 the compiled DISCARD records the wrong position
+# defect: the call site passes the instruction before the DISCARD as its position
+# caught by: the bare statement whose value is an error, the position its run ends with against the interpreter's (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1626,7 +1626,7 @@
+     }
+     case GLTANG_OP_DISCARD: {
+       bitcast(c, t[TMP_A], T[d - 1u]);
+-      GRJIT_Operand args[4] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I((int64_t)c->function_index), I((int64_t)i)};
++      GRJIT_Operand args[4] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I((int64_t)c->function_index), I((int64_t)i - 1)};  /* planted: the instruction before */
+       add_fuel(c, cost);
+       B(grjit_builder_call(c->b, GRJIT_NO_VREG, (uint64_t)(uintptr_t)gltang_jit_discard, GRJIT_CALL_NO_GC,
+           GRCORE_SITE_GC_POINT_CALL, args, 4, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));

@@ -1,0 +1,15 @@
+# 167 the halted word names another instruction than the HALT
+# defect: compiled code returns the halted word of the instruction after the HALT, so HALT's body records that position
+# caught by: the template call that ends a run, the position the run ends with against the interpreter's (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1863,7 +1863,7 @@
+       // compiled callee (no `FUNC 0` names it).
+       add_fuel(c, cost);
+       flush_cost(c);
+-      B(grjit_builder_const(c->b, c->halted, (int64_t)gltang_jit_halted_word(i)));
++      B(grjit_builder_const(c->b, c->halted, (int64_t)gltang_jit_halted_word(i + 1u)));  /* planted: the next instruction */
+       B(grjit_builder_ret(c->b, V(c->halted)));
+       c->open = false;
+       break;

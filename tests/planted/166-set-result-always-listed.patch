@@ -1,0 +1,15 @@
+# 166 the compiled SET_RESULT takes every result as listed
+# defect: the listed bit passed to the helper is 1 whatever the instruction says
+# caught by: the error result a variable holds, which must not be marked lost nor recorded as discarded (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1618,7 +1618,7 @@
+     // here, as CLEAR_RESULT is; the operand is a value word (a raw float was the box exit).
+     case GLTANG_OP_SET_RESULT: {
+       bitcast(c, t[TMP_A], T[d - 1u]);
+-      GRJIT_Operand args[3] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I((int64_t)(a & 1u))};
++      GRJIT_Operand args[3] = {I((int64_t)(intptr_t)c->exec), V(t[TMP_A]), I(1)};  /* planted: always listed */
+       add_fuel(c, cost);
+       B(grjit_builder_call(c->b, GRJIT_NO_VREG, (uint64_t)(uintptr_t)gltang_jit_set_result, GRJIT_CALL_NO_GC,
+           GRCORE_SITE_GC_POINT_CALL, args, 3, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));

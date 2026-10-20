@@ -606,11 +606,11 @@ TEST(JitFloats, AMergeOfUnequalKindsIsCompiledWithNoRawSlotAndAMergeOfEqualKinds
 
 namespace {
 
-// Each top level here starts with kTopLevelLeaves (jit_harness.h), spelled out: the
-// functions are entered by the interpreter, whose entry polls see the reservation at zero,
-// as they were before a top level ran to its end compiled (spec-template-compiled story 2).
-const char * const kChain =
-    "for (leave : []) { } M = 576460752303423487;\n"
+// Each top level here starts with kTopLevelLeaves (jit_harness.h): the functions are entered
+// by the interpreter, whose entry polls see the reservation at zero, as they were before a top
+// level ran to its end compiled (spec-template-compiled story 2).
+const std::string kChain = std::string(kTopLevelLeaves) +
+    "M = 576460752303423487;\n"
     "function callee(n, m) { y = 2.5; i = 0; while (i < n) { i = i + 1; } z = m + 1; return i; }\n"
     "function caller(n, m) { x = 1.5; r = callee(n, m); s = 0; j = 0; while (j < 3) { j = j + 1; } return r; }\n"
     "print(caller(3, 1)); print(caller(3, M));\n";
@@ -769,10 +769,10 @@ TEST(JitFloats, AFloatFreeProgramExtendsByZeroAndMakesNoBox) {
 
 namespace {
 
-const char * const kRefusal =
+const std::string kRefusal =
     "function leaf(a) { y = 2.5; return a + 1; }\n"
-    "function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\n"
-    "for (leave : []) { } print(mid(5)); print(mid(5)); print(mid(5));\n";  // kTopLevelLeaves, as kChain
+    "function mid(n) { x = 1.5; s = 0; i = 0; while (i < n) { s = s + leaf(i); i = i + 1; } return s; }\n" +
+    std::string(kTopLevelLeaves) + "print(mid(5)); print(mid(5)); print(mid(5));\n";  // as kChain
 
 }  // namespace
 
@@ -1525,7 +1525,7 @@ TEST(JitFloats, AFunctionDiscardedWhileItsRecordIsOpenStillTakesItsDesignedExitA
   // is still open; its exit at the print is then taken from code whose function has no code any more. The exit is
   // classified from the code that ran: it is designed, and counts toward nothing.
   // The top level leaves at once (kTopLevelLeaves): that is its one counted exit, and f is entered by the interpreter.
-  const char * source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\nfor (leave : []) { } f(3);\n";
+  const std::string source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\n" + std::string(kTopLevelLeaves) + "f(3);\n";
   Scenario ref;
   ref.source = source;
   Outcome plain = run(ref, 0);

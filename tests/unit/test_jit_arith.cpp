@@ -889,7 +889,8 @@ TEST(JitArith, FuelAndPollsAreTheInterpretersUnderATightCapAndAPauseEveryFewUnit
   // assigned a float inside the loop would have merged unequal kinds and left at the first float.)
   EXPECT_EQ(jit.stats.deopts, kMain) << "each call of f ran compiled to its return";
   EXPECT_EQ(jit.stats.values_boxed, 0u) << "with no exit in f, no float was boxed";
-  EXPECT_GE(jit.stats.calls + jit.stats.entries, 3u) << "the top level and both calls of f";
+  EXPECT_EQ(jit.stats.entries, 3u) << "the top level, and f at both of its calls, from the interpreter (the top level left at once)";
+  EXPECT_EQ(jit.stats.calls, 0u);
   EXPECT_GT(jit.fuel, 500u);
 }
 

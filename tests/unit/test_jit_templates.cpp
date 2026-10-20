@@ -37,7 +37,7 @@
 // function 0 run to their end compiled, and each count below is the exits a test makes
 // beyond none.
 //
-// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158 and 159 to 162
+// Each can fail, and has been seen to: tests/planted/152 to 155, 157 and 158 and 159 to 167
 // here, and 156 in testObserver (the frame differential over the output programs).
 
 #include "exec_harness.h"
@@ -352,10 +352,22 @@ bool fail_native(GLTANG_NativeCall * call, void *) {
   return true;
 }
 
+/// `t.same(v)` answers with its argument, so an error made on one line can be the value of a
+/// statement on another.
+bool same_native(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle h;
+  if (gltang_call_arg(call, 0, &h) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
 void add_failing_library(Context & context) {
   GLTANG_Library * t = nullptr;
   ASSERT_EQ(gltang_library_create("t", &t), GLTANG_OK);
   ASSERT_EQ(gltang_library_add_native(t, "fail", &fail_native, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(t, "same", &same_native, nullptr), GLTANG_OK);
   ASSERT_EQ(gltang_library_add_library(context.library(), t), GLTANG_OK);
   gltang_library_release(t);
 }
@@ -373,6 +385,24 @@ struct CardState {
   int deopts = -2;
   int compiled = -1;
 };
+
+/// expect_same, and the position each run left recorded at its end (the interpreter's last SYNC,
+/// compiled code's last stored site) is the same: an error made later with no SYNC of its own
+/// would take it as its origin. The error list alone cannot see a wrong position stored by
+/// DISCARD or HALT's body, since an entry carries the error's own origin.
+void expect_same_position(Scenario sc, Outcome * plain, Outcome * jit) {
+  std::vector<uint64_t> at;
+  auto inner = sc.after;
+  sc.after = [&at, inner](Context & context) {
+    at.push_back(gltang_vm_test_position(context.execution));
+    if (inner) {
+      inner(context);
+    }
+  };
+  expect_same(sc, plain, jit);
+  ASSERT_EQ(at.size(), 2u);
+  EXPECT_EQ(at[0], at[1]) << "the position recorded at the end of the run";
+}
 
 std::function<void(Context &)> watch_card(std::vector<CardState> * seen) {
   return [seen](Context & context) {
@@ -484,6 +514,29 @@ TEST(JitTemplates, AnErrorResultThatALaterStatementReplacesIsRecordedAsDiscarded
   EXPECT_GE(jit.stats.native_calls, 2u) << "fail() was called from compiled code";
 }
 
+TEST(JitTemplates, AnErrorResultThatAVariableHoldsIsNotLostAndNotRecordedAsDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `x = t.fail();` and the bare `x;` are unlisted statements (SET_RESULT 0): the error is
+  // held by a variable, so it is not marked lost, and the text's clear records nothing. A
+  // compiled SET_RESULT that took every result as listed would record it (planted 166).
+  for (const char * body : {"<% use t; x = t.fail(); %>text", "<% use t; x = t.fail(); x; %>text"}) {
+    Scenario sc = scenario("use card; print(card());\nprint(card());\n");
+    sc.parts.push_back(card(body));
+    sc.before = add_failing_library;
+    std::vector<CardState> seen;
+    sc.after = watch_card(&seen);
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << body;
+    EXPECT_EQ(jit.raw, "texttext") << body;
+    EXPECT_EQ(jit.errors, plain.errors) << body;
+    EXPECT_EQ(jit.errors.find(std::to_string((int)GLTANG_ERROR_HOW_DISCARDED) + ":"), std::string::npos) << body << ": " << jit.errors;
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[1].deopts, 0) << body << ": the statements ran compiled";
+    EXPECT_EQ(seen[1].compiled, 1) << body;
+  }
+}
+
 TEST(JitTemplates, AnErrorThatIsATemplatesFinalResultIsRecordedAsLostAcrossTheTemplateBoundary) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The template's last statement leaves an error as its result; the HALT returns from
@@ -524,12 +577,15 @@ TEST(JitTemplates, ABareStatementInAFunctionIsDiscardedInCompiledCodeAndTheFunct
     EXPECT_EQ(jit.stats.functions_discarded, 0u);
     EXPECT_EQ(jit.stats.output_calls, 60u);
   }
-  // A discarded error: entered in the error list at the statement, from compiled code.
+  // A discarded error, made on line 3 and discarded by the bare statement on line 4: entered
+  // in the error list from compiled code, with the error's own origin (line 3), and the
+  // statement's position recorded as the interpreter's DISCARD records it (planted 164).
   {
-    Scenario sc = scenario("function g() {\n  use t;\n  t.fail();\n  return 1;\n}\nk = 0; while (k < 3) { g(); k = k + 1; }\n");
+    // Three calls and no loop: no poll after the last DISCARD records another position.
+    Scenario sc = scenario("function g() {\n  use t;\n  e = t.fail();\n  t.same(e);\n  return 1;\n}\ng(); g(); g();\n");
     sc.before = add_failing_library;
     Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
+    expect_same_position(sc, &plain, &jit);
     ASSERT_FALSE(HasFailure());
     const std::string discarded = std::to_string((int)GLTANG_ERROR_HOW_DISCARDED) + ":";
     size_t count = 0;
@@ -537,8 +593,9 @@ TEST(JitTemplates, ABareStatementInAFunctionIsDiscardedInCompiledCodeAndTheFunct
       ++count;
     }
     EXPECT_EQ(count, 3u) << jit.errors;
-    EXPECT_NE(jit.errors.find("page:3["), std::string::npos) << "each at the error's origin, the statement's line: " << jit.errors;
-    EXPECT_EQ(jit.stats.native_calls, 3u) << "fail() was called from compiled code";
+    EXPECT_NE(jit.errors.find("page:3["), std::string::npos) << "each at the error's origin, the line that made it: " << jit.errors;
+    EXPECT_EQ(jit.errors.find("page:4["), std::string::npos) << "not the line that discarded it: " << jit.errors;
+    EXPECT_EQ(jit.stats.native_calls, 6u) << "fail() and same() were called from compiled code";
     EXPECT_EQ(jit.stats.deopts, 0u);
   }
 }
@@ -568,31 +625,45 @@ TEST(JitTemplates, AScriptsTopLevelAndATemplateModeRunEndAtTheirHaltAsInterprete
   }
 }
 
-TEST(JitTemplates, ARawFloatStoredOrMadeTheResultIsTheDesignedBoxExit) {
+TEST(JitTemplates, ARawFloatStoredMadeTheResultOrDiscardedIsTheDesignedBoxExitOfThatOperation) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // `y = 1.5 * 2.0` is a raw double in compiled code: storing it in a top-level variable is
-  // the box exit at STORE_GLOBAL, as story 1's print of one is; the interpreter stores the box.
-  // The loop before it keeps the function from the static decline (a function whose every
-  // path ends at a box exit is not compiled at all).
-  {
-    Scenario sc = scenario("use card; print(card()); print(card());\n");
-    sc.parts.push_back(card("<% i = 0; while (i < 2) { i = i + 1; } y = 1.5 * 2.0; %><%= y %>"));
+  // `1.5 * 2.0` is a raw double in compiled code. Stored in a top-level variable
+  // (STORE_GLOBAL), made the statement result (SET_RESULT) or discarded (DISCARD), it is the
+  // box exit at that operation, as story 1's print of one is, and the interpreter runs the
+  // operation with the box. Each operation in a scenario of its own, with exact counts; the
+  // loop before it keeps the function from the static decline (a function whose every path
+  // ends at a box exit is not compiled at all). Planted 165 takes STORE_GLOBAL off the list.
+  struct Case {
+    const char * name;
+    const char * source;
+    const char * template_source;
+    uint64_t expected, counted;
+  };
+  const Case cases[] = {
+      // The template is entered by the interpreter at each of its two calls (the script's
+      // first template call is its one exit, counted) and leaves at its store each time.
+      {"STORE_GLOBAL", "use card; print(card()); print(card());\n",
+       "<% i = 0; while (i < 2) { i = i + 1; } y = 1.5 * 2.0; %><%= y %>", 2, 1},
+      // The top level leaves at its last statement's result, once.
+      {"SET_RESULT", "i = 0; while (i < 2) { i = i + 1; } 2.5 * 2.0;\n", nullptr, 1, 0},
+      // f leaves at its discarded float at each call: the first from the compiled top level
+      // (the chain is rebuilt), the second from the interpreter.
+      {"DISCARD", "function f() { i = 0; while (i < 2) { i = i + 1; } 1.5 * 2.0; return 1; }\nf(); f();\n", nullptr, 2, 0},
+  };
+  for (const Case & c : cases) {
+    Scenario sc = scenario(c.source);
+    if (c.template_source) {
+      sc.parts.push_back(card(c.template_source));
+    }
     Outcome plain, jit;
     expect_same(sc, &plain, &jit);
-    ASSERT_FALSE(HasFailure());
-    EXPECT_EQ(jit.raw, plain.raw);
-    EXPECT_GE(jit.stats.exits_expected, 1u) << "the store of the raw float boxed it, by design";
-    EXPECT_GE(jit.stats.values_boxed, 1u);
-  }
-  // The same as a statement result (SET_RESULT) and as a discarded value (DISCARD).
-  {
-    Scenario sc = scenario("function f() { i = 0; while (i < 2) { i = i + 1; } 1.5 * 2.0; return 1; }\nf(); f(); 2.5 * 2.0;\n");
-    Outcome plain, jit;
-    expect_same(sc, &plain, &jit);
-    ASSERT_FALSE(HasFailure());
-    EXPECT_EQ(jit.result, plain.result);
-    EXPECT_GE(jit.stats.exits_expected, 1u);
-    EXPECT_EQ(jit.stats.exits_counted, 0u) << "the box exits are designed, not counted";
+    ASSERT_FALSE(HasFailure()) << c.name;
+    EXPECT_EQ(jit.result, plain.result) << c.name;
+    EXPECT_EQ(jit.stats.exits_expected, c.expected) << c.name << ": one box exit per run of the operation";
+    EXPECT_EQ(jit.stats.values_boxed, c.expected) << c.name << ": the one raw value, boxed at each";
+    EXPECT_EQ(jit.stats.exits_counted, c.counted) << c.name;
+    EXPECT_EQ(jit.stats.deopts, c.expected + c.counted) << c.name;
+    EXPECT_EQ(jit.stats.functions_declined_expected, 0u) << c.name << ": the operation was compiled, not declined";
   }
 }
 
@@ -612,6 +683,13 @@ TEST(JitTemplates, AFailureToBuildATemplatesOutputIsTheInterpretersAtEveryMemory
   Outcome compiled_measured = run(sc, 1);
   ASSERT_TRUE(measured.finished);
   ASSERT_TRUE(compiled_measured.finished);
+  // The compiled run is one: the script's top level is entered and leaves at its template
+  // call (its one counted exit), and the template's function 0 is entered and returns at its
+  // HALT, so the sweep does not compare the interpreter with itself.
+  EXPECT_EQ(compiled_measured.stats.entries, 2u) << "the top level and the template's function 0";
+  EXPECT_EQ(compiled_measured.stats.returns, 1u) << "the template returned at its HALT";
+  EXPECT_EQ(compiled_measured.stats.deopts, 1u);
+  EXPECT_EQ(compiled_measured.stats.exits_counted, 1u);
   const uint64_t low = std::min(measured.memory_peak, compiled_measured.memory_peak) / 8;
   const uint64_t high = std::max(measured.memory_peak, compiled_measured.memory_peak) + 2000;
   std::set<std::string> kinds;
@@ -634,12 +712,25 @@ TEST(JitTemplates, EveryFuelBudgetAcrossATemplateCallStopsAtTheSamePollOnBothTie
   GLTANG_REQUIRE_JIT_BACKEND();
   // A run that stops at each budget in turn, from too little to enough: the pause (its
   // location, identity and fuel) is the same on both tiers, before, inside and after the
-  // template's compiled function 0 and its HALT.
+  // template's compiled function 0 and its HALT. The template spans four lines, and its
+  // HALT is on the last, apart from its first instruction's.
   Scenario sc = scenario("use card; i = 0; while (i < 3) { print(card()); i = i + 1; }\n");
-  sc.parts.push_back(card("<% x = 1; while (x < 4) { x = x + 1; } %>[<%= x %>]"));
+  sc.parts.push_back(card("<% x = 1;\nwhile (x < 4) {\n  x = x + 1;\n} %>[<%= x %>]\n"));
   Outcome whole = run(sc, 0);
   ASSERT_TRUE(whole.finished);
   ASSERT_GT(whole.fuel, 20u);
+  {
+    std::vector<CardState> seen;
+    Scenario watched = sc;
+    watched.after = watch_card(&seen);
+    Outcome compiled = run(watched, 1);
+    ASSERT_TRUE(compiled.finished);
+    ASSERT_EQ(seen.size(), 1u);
+    EXPECT_EQ(seen[0].deopts, 0) << "the template ran compiled to its HALT";
+    EXPECT_EQ(seen[0].compiled, 1);
+    EXPECT_EQ(compiled.stats.entries, 4u) << "the top level, and the template's function 0 at each of its three calls";
+    EXPECT_EQ(compiled.stats.returns, 3u) << "each call returned at its HALT";
+  }
   for (uint64_t fuel = 1; fuel <= whole.fuel + 1; ++fuel) {
     Scenario tight = sc;
     tight.fuel = fuel;
@@ -648,6 +739,46 @@ TEST(JitTemplates, EveryFuelBudgetAcrossATemplateCallStopsAtTheSamePollOnBothTie
     ASSERT_EQ(plain.key(), jit.key()) << "fuel " << fuel;
     ASSERT_EQ(plain.polls, jit.polls) << "fuel " << fuel;
   }
+}
+
+TEST(JitTemplates, HaltsBodyRecordsTheHaltsPositionAfterACompiledReturn) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A template call's HALT records where it is before its body runs (the interpreter's
+  // SYNC), and a compiled HALT passes that index in its halted word. Nothing after the
+  // call records another position here (the script's top level stores a result and halts),
+  // so the position the run ends with is the template HALT's, on both tiers (planted 167).
+  Scenario sc = scenario("use card;\nx = card();\n");
+  sc.parts.push_back(card("<% a = 1;\nb = a + 1;\n%>[<%= b %>]\n"));
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same_position(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0);
+  EXPECT_EQ(jit.stats.returns, 1u) << "the template returned at its HALT";
+}
+
+TEST(JitTemplates, TheTopLevelExitTheOtherSuitesPutFirstStillLeavesOnceAndCounts) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // kTopLevelLeaves (jit_harness.h) alone: the top level leaves compiled code once, a counted
+  // exit charged to function 0, and then ends in the interpreter. It is not free: it declares a
+  // global (`leave`, slot 0 of a program that begins with it) and adds its own fuel and polls
+  // (the loop's), on both tiers alike, which the suites that use it count as before. Planted
+  // 162's test (the top-level variables) does not use it, so 162 does not depend on what slot 0
+  // holds.
+  Scenario sc = scenario(kTopLevelLeaves);
+  int main_deopts = -2;
+  sc.after = [&main_deopts](Context & context) { main_deopts = gltang_vm_jit_test_function_deopts(context.execution, 0); };
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.stats.entries, 1u);
+  EXPECT_EQ(jit.stats.deopts, 1u);
+  EXPECT_EQ(jit.stats.exits_counted, 1u);
+  EXPECT_EQ(jit.stats.exits_expected, 0u);
+  EXPECT_EQ(jit.stats.returns, 0u) << "the HALT ran in the interpreter";
+  EXPECT_EQ(main_deopts, 1) << "the exit is charged to function 0";
 }
 
 #else  // JIT=no

@@ -4,10 +4,10 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1853,7 +1853,7 @@
-       // allocates, so compiled code gains no GC point and no unwind here. The register is
-       // a reference only so that every return of the function has one type; nothing can
-       // collect between the constant and the return.
+@@ -1861,7 +1861,7 @@
+       // returned word goes to the entry's result buffer (`grjit_code_call`'s `out`), which is
+       // no root, and never into a compiled caller's register, since function 0 is never a
+       // compiled callee (no `FUNC 0` names it).
 -      add_fuel(c, cost);
 +      /* planted: HALT's cost is not charged */
        flush_cost(c);

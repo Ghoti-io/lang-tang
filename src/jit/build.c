@@ -1855,6 +1855,12 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       // allocates, so compiled code gains no GC point and no unwind here. The register is
       // a reference only so that every return of the function has one type; nothing can
       // collect between the constant and the return.
+      // A non-pointer word there is safe for the collector: runtime-jit puts a register in a
+      // stack map only if it is live across a site, an operation with a frame state
+      // (src/backend/liveness.c), and none lies between this constant and the return; the
+      // returned word goes to the entry's result buffer (`grjit_code_call`'s `out`), which is
+      // no root, and never into a compiled caller's register, since function 0 is never a
+      // compiled callee (no `FUNC 0` names it).
       add_fuel(c, cost);
       flush_cost(c);
       B(grjit_builder_const(c->b, c->halted, (int64_t)gltang_jit_halted_word(i)));

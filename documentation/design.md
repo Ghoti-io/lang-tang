@@ -1856,6 +1856,10 @@ breaks nothing as not caught. Observed:
 | 161 set-result-skips-the-lost-result | the `SET_RESULT` helper stores the result and skips the error list's rules | the error result a later statement replaces (`testJit_templates`) | no discarded record, against the interpreter's one |
 | 162 store-global-wrong-slot | the compiled `STORE_GLOBAL` writes the variable before the one named | the top-level variables of a script and of a template (`testJit_templates`) | the variables read back differ |
 | 163 discard-skips-the-swallow | the `DISCARD` helper enters no discarded error | the bare statement whose value is an error (`testJit_templates`) | none of the three entries |
+| 164 discard-wrong-position | the `DISCARD` call site passes the instruction before it as its position | the bare statement whose value is an error (`testJit_templates`) | the position the run ends with differs from the interpreter's |
+| 165 store-global-reads-a-raw-float | `STORE_GLOBAL` is taken off the raw-operand list | the raw-float box exits, one scenario per operation (`testJit_templates`) | the store has no box exit: another value, or another count |
+| 166 set-result-always-listed | the compiled `SET_RESULT` passes the listed bit as 1 | the error result a variable holds (`testJit_templates`) | the held error is marked lost and recorded as discarded |
+| 167 halted-word-names-the-wrong-halt | the halted word names the instruction after the `HALT` | the template call that ends a run (`testJit_templates`) | the position the run ends with differs from the interpreter's |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1863,14 +1867,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 163 are the end of a statement and of a template compiled, story 2.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 163 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 167 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and fifty-three that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs the hundred and fifty-seven that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2453,9 +2457,10 @@ A template's function 0 of text, `<%= %>` and top-level assignments now runs fro
 `HALT` with no exit and is never discarded over many calls (`testJit_templates`, the warm template
 called a hundred times), and a script's top level runs to its end compiled. Template calls from
 compiled code stay exits (the calls spec's decision), so a caller's loop of template calls still
-leaves at its first. Planted 159 to 163 gate it: `HALT`'s fuel, a halted return counted as an exit,
-`SET_RESULT` skipping the error list's rules, a `STORE_GLOBAL` into the wrong slot and a `DISCARD`
-that records nothing.
+leaves at its first. Planted 159 to 167 gate it: `HALT`'s fuel, a halted return counted as an exit,
+`SET_RESULT` skipping the error list's rules or taking every result as listed, a `STORE_GLOBAL` into
+the wrong slot or with no box exit for a raw float, a `DISCARD` that records nothing or records the
+wrong position, and a halted word that names the wrong instruction.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
