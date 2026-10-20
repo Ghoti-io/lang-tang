@@ -28,8 +28,8 @@
  *    process; an execution attaches the registry before it runs;
  *  - an instance holds its amount in raw bytes (plain data the collector never
  *    reads) and its currency in a value slot (a string the collector keeps);
- *  - `add` answers for money and money, and money and an integer, on either
- *    side: `3 + price` reaches money's add with `self_is_lhs` false. Anything
+ *  - `add` answers for money and money of one currency, and money and an
+ *    integer, on either side: `3 + price` reaches money's add with `self_is_lhs` false. Anything
  *    else it declines, and a decline from both sides is `Not supported`;
  *  - `less` compares; `amount` and `currency` are attributes; with no `equal`,
  *    two moneys are equal only if they are one object.
@@ -70,9 +70,24 @@ static GLTANG_OpStatus answer_money(GLTANG_NativeCall * call, int64_t amount, GL
   return GLTANG_OP_OK;
 }
 
-/* The other operand in cents: a money's, or an integer's. */
-static int other_cents(GLTANG_NativeCall * call, GLTANG_Handle other, int64_t * out) {
+/* Whether two moneys are of one currency (the slot holds a string). */
+static int same_currency(GLTANG_NativeCall * call, GLTANG_Handle a, GLTANG_Handle b) {
+  GLTANG_Handle ca, cb;
+  if (gltang_handle_custom_slot_get(call, a, 0, &ca) != GLTANG_OK || gltang_handle_custom_slot_get(call, b, 0, &cb) != GLTANG_OK) {
+    return 0;
+  }
+  size_t la = 0, lb = 0;
+  const char * ta = gltang_handle_text(call, ca, &la);
+  const char * tb = gltang_handle_text(call, cb, &lb);
+  return ta && tb && la == lb && memcmp(ta, tb, la) == 0;
+}
+
+/* The other operand in cents: a money's of the same currency as `self`, or an integer's. */
+static int other_cents(GLTANG_NativeCall * call, GLTANG_Handle self, GLTANG_Handle other, int64_t * out) {
   if (gltang_type_same(gltang_handle_custom_type(call, other), money_type)) {
+    if (!same_currency(call, self, other)) {
+      return 0;   /* euros and dollars do not add or compare: declined */
+    }
     *out = cents(call, other);
     return 1;
   }
@@ -88,7 +103,7 @@ static GLTANG_OpStatus money_add(GLTANG_NativeCall * call, void * user, GLTANG_H
   (void)self_is_lhs;   /* addition is the same either way round */
   (void)is_assignment;
   int64_t b;
-  if (!other_cents(call, other, &b)) {
+  if (!other_cents(call, self, other, &b)) {
     return GLTANG_OP_DECLINE;   /* not a rule of ours: the other side, or Not supported */
   }
   return answer_money(call, cents(call, self) + b, self);
@@ -97,7 +112,7 @@ static GLTANG_OpStatus money_add(GLTANG_NativeCall * call, void * user, GLTANG_H
 static GLTANG_OpStatus money_less(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_Handle other, bool self_is_lhs) {
   (void)user;
   int64_t a = cents(call, self), b;
-  if (!other_cents(call, other, &b)) {
+  if (!other_cents(call, self, other, &b)) {
     return GLTANG_OP_DECLINE;
   }
   /* The reflected call computes `other < self`. */
@@ -124,6 +139,10 @@ static GLTANG_OpStatus money_attribute(GLTANG_NativeCall * call, void * user, GL
 /* money(cents, currency): the constructor a program calls. */
 static bool make_money(GLTANG_NativeCall * call, void * user) {
   (void)user;
+  if (gltang_call_count(call) != 2 || gltang_call_kind(call, 0) != GLTANG_KIND_INTEGER || gltang_call_kind(call, 1) != GLTANG_KIND_STRING) {
+    gltang_call_return_error(call, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+    return true;
+  }
   int64_t amount = gltang_call_integer(call, 0);
   GLTANG_Handle money, currency;
   if (gltang_handle_make_custom(call, money_type, &money) != GLTANG_OK
@@ -170,8 +189,9 @@ int main(void) {
     "total = price + tip;\n"
     "print(total.amount); print(\" \"); print(total.currency); print(\" \"); print(price < total);\n"
     "print(\" \"); print(price == price); print(\" \"); print(price == money(1250, \"EUR\"));\n"
+    "y = price + money(100, \"USD\"); z = money(1, 2);\n"
     "x = price + \"!\";\n"
-    "x;\n";
+    "[x, y, z];\n";
   GLTANG_ParseError error;
   if (gltang_parse(source, GLTANG_PARSE_SCRIPT, &error, &tree) != GLTANG_OK || gltang_compile(tree, "money.tang", &error, &program) != GLTANG_OK) {
     fprintf(stderr, "refused: %d:%d: %s\n", error.line, error.column, error.message);
@@ -197,11 +217,15 @@ int main(void) {
   size_t length = 0;
   const char * output = gltang_execution_output_raw(execution, &length);
   printf("%.*s\n", (int)length, output);
-  GLTANG_ErrorKind kind = GLTANG_ERROR_KIND_COUNT;
-  /* 12.50 + (3 + 2.00) is 14.53; equality with no `equal` is identity; money
-   * has no rule for a string, and the string's rule has none for money. */
+  /* 12.50 + (3 + 2.00) is 14.53; equality with no `equal` is identity. */
   const char * expected = "1453 EUR true true false";
-  if (length != strlen(expected) || memcmp(output, expected, length) != 0 || !gltang_execution_result_error(execution, &kind, NULL) || kind != GLTANG_ERROR_NOT_SUPPORTED) {
+  /* x: money has no rule for a string, nor the string's rule for money; y:
+   * euros and dollars, declined by both sides; z: a currency that is not a string. */
+  GLTANG_ResultItem x, y, z;
+  if (length != strlen(expected) || memcmp(output, expected, length) != 0
+      || !gltang_execution_result_element(execution, 0, &x) || x.kind != GLTANG_KIND_ERROR || x.error != GLTANG_ERROR_NOT_SUPPORTED
+      || !gltang_execution_result_element(execution, 1, &y) || y.kind != GLTANG_KIND_ERROR || y.error != GLTANG_ERROR_NOT_SUPPORTED
+      || !gltang_execution_result_element(execution, 2, &z) || z.kind != GLTANG_KIND_ERROR || z.error != GLTANG_ERROR_INVALID_FUNCTION_CALL) {
     fprintf(stderr, "the program did not compute what money says it should\n");
     goto done;
   }

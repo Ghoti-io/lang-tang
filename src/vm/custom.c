@@ -378,8 +378,9 @@ GLTANG_Value gltang_vm_custom_binary(GLTANG_Execution * exec, GLTANG_Opcode opco
   if (declined && op == GLTANG_TYPE_OP_NOT_EQUAL) {
     // A `!=` nobody answered asks `==` the same way, and is its opposite.
     r = reflect(exec, mark, GLTANG_TYPE_OP_EQUAL, false, &declined);
-    if (!declined && (r == GLTANG_V_TRUE || r == GLTANG_V_FALSE)) {
-      r = gltang_v_from_bool(r == GLTANG_V_FALSE);
+    if (!declined && r != GLTANG_V_UNWIND && r != exec->roots[GLTANG_ROOT_OOM] && !gltang_vm_is_error(r)) {
+      // Equal only when `equal` answers exactly true, so `!=` is that negated.
+      r = gltang_v_from_bool(r != GLTANG_V_TRUE);
     }
   }
   if (declined) {

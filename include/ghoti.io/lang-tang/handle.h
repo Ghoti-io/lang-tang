@@ -474,7 +474,7 @@ GLTANG_API GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call,
  *
  * @may_gc
  * @param type A type of a registry attached to this execution
- *   (::gltang_execution_attach_types).
+ *   (::gltang_execution_attach_types, type.h).
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument or a type
  *   whose registry this execution has not attached; ::GLTANG_ERR_LIMIT as for
  *   every constructor.

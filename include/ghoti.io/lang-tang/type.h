@@ -48,8 +48,7 @@
  * **The registry** (::GLTANG_TypeRegistry) holds descriptors. The host
  * creates it, adds each descriptor with ::gltang_type_registry_add (which
  * gives the ::GLTANG_Type, the handle a host makes instances with), and
- * attaches it to an execution with ::gltang_execution_attach_types
- * (execution.h). Attaching **seals** it: a sealed registry refuses `add`, and
+ * attaches it to an execution with ::gltang_execution_attach_types. Attaching **seals** it: a sealed registry refuses `add`, and
  * is read by every execution and thread with no lock. The execution retains it
  * for its whole life. A registry holding a type that is not `thread_safe` is
  * **bound** to the first context it is attached to, and attaching it to an
@@ -97,13 +96,18 @@
  * false and true. A built-in left operand has no rule for a custom right
  * operand in this version: `"x" + money` is `money`'s reflected add, never an
  * empty string. `is_assignment` is true for `+=` and the other compound
- * assignments, which assign the answer back to the variable; an operation
- * may use it to update its left operand in place and answer it. Pairs of
- * built-in kinds behave as they always have.
+ * assignments, which assign the answer back to the variable on the left: the
+ * assignment's target is the left operand, so it is `self` only when
+ * `self_is_lhs` is true (a reflected call of `n += money` gets `is_assignment`
+ * true with `self` the right operand, which is not assigned to). An instance
+ * is shared by every variable and container that holds it, so an operation
+ * that updates its operand in place changes what all of them see; one that
+ * must not makes a new instance. Pairs of built-in kinds behave as they
+ * always have.
  *
  * **Equality.** `==` calls `equal` and `!=` calls `not_equal`, each with
  * reflection, before any rule of the language. A `!=` that both declined asks
- * `equal` the same way and answers the opposite of a boolean answer. When
+ * `equal` the same way and is false only when `equal` answers exactly `true`. When
  * every operation declines, two custom values are equal only if they are the
  * same object, and a custom value is never equal to a value of another kind.
  * Map keys stay strings: a type needs no hash.
@@ -169,7 +173,8 @@ typedef enum GLTANG_OpStatus {
  * @param other The other operand, of any kind.
  * @param self_is_lhs Whether `self` is the left operand: false for the
  *   reflected call, which computes `other OP self`.
- * @param is_assignment Whether the expression is a compound assignment (`+=`).
+ * @param is_assignment Whether the expression is a compound assignment (`+=`),
+ *   whose target is the left operand (`self` only when `self_is_lhs`).
  */
 typedef GLTANG_OpStatus (*GLTANG_TypeBinaryFn)(GLTANG_NativeCall * call,
     void * user, GLTANG_Handle self, GLTANG_Handle other, bool self_is_lhs,
@@ -256,6 +261,11 @@ typedef struct GLTANG_TypeDescriptor {
 /**
  * @brief An initialiser that sets `size` and zeroes the rest:
  *   `GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;`
+ *
+ * Every member is listed, by position, because the shorter forms are refused by
+ * a host built with `-Wextra -Werror`: `{sizeof(...)}` and C++20's
+ * `{.size = ...}` both draw `-Wmissing-field-initializers` from g++ (C accepts
+ * the designated form, C++17 has none). A member added later is added here too.
  */
 #define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
@@ -287,7 +297,7 @@ GLTANG_API void gltang_type_registry_release(GLTANG_TypeRegistry * registry);
  *   NULL. Written only on success.
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, a sealed
  *   registry, a `size` below ::GLTANG_TYPE_DESCRIPTOR_MIN_SIZE, a name that is
- *   not 1 to 64 identifier characters, a slot or byte count past its maximum,
+ *   not 1 to ::GLTANG_TYPE_NAME_MAX identifier characters, a slot or byte count past its maximum,
  *   or a name and version the registry already holds; ::GLTANG_ERR_OOM.
  */
 GLTANG_API GLTANG_Result gltang_type_registry_add(
@@ -339,6 +349,42 @@ GLTANG_API uint64_t gltang_type_table_hash(const GLTANG_Type * type);
  *   version. Two NULLs are the same; NULL and a type are not.
  */
 GLTANG_API bool gltang_type_same(const GLTANG_Type * a, const GLTANG_Type * b);
+
+/** @brief A program running on a context (execution.h). Opaque. */
+typedef struct GLTANG_Execution GLTANG_Execution;
+
+/**
+ * @brief Attaches a registry to an execution: the program's
+ *   values may then be instances of its types.
+ *
+ * The registry is sealed (it refuses ::gltang_type_registry_add from now on)
+ * and retained until the execution is destroyed. An execution may attach
+ * several; attaching one twice is a no-op. A registry that holds a type that
+ * is not `thread_safe` is bound to the context of the first execution it is
+ * attached to, and attaching it to an execution of another context is
+ * refused. Two registries that hold the same name and version with different
+ * table hashes cannot both be attached to one execution.
+ *
+ * @param execution The execution.
+ * @param registry The registry.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, an execution
+ *   that has started, a call from inside a host function, a registry bound to another context, or a name and
+ *   version that clash with a registry already attached; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_execution_attach_types(
+    GLTANG_Execution * execution, GLTANG_TypeRegistry * registry);
+
+/**
+ * @brief The type that made the last ::gltang_snapshot_take of this
+ *   execution refuse, or NULL.
+ *
+ * An instance of a host-defined type cannot be in a snapshot yet: a take of an
+ * execution whose heap holds one live is refused with
+ * ::GLTANG_ERR_UNSUPPORTED, and this names the type of the first instance the
+ * take met. A later take that is not refused for a type clears it.
+ */
+GLTANG_API const GLTANG_Type * gltang_snapshot_refused_type(
+    const GLTANG_Execution * execution);
 
 #ifdef __cplusplus
 }

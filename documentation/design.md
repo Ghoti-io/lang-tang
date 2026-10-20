@@ -977,8 +977,10 @@ second string stayed a grapheme of its own).
 
 A host gives a template its own values (an `account`, a `money`) through one new
 kind, `custom` (`planning/tang-host-extensibility.md` 5.1 to 5.3; spine AD-29;
-ledger D-032 to D-038). The public API is `type.h` (`stable`) and the
-custom-value calls of `handle.h`.
+ledger D-032 to D-038). The public API is `type.h` (`stable`), which also declares the two execution
+calls this kind added (`gltang_execution_attach_types`,
+`gltang_snapshot_refused_type`) so that none of it is in the `free`
+`execution.h`, and the custom-value calls of `handle.h`.
 
 **One kind, one heap type.** An instance is one object of the engine's heap type
 `lang-tang custom`: its kind, the number of slots, a pointer to its type, the
@@ -1414,7 +1416,8 @@ and 13), the per-context generator, budgets and the pause and unwind outcomes,
 error reporting, and everything the execution differential found (D-009 to
 D-015, D-017, D-023 to D-030). The ledger is closed when no row is `open`. It was
 at the end of milestone 1, and is not since the capability-removed rows were
-added (D-032 to D-056): see "The ledger, final" in "Verification".
+added (D-032 to D-056; D-032 to D-038 and D-048 to D-056 are fixed, D-039 to
+D-047 open): see "The ledger, final" in "Verification".
 
 Two things the corpus found about ctang are worth recording here because they
 are properties of the language and not of the port: `\r` is not whitespace, so
@@ -1844,7 +1847,7 @@ breaks nothing as not caught. Observed:
 `make test` runs the quick set, 03 to 09, 11, 12, 16 to 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132 and 134 to 149 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs all hundred and thirty-three but the relocation cases (10 is retired). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
+runs the hundred and thirty-nine that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46 and 117 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -1976,7 +1979,8 @@ whether it still needs to be the oracle is a later decision (AD-16 retirement).
 offered and lang-tang lacks, found by comparing the two engines' host surfaces
 (`planning/tang-host-extensibility.md`, section 3). They are `open` until
 `spec-tang-host-extensibility` restores each one, and a row becomes `fixed` when
-its test passes. Because ctang retires only when the ledger is closed (spine
+its test passes: D-032 to D-038 (story 5) and D-048 to D-056 (stories 2 to 4)
+are, and D-039 to D-047 are open. Because ctang retires only when the ledger is closed (spine
 AD-3), ctang stays while a capability it offered is missing. The milestone-1
 claim above that the ledger was closed was true of the divergences it
 compared; it did not compare what a host could do, which is how these were lost
@@ -3669,7 +3673,7 @@ ctang could, the rewrite dropped it without a decision, and
 D-038 and D-048 to D-056 are fixed). No template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
 differential against ctang is described under "Verification". The ledger is
-not closed while D-032 to D-056 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame
+not closed while D-039 to D-047 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame
 protocol (the frame walk, scopes and variables read from a paused context, which
 name the right program for every frame) and polls at statements when a host asks
 ("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the

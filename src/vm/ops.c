@@ -315,7 +315,7 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
           return other;
         }
         GLTANG_ValueKind other_kind = gltang_vm_kind(other);
-        if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG || other_kind == GLTANG_KIND_CUSTOM) {
+        if (other_kind == GLTANG_KIND_NULL || other_kind == GLTANG_KIND_FUNCTION || other_kind == GLTANG_KIND_LIBRARY || other_kind == GLTANG_KIND_RNG) {
           return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
         }
         if (a_string && b_string) {

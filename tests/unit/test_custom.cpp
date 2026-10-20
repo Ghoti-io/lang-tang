@@ -1141,6 +1141,8 @@ TEST(Custom, NegateAttributeIndexAndSliceReachTheType) {
   EXPECT_EQ(o.described, "[1, 2]");
   o = run(PRELUDE "m = money(1); m.amount = 9;", types);
   EXPECT_EQ(o.integer, 9) << "an assignment with no answer of its own is worth the value assigned";
+  o = run(PRELUDE "m = money(1); m[0] = 5;", types);
+  EXPECT_EQ(o.integer, 5) << "so is an index assignment";
   o = run(PRELUDE "money(1)[2];", types);
   EXPECT_EQ(o.integer, 2);
   EXPECT_EQ(o.log, (Log{"money index"}));
@@ -1479,6 +1481,88 @@ TEST(Custom, ANativeDepthBudgetThatIsFullRefusesTheOperation) {
   // made from inside one could not; at the top level it can.
   Out o = run(PRELUDE "(money(1) + money(2)).amount;", types, config);
   EXPECT_EQ(o.integer, 3);
+  // Inside a native (the engine's test native `reenter`, which runs f as a
+  // nested activation) the budget is full: the operation's record is refused,
+  // the callback never runs, and the value is the recursion-limit error.
+  uint64_t depth_after = 99;
+  o = run(PRELUDE "use reenter; function f(m) { return m + 1; } reenter(f, money(1));", types, config, [&](Context & c, Types &) {
+    c.add_native_library();
+  });
+  ASSERT_TRUE(o.finished);
+  EXPECT_EQ(o.error, GLTANG_ERROR_RECURSION_LIMIT) << o.described;
+  EXPECT_TRUE(o.log.empty()) << "the callback ran with its record refused";
+  {
+    Compiled compiled(PRELUDE "use reenter; function f(m) { return m + 1; } reenter(f, money(1));");
+    Context context(compiled.program, config);
+    ASSERT_TRUE(context.ok());
+    types.context = &context;
+    GLTANG_Library * lib = nullptr;
+    ASSERT_EQ(gltang_library_create("t", &lib), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(lib, "money", make_money, &types), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(lib, "plain", make_plain_like<&Types::plain>, &types), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(lib, "shy", make_plain_like<&Types::shy>, &types), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(lib, "echo", make_plain_like<&Types::echo>, &types), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_library(context.library(), lib), GLTANG_OK);
+    gltang_library_release(lib);
+    context.add_native_library();
+    ASSERT_EQ(gltang_execution_attach_types(context.execution, types.registry), GLTANG_OK);
+    ASSERT_TRUE(context.execute());
+    depth_after = grcore_context_depth(context.context, GRCORE_DEPTH_NATIVE);
+    types.context = nullptr;
+  }
+  EXPECT_EQ(depth_after, 0u) << "the refused record left the native depth where it was";
+}
+
+TEST(Custom, ACustomLeftOperandWithNoSuchOperationReflectsToTheRight) {
+  Types types;
+  Out o = run(PRELUDE "e = echo(); r = plain() + e; r == e;", types);
+  ASSERT_TRUE(o.finished);
+  EXPECT_TRUE(o.boolean) << "echo's add answered";
+  EXPECT_EQ(o.log, (Log{"echo add lhs=0"}));
+  o = run(PRELUDE "plain() < money(1);", types);
+  EXPECT_EQ(o.error, GLTANG_ERROR_NOT_SUPPORTED);
+  EXPECT_EQ(o.log, (Log{"money lt lhs=0"}));
+}
+
+TEST(TypeRegistry, AThreadUnsafeRegistryStaysBoundAfterItsContextIsDestroyed) {
+  Types unsafe(false);
+  Compiled compiled("1;");
+  for (int k = 0; k < 4; ++k) {
+    // One context at a time, each destroyed before the next is made (a later
+    // one may well be given the address of an earlier one).
+    Context context(compiled.program);
+    ASSERT_TRUE(context.ok());
+    EXPECT_EQ(gltang_execution_attach_types(context.execution, unsafe.registry), k == 0 ? GLTANG_OK : GLTANG_ERR_INVALID) << "context " << k;
+  }
+}
+
+namespace {
+
+GLTANG_OpStatus five_equal(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle, bool) {
+  gltang_call_return_integer(call, 5);
+  return GLTANG_OP_OK;
+}
+
+}  // namespace
+
+TEST(Custom, AnEqualThatAnswersOtherThanTrueMakesNotEqualTrue) {
+  GLTANG_TypeRegistry * r = nullptr;
+  ASSERT_EQ(gltang_type_registry_create(&r), GLTANG_OK);
+  GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+  d.name = "five";
+  d.equal = five_equal;
+  const GLTANG_Type * type = nullptr;
+  ASSERT_EQ(gltang_type_registry_add(r, &d, &type), GLTANG_OK);
+  Compiled compiled("use mk; f = mk(); [f == f, f != f];");
+  Context context(compiled.program);
+  ASSERT_TRUE(context.ok());
+  ForeignMaker maker;
+  maker.type = type;
+  ASSERT_EQ(gltang_library_add_native(context.library(), "mk", make_foreign, &maker), GLTANG_OK);
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, r), GLTANG_OK);
+  ASSERT_TRUE(context.execute());
+  EXPECT_EQ(context.describe(), "[5, true]") << "`==` is equal's answer; `!=` is false only for an answer of exactly true";
+  gltang_type_registry_release(r);
 }
 
 // ---------------------------------------------------------------------------
@@ -1521,6 +1605,54 @@ TEST(Custom, ASnapshotOfAnExecutionHoldingAnInstanceIsRefusedNamingTheType) {
     }
     types.context = nullptr;
   }
+}
+
+namespace {
+
+/// keep(x): promotes x to a persistent handle and leaves it held.
+bool keep(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle x;
+  GLTANG_Persistent p;
+  if (gltang_call_arg(call, 0, &x) != GLTANG_OK || gltang_handle_promote(call, x, &p) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_null(call);
+  return true;
+}
+
+}  // namespace
+
+TEST(Custom, ATakeRefusedForAnotherReasonClearsTheTypeAnEarlierTakeNamed) {
+  Types types;
+  Config config;
+  config.fuel = 2000;
+  // Paused in the first loop with an instance live, then in the second with a
+  // persistent handle held as well.
+  Compiled compiled(PRELUDE "p = plain(); i = 0; while (i < 20000) { i += 1; } use keep; keep(1); while (true) { i += 1; }");
+  Context context(compiled.program, config);
+  ASSERT_TRUE(context.ok());
+  types.context = &context;
+  GLTANG_Library * lib = nullptr;
+  ASSERT_EQ(gltang_library_create("t", &lib), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(lib, "money", make_money, &types), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(lib, "plain", make_plain_like<&Types::plain>, &types), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(lib, "shy", make_plain_like<&Types::shy>, &types), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(lib, "echo", make_plain_like<&Types::echo>, &types), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_library(context.library(), lib), GLTANG_OK);
+  gltang_library_release(lib);
+  ASSERT_EQ(gltang_library_add_native(context.library(), "keep", keep, nullptr), GLTANG_OK);
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, types.registry), GLTANG_OK);
+  context.execute();
+  ASSERT_TRUE(context.paused());
+  GLTANG_Snapshot * snapshot = nullptr;
+  EXPECT_EQ(gltang_snapshot_take(context.execution, &snapshot), GLTANG_ERR_UNSUPPORTED);
+  EXPECT_STREQ(gltang_type_name(gltang_snapshot_refused_type(context.execution)), "plain");
+  ASSERT_FALSE(context.finished_after_raising(1000000));
+  ASSERT_TRUE(context.paused());
+  EXPECT_EQ(gltang_snapshot_take(context.execution, &snapshot), GLTANG_ERR_UNSUPPORTED) << "a persistent handle is held";
+  EXPECT_EQ(gltang_snapshot_refused_type(context.execution), nullptr) << "this take was not refused for a type";
+  EXPECT_EQ(snapshot, nullptr);
+  types.context = nullptr;
 }
 
 TEST(Custom, CompiledCodeLeavesForTheInterpreterAndAnswersTheSame) {
