@@ -1,9 +1,10 @@
 # 212 the fast path's room test leaves out the terminator
 # defect: the fast path copies a text that fills the output's capacity exactly, with no room for the terminator the
 #   interpreter's print makes room for (it grows the output first), and writes the terminator one past it
-# caught by: the 32 sixteen-byte texts, whose fast-path count is the requirement written out (one too many: the 32nd
-#   fills the output exactly)
-#   (testJit_templates, JitTemplates.ATextThatDoesNotFitTheOutput*)
+# caught by: f's 32 prints of a sixteen-byte text, whose `fast_prints` must equal the count the requirement gives
+#   (texts_the_fast_path_takes, 27): the 4th, 8th and 16th texts, which fill the output exactly, are taken by the
+#   fast path and the slow path grows the output one text later each time, so the 32nd is fast too and the count is
+#   28 (testJit_templates, JitTemplates.ATextThatDoesNotFitTheOutput*)
 #
 --- a/src/vm/text.c
 +++ b/src/vm/text.c

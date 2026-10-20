@@ -343,14 +343,16 @@ typedef struct GLTANG_JitStats {
   uint64_t functions_declined_expected; ///< Functions declined at compile time because every path ends at an exit that only boxes a raw float and they have no loop: they cannot repay the compile.
   uint64_t record_lookups;      ///< Lookups of a function's JIT record by its token (`gltang_jit_find_fn`, and the push hook's look at its callee's raw floats). Made when a function is polled, compiled or discarded, never per compiled call: across a run of calls it does not grow with the number of calls, which a test holds it to.
   // The output operations (spec-template-compiled story 1): `PRINT`, `PRINT_CONST` and
-  // `CLEAR_RESULT` run in compiled code as calls to the interpreter's own functions.
+  // `CLEAR_RESULT` run in compiled code as calls to the interpreter's own functions (a short
+  // text or string's print by a fast path instead, story 4d: `fast_prints`).
   uint64_t output_calls;        ///< `PRINT` and `PRINT_CONST` made from compiled code (each a call of the interpreter's print, through the native table, or a fast path: `fast_prints`).
   uint64_t result_clears;       ///< `CLEAR_RESULT` made from compiled code.
   // The value operations (spec-template-compiled story 3): a string constant, `+` past the
   // small-integer path, `INDEX`, `SLICE` and the `ATTR` of a value that is not a library run
   // in compiled code as calls of the interpreter's own operations; and those of story 4: a `CAST`
   // the inline path does not do, the allocation of an `ARRAY` or `MAP` literal (its fill is no
-  // call of the table and is not counted) and the copy `ADOPT` makes of a container.
+  // call of the table and is not counted) and the copy `ADOPT` makes of a container. A map's
+  // `ATTR` may be done by a fast path instead (story 4d: `fast_attrs`).
   uint64_t value_calls;         ///< Those operations made from compiled code (each a call through the native table, or a fast path below).
   // The fast paths (spec-template-compiled story 4d): the common case of a text, of a print of a
   // short string and of a map's attribute by a constant name, done in compiled code without the

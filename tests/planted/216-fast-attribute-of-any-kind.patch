@@ -1,0 +1,17 @@
+# 216 the fast path of an attribute reads any value as a map
+# defect: the map's fast path does not test that the operand is a map, so a string's `.length` and a library's
+#   member are looked up in whatever their object holds where a map's storage would be
+# caught by: the loop of a map's attribute beside a string's and a library's (testJit_templates,
+#   JitTemplates.AMapsAttributeIsTheFastPath*): a wrong value or a fault
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -666,7 +666,7 @@
+  * `hash` is the name's, computed when the function was compiled. No allocation, no poll.
+  */
+ GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash) {
+-  if (!gltang_v_is_kind(container, GLTANG_OBJ_MAP) || !exec->constants[index]) {
++  if (!gltang_v_is_object(container) /* planted: no map test */ || !exec->constants[index]) {
+     return GLTANG_V_UNWIND;
+   }
+   assert(hash == gltang_vm_string_hash(name, length) && "the hash compiled code was built with is the name's");

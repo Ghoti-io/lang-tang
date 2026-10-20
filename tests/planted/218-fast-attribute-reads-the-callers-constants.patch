@@ -1,0 +1,18 @@
+# 218 the fast path of an attribute asks whether the caller's program has made the name
+# defect: the made-name test reads the main program's constants (`exec->programs[0]`) rather than the running
+#   program's, so inside a template call a name the template has not made reads as made when the script has
+#   made its own constant of that index, and the template's name is never made
+# caught by: the template's `m.name` after the script has made thirty constants, whose heap objects are compared with
+#   the interpreter's (testJit_templates, JitTemplates.AMapsAttributeInATemplateReadsTheTemplatesOwnConstants*)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -666,7 +666,7 @@
+  * `hash` is the name's, computed when the function was compiled. No allocation, no poll.
+  */
+ GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash) {
+-  if (!gltang_v_is_kind(container, GLTANG_OBJ_MAP) || !exec->constants[index]) {
++  if (!gltang_v_is_kind(container, GLTANG_OBJ_MAP) || !exec->programs[0].constants[index] /* planted: the caller's constants */) {
+     return GLTANG_V_UNWIND;
+   }
+   assert(hash == gltang_vm_string_hash(name, length) && "the hash compiled code was built with is the name's");

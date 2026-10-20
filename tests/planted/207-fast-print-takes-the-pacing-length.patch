@@ -1,8 +1,10 @@
 # 207 the fast path takes a print of the pacing interval's own length
 # defect: the fast path's bound is `length > GLTANG_POLL_BYTES`, so a string of exactly GLTANG_POLL_BYTES bytes is
 #   copied by it, without the poll the interpreter's print makes inside at its end
-# caught by: the strings one byte short of the interval and of its length, whose polls are compared with the
-#   interpreter's (testJit_templates, JitTemplates.ATextThatDoesNotFitTheOutput*)
+# caught by: f's loop printing, from its parameters, a string one byte short of the interval and one of its length
+#   (PRINT of a value, which compiled code tests only when it runs): once the output has room the longer one is the
+#   fast path, and expect_same finds a poll fewer than the interpreter's (testJit_templates,
+#   JitTemplates.ATextThatDoesNotFitTheOutput*)
 #
 --- a/src/vm/text.c
 +++ b/src/vm/text.c

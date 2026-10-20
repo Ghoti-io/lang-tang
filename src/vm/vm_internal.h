@@ -939,10 +939,11 @@ GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container,
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name);
 /**
  * @brief The common case of `ATTR` by the constant `index` (whose bytes are `name`, `length`, and
- *   its gltang_vm_string_hash `hash`) for compiled code (spec-template-compiled story 4d): a map
- *   that holds the key, once the constant has been made. Must equal gltang_vm_constant then
- *   gltang_vm_op_attr wherever it answers; it answers GLTANG_V_UNWIND, having done nothing, for
- *   anything else (not a map, the name not made yet, the key absent). Not a GC point.
+ *   its gltang_vm_string_hash `hash`) for compiled code (spec-template-compiled story 4d): a map,
+ *   once the constant has been made (the key's value, or null for a key it does not hold). Must
+ *   equal gltang_vm_constant then gltang_vm_op_attr wherever it answers; it answers
+ *   GLTANG_V_UNWIND, having done nothing, for anything else (not a map, the name not made yet).
+ *   Not a GC point.
  */
 GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash);
 /** @brief The attribute rule on a name given as bytes. */

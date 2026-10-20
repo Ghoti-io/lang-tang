@@ -71,6 +71,9 @@ uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 /** Where the execution last recorded its position (its SYNC): `function << 32 | offset`. */
 uint64_t gltang_vm_test_position(const GLTANG_Execution * execution);
 
+/** How many temporaries the execution has storage for: 0 until its first push allocates it. */
+uint64_t gltang_vm_test_temp_capacity(const GLTANG_Execution * execution);
+
 /**
  * Whether a frame word of kind VALUE is a float, and if so its 64 bits (sign and
  * payload of a NaN included). The inspect text rounds to six decimals and prints

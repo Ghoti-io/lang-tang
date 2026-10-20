@@ -4,12 +4,12 @@
 #
 --- a/src/vm/text.c
 +++ b/src/vm/text.c
-@@ -626,7 +626,7 @@
-  */
- static bool output_deliver(GLTANG_Execution * exec) {
-   GLTANG_OutBuf * out = exec->out;
--  if (!exec->sink || out != &exec->main_act.out || out->length <= exec->sink_delivered) {
-+  if (!exec->sink || out->length <= exec->sink_delivered) { /* planted: any activation's output */
-     return true;
-   }
-   const size_t from = exec->sink_delivered;
+@@ -629,7 +629,7 @@
+ 
+ /** Whether a print that finishes is handed to the host's sink: only the main activation's output is. */
+ static bool output_delivers(const GLTANG_Execution * exec) {
+-  return exec->sink && exec->out == &exec->main_act.out;
++  return exec->sink != NULL; /* planted: any activation's output */
+ }
+ 
+ /**

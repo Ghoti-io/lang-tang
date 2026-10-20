@@ -34,11 +34,14 @@
  *   `gltang_vm_resolve` and `gltang_vm_op_attr`, called as the interpreter calls
  *   them, so the value is the one it makes, whatever the library holds now.
  * - `PRINT` and `PRINT_CONST`: the interpreter's `gltang_vm_op_print` and
- *   `gltang_vm_print_constant`, so there is one implementation of printing.
+ *   `gltang_vm_print_constant`, so there is one implementation of printing beyond the
+ *   common case of a short text or string, which compiled code does first by its fast path
+ *   (story 4d, helpers.c); these thunks are its slow path.
  * - The value operations: a string `CONST` (`gltang_vm_constant`), `+` past the
  *   small-integer path (`gltang_vm_op_binary`), `INDEX`, `SLICE` and the `ATTR` of a value
  *   that is not a library (`gltang_vm_op_index`, `gltang_vm_op_slice`,
- *   `gltang_vm_op_attr`), so each is the interpreter's one implementation.
+ *   `gltang_vm_op_attr`), so each is the interpreter's one implementation (a map's `ATTR`
+ *   is first tried by its fast path, story 4d, and this thunk is its slow path).
  * - The value-building operations of story 4: a `CAST` (`gltang_vm_op_cast`), the
  *   allocation of an `ARRAY` or a `MAP` literal (`gltang_vm_array_new`,
  *   `gltang_vm_map_new`; its elements are stored after it, by the no-GC fill helpers of

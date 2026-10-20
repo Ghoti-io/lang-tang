@@ -770,6 +770,14 @@ uint64_t gltang_vm_test_position(const GLTANG_Execution * execution) {
 }
 
 /*
+ * For the tests only: how many temporaries the execution has storage for (0 until its first push
+ * allocates it). Declared in vm/test_hooks.h.
+ */
+uint64_t gltang_vm_test_temp_capacity(const GLTANG_Execution * execution) {
+  return execution ? (uint64_t)execution->temp_capacity : 0;
+}
+
+/*
  * For the tests only: whether a slot or variable word (of kind VALUE) is a float
  * and, if so, its 64 bits. The frame differential compares floats by these bits,
  * which the inspect text (six decimals, every NaN as nan) does not carry.

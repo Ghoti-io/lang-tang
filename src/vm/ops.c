@@ -37,6 +37,7 @@
 #include <locale.h>
 #include <math.h>
 #include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
 #include "vm_internal.h"
@@ -656,20 +657,21 @@ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const 
 /*
  * The common case of `ATTR` for compiled code (spec-template-compiled story 4d): a second
  * implementation of what the interpreter's `ATTR` does (gltang_vm_constant of the name, then
- * gltang_vm_op_attr, attr() above) for a map that holds the key, and nothing else. It must equal
- * them there: a map's attribute is the key's value (attr()'s map arm), and the name, already made,
- * makes nothing (gltang_vm_constant's cache). Anything else answers GLTANG_V_UNWIND, which no map
- * holds, and compiled code then makes the interpreter's call: another kind (a library's member
- * may be made, a string's retag allocates, a custom value is its type's), a name not yet made
- * (the slow path allocates it), and a missing key (null by the slow path). No allocation, no poll.
+ * gltang_vm_op_attr, attr() above) for a map, and nothing else. It must equal them there: a map's
+ * attribute is the key's value, or null for a key it does not hold (attr()'s map arm, which neither
+ * allocates nor polls either way), and the name, already made, makes nothing (gltang_vm_constant's
+ * cache). Anything else answers GLTANG_V_UNWIND, which no map holds, and compiled code then makes
+ * the interpreter's call: another kind (a library's member may be made, a string's retag
+ * allocates, a custom value is its type's) and a name not yet made (the slow path allocates it).
+ * `hash` is the name's, computed when the function was compiled. No allocation, no poll.
  */
 GLTANG_Value gltang_vm_map_attr_fast(const GLTANG_Execution * exec, GLTANG_Value container, uint32_t index, const char * name, size_t length, uint64_t hash) {
   if (!gltang_v_is_kind(container, GLTANG_OBJ_MAP) || !exec->constants[index]) {
     return GLTANG_V_UNWIND;
   }
+  assert(hash == gltang_vm_string_hash(name, length) && "the hash compiled code was built with is the name's");
   bool found;
-  GLTANG_Value v = gltang_vm_map_get_hashed(container, name, length, hash, &found);
-  return found ? v : GLTANG_V_UNWIND;
+  return gltang_vm_map_get_hashed(container, name, length, hash, &found);
 }
 
 /** Python's slice arithmetic for a sequence of `length` (4.9). */

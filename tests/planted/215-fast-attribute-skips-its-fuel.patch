@@ -1,0 +1,16 @@
+# 215 the fast path of a compiled map attribute charges no fuel
+# defect: the helper of an `ATTR` done by its fast path does not add the operation's cost to the pending fuel
+# caught by: the loop of a map's attribute, whose fuel is compared with the interpreter's
+#   (testJit_templates, JitTemplates.AMapsAttributeIsTheFastPath*)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -137,7 +137,7 @@
+   if (v == GLTANG_V_UNWIND) {
+     return v;
+   }
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
++  /* planted: the fast attribute charges no fuel */
+   ++exec->jit_stats.value_calls;
+   ++exec->jit_stats.fast_attrs;
+   return v;

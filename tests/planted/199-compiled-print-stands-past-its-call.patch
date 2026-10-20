@@ -2,9 +2,9 @@
 # defect: the `PRINT_CONST` helper does not clear `exec->standing`, so the next runtime poll outside a
 #   standing operation writes the frame's identity at whatever `current_offset` holds, where the
 #   interpreter writes nothing
-# caught by: the large-print test's first program, whose short `print("|")` in f leaves the stand set:
-#   the top level's next poll then reads the identity written there and not the call's (testJit_templates,
-#   JitTemplates.ALargePrint*)
+# caught by: the large-print test's third program, whose template ends with a text after an HTML string (the thunk,
+#   not story 4d's fast path), which leaves the stand set: the polls of the template's output string, built by
+#   HALT's body, then read an identity the interpreter's do not (testJit_templates, JitTemplates.ALargePrint*)
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c

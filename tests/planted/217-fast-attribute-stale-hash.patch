@@ -1,0 +1,16 @@
+# 217 compiled code is built with a stale hash of an attribute's name
+# defect: the emitter hashes the name one byte short, so the hash the fast path looks the key up by is not the name's
+# caught by: the fast path's assert that the hash is the name's, in the loop of a map's attribute (testJit_templates,
+#   JitTemplates.AMapsAttributeIsTheFastPath*: the process aborts)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1766,7 +1766,7 @@
+     return;
+   }
+   const GLTANG_StringBlock * name = c->program->constants[a].block;
+-  const uint64_t hash = gltang_vm_string_hash(gltang_string_bytes(name), (size_t)name->byte_length);
++  const uint64_t hash = gltang_vm_string_hash(gltang_string_bytes(name), (size_t)name->byte_length - 1u);  /* planted: a stale hash */
+   GRJIT_Operand fast_args[4] = {V(c->stack[d - 1u]), I((int64_t)a), I((int64_t)(intptr_t)name), I((int64_t)hash)};
+   GRJIT_BlockId fast, slow, join;
+   emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_map_attr_fast, fast_args, 4);

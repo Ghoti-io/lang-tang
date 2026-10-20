@@ -1,0 +1,16 @@
+# 214 the fast path of a compiled string print charges no fuel
+# defect: the helper of a `PRINT` done by its fast path does not add the operation's cost to the pending fuel
+# caught by: the template whose short string and second text are the fast path, whose fuel is compared with the
+#   interpreter's (testJit_templates, JitTemplates.TextsAndAShortStringAfterACallsFirstPrint*)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -125,7 +125,7 @@
+   if (!gltang_vm_print_string_fast(exec, value)) {
+     return 0;
+   }
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
++  /* planted: the fast string print charges no fuel */
+   ++exec->jit_stats.output_calls;
+   ++exec->jit_stats.fast_prints;
+   return 1;

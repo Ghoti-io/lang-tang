@@ -37,10 +37,11 @@
  * library: the load of a `use`d path or a library's `.name` and the `CALL` of a
  * library native (a host function), each a call to the engine's own operation
  * (natives.c) with no exit; the output operations, `PRINT` and `PRINT_CONST` as calls of
- * the interpreter's print through the same table and `CLEAR_RESULT` as a call that is no GC
- * point; the value operations, a string `CONST`, `+` past the small-integer path, `INDEX`,
- * `SLICE` and the `ATTR` of any other value, as calls of the interpreter's own functions
- * through the same table, behind a test that no operand is a host-defined value (an exit:
+ * the interpreter's print through the same table (after a fast path for a short text or
+ * string, story 4d, a second implementation of that case) and `CLEAR_RESULT` as a call that
+ * is no GC point; the value operations, a string `CONST`, `+` past the small-integer path,
+ * `INDEX`, `SLICE` and the `ATTR` of any other value (after a fast path for a map, story 4d),
+ * as calls of the interpreter's own functions through the same table, behind a test that no operand is a host-defined value (an exit:
  * the type's operation is a host callback, which no compiled helper runs yet); the
  * value-building operations, a `CAST` the inline path does not do, the `ARRAY` and `MAP`
  * literals (an allocating call, then no-GC fills) and `ADOPT` of a container, the same way,
@@ -103,6 +104,7 @@
 
 #include "jit_internal.h"
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -298,8 +300,9 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
     case GLTANG_OP_USE:
       return c->natives_on && use_load_ok(c, a);
     // The output operations are calls of the interpreter's own functions: the two
-    // prints through the native table (so only where natives can be called), the
-    // clearing of the statement result as a call that is no GC point.
+    // prints through the native table (so only where natives can be called), each after
+    // its fast path (story 4d, emit_print), the clearing of the statement result as a call
+    // that is no GC point.
     case GLTANG_OP_PRINT:
       return c->natives_on;
     case GLTANG_OP_PRINT_CONST:
@@ -327,7 +330,7 @@ static bool inline_op(const Ctx * c, GLTANG_Opcode op, uint32_t a) {
       return small_int_constant(c, a, &unused) || (!c->raw_off && float_constant(c, a, &unused)) || (c->natives_on && string_constant(c, a));
     // The value operations (spec-template-compiled story 3): calls of the interpreter's own
     // index and slice, through the table. `ATTR` and `+` are decided where they are emitted
-    // (a library's member, the small-integer path).
+    // (a library's member, a map's fast path of story 4d, the small-integer path).
     case GLTANG_OP_INDEX:
     case GLTANG_OP_SLICE:
       return c->natives_on;
@@ -1617,6 +1620,7 @@ static void emit_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
 /** The position, the pending fuel and the plain call `helper(exec, args...)`, its answer in the temporary `TMP_R`. */
 static void emit_fast_call(Ctx * c, uint32_t i, uint64_t helper, const GRJIT_Operand * args, size_t argc) {
   GRJIT_Operand all[5];
+  assert(argc + 1u <= sizeof(all) / sizeof(all[0]) && "a fast path's helper takes the execution and at most four more");
   all[0] = I((int64_t)(intptr_t)c->exec);
   for (size_t k = 0; k < argc; ++k) {
     all[1u + k] = args[k];
@@ -1752,9 +1756,9 @@ static void emit_slice(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
 
 /**
  * `ATTR name` of a value that is not known to be a library: the interpreter's attribute rule; the
- * value replaces the operand. A map that holds the name, once the name has been made, is the fast
- * path (gltang_vm_map_attr_fast), with the name's hash computed here; anything else is the test
- * for a host-defined operand and the call, as before.
+ * value replaces the operand. A map, once the name has been made, is the fast path
+ * (gltang_vm_map_attr_fast: the key's value, or null), with the name's hash computed here; anything
+ * else is the test for a host-defined operand and the call, as before.
  */
 static void emit_value_attr(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};

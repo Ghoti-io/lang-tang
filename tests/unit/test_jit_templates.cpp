@@ -287,10 +287,13 @@ TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOut
     EXPECT_EQ(jit.stats.native_status_unwinds, 1u) << "the unwind left compiled code from inside the print";
     EXPECT_EQ(jit.stats.native_status_deopts, 0u);
   }
-  // The same text with no scope limit: polls compared one by one, every one inside the print.
+  // The same text with no scope limit: polls compared one by one, every one inside the print. The
+  // template's last text follows an HTML string, so it starts a segment and is the thunk, not story
+  // 4d's fast path: a thunk that left its stand set (planted 199) is then seen at the polls of the
+  // template's output string, built after it by HALT's body, which does not stand.
   {
     Scenario sc = scenario("use big; print(\"[\"); print(big()); print(\"]\");\n");
-    sc.parts.push_back(Part{"big", std::string(20000, 'x') + "<% k = 0; %>tail", 100000, GLTANG_SCOPE_EMPTY, Mode::Template});
+    sc.parts.push_back(Part{"big", std::string(20000, 'x') + "<% k = 0; %><%= \"<b>\".html %>tail", 100000, GLTANG_SCOPE_EMPTY, Mode::Template});
     std::vector<uint64_t> paced;
     sc.after = [&](Context & context) { paced.push_back(native_polls(context, "PRINT")); };
     Outcome plain, jit;
@@ -299,7 +302,8 @@ TEST(JitTemplates, ALargePrintPollsAsOftenChargesTheSameFuelAndAScopeThatRunsOut
     ASSERT_EQ(paced.size(), 2u);
     EXPECT_EQ(paced[0], paced[1]);
     EXPECT_GE(paced[1], 4u);
-    EXPECT_EQ(jit.raw, "[" + std::string(20000, 'x') + "tail]");
+    EXPECT_EQ(jit.raw, "[" + std::string(20000, 'x') + "<b>tail]");
+    EXPECT_EQ(jit.stats.fast_prints, 0u) << "every text took the thunk";
   }
 }
 
@@ -1945,8 +1949,9 @@ TEST(JitTemplates, ATextAfterAnotherTagAndAStringOfTwoTagsAreTheSlowPathAndTheTa
 TEST(JitTemplates, AMapsAttributeIsTheFastPathOnceItsNameIsMadeAndAMissingKeyOrAnotherKindIsTheSlowPath) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // At the first iteration no name has been made, so each attribute is the slow path, which makes it;
-  // after that `m.name` is the fast path; `m.missing` (null, the slow path), a string's `.length`
-  // and a library's member through a variable are not. (No `== null`: that comparison is an exit.)
+  // after that `m.name` and `m.missing` (null, which the slow path's map arm answers with no
+  // allocation either) are the fast path, and a string's `.length` and a library's member through a
+  // variable are not. (No `== null`: that comparison is an exit.)
   Scenario sc = scenario(
       "use t;\n"
       "function f(n, lib) {\n"
@@ -1966,7 +1971,7 @@ TEST(JitTemplates, AMapsAttributeIsTheFastPathOnceItsNameIsMadeAndAMissingKeyOrA
   ASSERT_FALSE(HasFailure());
   EXPECT_NE(jit.result.find("84"), std::string::npos) << jit.result;
   EXPECT_EQ(jit.stats.deopts, 0u);
-  EXPECT_EQ(jit.stats.fast_attrs, 11u) << "`m.name` after its first iteration, and nothing else";
+  EXPECT_EQ(jit.stats.fast_attrs, 22u) << "`m.name` and `m.missing` after their first iteration, and nothing else";
   EXPECT_EQ(plain.stats.fast_attrs, 0u);
 }
 
@@ -2004,6 +2009,31 @@ TEST(JitTemplates, APrintThatFailsAfterFastTextsRollsBackToTheSameByteOnBothTier
   EXPECT_GE(kinds.size(), 3u);
 }
 
+TEST(JitTemplates, AMapsAttributeInATemplateReadsTheTemplatesOwnConstantsNotTheCallers) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `exec->constants` is the running program's: inside a template call it is the template's. The
+  // script makes thirty string constants before its first call, so the template's name constants
+  // share their indices with constants the script has already made; a fast path that looked at the
+  // script's would read the name as made at the template's first `m.name` and never make it.
+  std::string source = "use card;\n";
+  for (int k = 0; k < 30; ++k) {
+    source += "z" + std::to_string(k) + " = \"q" + std::to_string(k) + "\";\n";
+  }
+  source += "i = 0; while (i < 10) { print(card()); i = i + 1; }\n";
+  Scenario sc = scenario(source);
+  sc.parts.push_back(card("<% use t; it = t.items(2); m = it[0]; %><%= m.name %>|<%= m.name %>;"));
+  sc.before = add_items_library;
+  Outcome plain, jit;
+  expect_same_heap(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  std::string expected;
+  for (int k = 0; k < 10; ++k) {
+    expected += "<item 0>|<item 0>;";
+  }
+  EXPECT_EQ(jit.raw, expected);
+  EXPECT_EQ(jit.stats.fast_attrs, 18u) << "every `m.name` but the first call's two, each of which made its own name constant";
+}
+
 TEST(JitTemplates, AStringPrintedWhereItsTemporaryCannotBeHeldIsTheInterpretersAtEveryMemoryBudget) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The first print of a string in an execution pushes its first temporary, which allocates the
@@ -2012,11 +2042,20 @@ TEST(JitTemplates, AStringPrintedWhereItsTemporaryCannotBeHeldIsTheInterpretersA
   Scenario sc = scenario("function f() { print(\"x\"); s = \"ab\"; print(s); print(\"y\"); print(s); return 1; }\nf();\n");
   sc.memory_reserve = 0;
   Outcome measured = run(sc, 0);
-  Outcome compiled = run(sc, 1);
+  // The precondition: nothing before the first print of `s` pushes a temporary (the storage is
+  // unallocated when the run starts and allocated by its end), and that print is the slow path,
+  // so the fast path takes exactly "y" and the second print of `s`.
+  Scenario watched = sc;
+  uint64_t before_run = 1, after_run = 0;
+  watched.before = [&](Context & context) { before_run = gltang_vm_test_temp_capacity(context.execution); };
+  watched.after = [&](Context & context) { after_run = gltang_vm_test_temp_capacity(context.execution); };
+  Outcome compiled = run(watched, 1);
   ASSERT_TRUE(measured.finished);
   ASSERT_TRUE(compiled.finished);
   EXPECT_EQ(compiled.raw, "xabyab");
-  EXPECT_GE(compiled.stats.fast_prints, 2u);
+  EXPECT_EQ(before_run, 0u) << "the temporaries are unallocated when the run starts";
+  EXPECT_GT(after_run, 0u) << "and the first print of a string allocated them";
+  EXPECT_EQ(compiled.stats.fast_prints, 2u) << "\"y\" and the second print of `s`; the first could not hold its temporary";
   const uint64_t low = std::min(measured.memory_peak, compiled.memory_peak) / 2;
   const uint64_t high = std::max(measured.memory_peak, compiled.memory_peak) + 64;
   std::set<std::string> kinds;
@@ -2045,6 +2084,8 @@ TEST(JitTemplates, WithoutTheJitPrintsRunInTheInterpreterAndNothingIsCompiled) {
   EXPECT_EQ(st.output_calls, 0u);
   EXPECT_EQ(st.result_clears, 0u);
   EXPECT_EQ(st.functions_compiled, 0u);
+  EXPECT_EQ(st.fast_prints, 0u);
+  EXPECT_EQ(st.fast_attrs, 0u);
   // A template, whose text clears its result: still nothing compiled or counted.
   Compiled text("head<% if (1 < 2) { %>yes<% } %>tail", Mode::Template, "nojit-template.tang");
   ASSERT_TRUE(text.ok());
@@ -2056,6 +2097,8 @@ TEST(JitTemplates, WithoutTheJitPrintsRunInTheInterpreterAndNothingIsCompiled) {
   EXPECT_EQ(tst.output_calls, 0u);
   EXPECT_EQ(tst.result_clears, 0u);
   EXPECT_EQ(tst.functions_compiled, 0u);
+  EXPECT_EQ(tst.fast_prints, 0u);
+  EXPECT_EQ(tst.fast_attrs, 0u);
 }
 
 #endif
