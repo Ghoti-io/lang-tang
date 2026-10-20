@@ -1,0 +1,16 @@
+# 193 the per-row template leaves compiled code at a designed box exit at every call
+# defect: the program of the per-row template row stores a raw float to a top-level variable on a path the compile
+#   cannot rule out: a box exit, which counts toward no limit and discards nothing, and its output is unchanged
+# caught by: bench --smoke --only steady-template-rows-compiled-per-row (the template policy: zero expected exits, every compiled call returns)
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -1775,7 +1775,7 @@
+  * the clock and covers the timed rows only. The compiled side runs at a threshold of one, so every call
+  * is compiled; the figure is one row of the timed phase. */
+ static const char steady_row_template[] =
+-    "<% use data; item = data.row(); row = item.row; label = \"row \"; %>"
++    "<% use data; item = data.row(); row = item.row; label = \"row \"; k = 1; if (k > 0) { scale = 2 * 0.5; } %>"
+     "<li><%= item.name %>|<%= row[0] %>|<%= label + row[1] %></li>";
+ 
+ /* The length of row k's output, d the digits of k: "<li>" (4), "<item k>" (7 + d), "|" (1), k (d), "|" (1),

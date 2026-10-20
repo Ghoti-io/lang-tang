@@ -1884,6 +1884,12 @@ breaks nothing as not caught. Observed:
 | 189 constant-cast-lower-bound-exclusive | the constant-cast fold refuses -2^59 (the fold's twin of 61) | the constant casts at both bounds (`testJit_templates`) | -2^59 exits where no exit is expected |
 | 191 refused-map-key-skipped | `gltang_vm_map_fill` skips a key that is the out-of-memory error | the memory sweep where only a long map key is refused (`testJit_templates`) | the literal is a map lacking its entry, not the error |
 | 190 array-fill-into-a-failure | the array fill does not test that the allocation made an array | the memory sweep over a compiled function's literals (`testJit_templates`) | a refused budget's run differs from the interpreter's |
+| 192 bench-warm-template-exits | the warm template row's program gains an exit that counts (a string variable beside a raw float, on a path the compile cannot rule out), its output unchanged | `bench --smoke --only steady-template-compiled-warm-call`: the template policy, zero exits and never discarded | the harness aborts |
+| 193 bench-row-template-box-exit | the per-row template stores a raw float to a top-level variable on a path the compile cannot rule out: a designed box exit at every call, its output unchanged | `bench --smoke --only steady-template-rows-compiled-per-row`: the template policy, zero expected exits and every compiled call returns | the harness aborts |
+| 194 bench-template-top-level-entry-returns | the template policy expects the top level's entry, which leaves at its first statement, to return | `bench --smoke --only steady-template-rows-compiled-per-row`: compiled entries returned exactly | the harness aborts |
+| 195 bench-template-top-level-entry-forgotten | the template policy leaves out the top level's entry at a threshold of one | `bench --smoke --only steady-template-rows-compiled-per-row`: entries into compiled code exactly | the harness aborts |
+| 196 bench-template-box-exit-counted | the template policy takes a designed box exit for an exit that counts | `bench --smoke --only steady-template-float-print-compiled-warm-call`: expected and counted exits exactly | the harness aborts |
+| 197 bench-template-discard-cap-off-by-one | the template policy expects a template whose exits count to be entered nine times before its discard, not eight | `bench --smoke --only steady-template-float-label-compiled-warm-call`: entries and counted exits exactly | the harness aborts |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1891,14 +1897,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 178 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 and 178 are in the interpreter and seen only by the JIT arm, as 156. 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 191 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167 and 169 to 197 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the hundred and eighty that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the hundred and eighty-six that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10 and 18 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -3867,6 +3873,19 @@ first measurement, which was taken on an Intel Core 7 150U with GCC 14 and is in
 history of this file: its `fib(15)` row said 181 us, and said the JIT cost 12%. Both
 were true of that machine and of milestone 1's JIT, which left compiled code at every call;
 neither is true of this one, and the call-heavy cases are in "Calls, measured".
+
+What the harness does assert is what each compiled row's JIT did: every row that names a policy
+(`want_set`, and `want_template` for the template rows) aborts with `setup failed` when its
+compiled calls, exits, discards, entries or returns are not the policy's, so a row labelled
+compiled that left compiled code cannot report a figure. Built with `BENCH_UNCHECKED` defined,
+the harness runs every row without its policy and prints the counts instead. That is how HEAD's
+harness is run against an older lang-tang whose rows the policies do not describe, the "before"
+of an A/B with the same rows on both sides (spec-template-compiled story 5 measured `aafa9c3`
+that way): define it on the harness alone, as the first line of the copied `bench/bench.c`
+(`#define BENCH_UNCHECKED 1`), or for the whole build with
+`make ... EXTRA_CFLAGS=-DBENCH_UNCHECKED`, which also reaches the library's objects (nothing
+there reads it) and so rebuilds them through the flag stamp. (`BENCH_NO_EXIT_STATS` is the older
+switch, for a library whose statistics lack the exit fields.)
 
 | Case | Figure |
 | --- | --- |

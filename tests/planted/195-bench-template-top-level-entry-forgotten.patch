@@ -1,0 +1,16 @@
+# 195 the template policy forgets the top level's entry
+# defect: the benchmark harness's template policy (want_template) expects only the template's entries, at a threshold of one,
+#   where the top level is compiled and entered too; only the check of entries can see it
+# caught by: bench --smoke --only steady-template-rows-compiled-per-row (check_jit_expectation: entries into compiled code exactly)
+#
+--- a/bench/bench.c
++++ b/bench/bench.c
+@@ -438,7 +438,7 @@
+   switch (p) {
+     case TPL_STAYS:
+       /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
+-      want.entries = compiled + top;
++      want.entries = compiled;
+       want.returns = compiled;
+       want.counted = top;
+       break;

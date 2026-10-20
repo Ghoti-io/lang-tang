@@ -355,8 +355,8 @@ typedef enum { POL_NORMAL, POL_EXPECTED, POL_COUNTED, POL_DECLINED, POL_REMEMBER
  * error made) where the top level leaves compiled code, once, counted. Until spec-template-compiled
  * story 2 the top level left at its first function declaration, a global store, which is compiled now;
  * the policies, their figures and planted 78 are written for that one exit, and this puts it back where
- * it was (every one of these programs begins with its declaration). The template rows have no policy
- * yet, and run without it (story 5 of that spec adds theirs). */
+ * it was (every one of these programs begins with its declaration). The template rows do not use it:
+ * they have a policy of their own (want_template). */
 #define BENCH_TOP_LEAVES "for (leave : []) { } "
 typedef struct {
   int active;
@@ -366,6 +366,8 @@ typedef struct {
   int64_t counted;
   int declined; /* the number of functions the compile must decline */
   int64_t callee_entries; /* entries of a callee of a declined function (the interpreter calls it, compiled) */
+  int64_t entries; /* entries into compiled code, or -1: not checked (the rows of want_set) */
+  int64_t returns; /* compiled entries that returned (a template's HALT included), or -1: not checked */
 } JitWant;
 static JitWant want;
 static void want_none(void) { want.active = 0; }
@@ -373,6 +375,7 @@ static void want_set(int jit_on, Policy p, uint64_t calls) {
   want.active = 1;
   want.declined = 0;
   want.callee_entries = 0;
+  want.entries = want.returns = -1;
   if (!jit_on) {
     want.compiled = 0;
     want.discarded = want.expected = want.counted = 0;
@@ -388,8 +391,78 @@ static void want_set(int jit_on, Policy p, uint64_t calls) {
     want.counted += calls < 8u ? (int64_t)calls : 8;
   }
 }
+/* The template rows (spec-template-compiled story 5). The steady-state script calls a template `t`
+ * `calls` times from its top level; the template's function 0 is counted at its entry poll.
+ *   TPL_STAYS     every compiled call runs from entry to HALT in compiled code: no exit of any kind, never
+ *                 discarded, and every compiled entry returns (the HALT's return), so a warm call that exits
+ *                 or a function that is discarded fails the row;
+ *   TPL_BOX_EXIT  every compiled call leaves once at the designed exit that boxes a raw float for its consumer
+ *                 (a print of one, spec-template-compiled story 1; a string constant beside one, story 3), which
+ *                 counts nowhere: exits_expected is the compiled calls, none returns (the HALT runs in the interpreter),
+ *                 never discarded;
+ *   TPL_COUNTED   every compiled call leaves at an exit that counts (a string that is not a constant beside a
+ *                 raw float): the eighth discards the function, and a discarded function is never compiled
+ *                 again, so the compiled calls are eight at most.
+ * The last two are the "before" of planning/unboxed-float-output.md: what they assert is today's behaviour, and
+ * the optimization that removes those exits changes them on purpose.
+ * Which calls are compiled depends on the threshold, `jit_mode` as steady_run_x takes it (0 the JIT off, 1 its
+ * default threshold, 2 a threshold of one). At the default, the poll that reaches GLTANG_JIT_DEFAULT_THRESHOLD
+ * compiles the function and the same call enters it, so the calls from that one on are compiled and the calls
+ * before it run interpreted: `returns` (TPL_STAYS) is the compiled calls, not all of them. The top level, entered
+ * once, is never compiled there. At a threshold of one every call is compiled, and so is the top level at its
+ * entry: it leaves at its first statement, `use t`
+ * (compiled code loads a native or a library and leaves at the load of a template; a template call from
+ * compiled code is an exit too, decided 2026-10-08, calls spec story 8), an exit that counts, and runs in
+ * the interpreter after it, so it adds one entry and one counted exit and returns nothing. */
+typedef enum { TPL_STAYS, TPL_BOX_EXIT, TPL_COUNTED } TemplatePolicy;
+/* At the default threshold the top level (entered once) must not be compiled. */
+_Static_assert(GLTANG_JIT_DEFAULT_THRESHOLD >= 2, "want_template assumes the default threshold leaves the top level interpreted");
+static void want_template(int jit_mode, TemplatePolicy p, uint64_t calls) {
+  const int jit_on = jit_mode != 0;
+  const int threshold_one = jit_mode == 2;
+  want_set(jit_on, POL_NORMAL, calls);
+  want.entries = want.returns = 0;
+  want.counted = 0;
+  if (!jit_on) {
+    return;
+  }
+  const uint64_t t = GLTANG_JIT_DEFAULT_THRESHOLD;
+  const int64_t compiled = threshold_one ? (int64_t)calls : calls >= t ? (int64_t)(calls - (t - 1u)) : 0;
+  const int64_t top = threshold_one ? 1 : 0;
+  if (compiled == 0 && top == 0) {
+    /* Fewer calls than the default threshold (the first-call row's one): every call is interpreted and
+     * nothing is compiled. */
+    want.compiled = 0;
+    return;
+  }
+  switch (p) {
+    case TPL_STAYS:
+      /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
+      want.entries = compiled + top;
+      want.returns = compiled;
+      want.counted = top;
+      break;
+    case TPL_BOX_EXIT:
+      want.entries = compiled + top;
+      want.expected = compiled;
+      want.counted = top;
+      break;
+    case TPL_COUNTED: {
+      const int64_t entered = compiled < 8 ? compiled : 8;
+      want.entries = entered + top;
+      want.counted = entered + top;
+      want.discarded = compiled >= 8 ? 1 : 0;
+      break;
+    }
+  }
+}
 static void check_jit_expectation(const GLTANG_JitStats * st) {
-#ifdef BENCH_NO_EXIT_STATS
+#if defined(BENCH_UNCHECKED)
+  /* Built against a library the policies do not describe (the "before" of an A/B, a commit whose template
+   * rows exit and are discarded): every row runs unchecked and prints its counts. */
+  (void)st;
+  return;
+#elif defined(BENCH_NO_EXIT_STATS)
   /* Built against a library from before the exit rule, whose statistics lack these fields: the rows run
    * unchecked (their figures are the "before" of a before-and-after in one job). */
   (void)st;
@@ -419,6 +492,12 @@ static void check_jit_expectation(const GLTANG_JitStats * st) {
   }
   if (st->exits_counted != (uint64_t)want.counted) {
     setup_failed("a case whose counted exits are not the number it must be");
+  }
+  if (want.entries >= 0 && st->entries != (uint64_t)want.entries) {
+    setup_failed("a case whose entries into compiled code are not the number it must be");
+  }
+  if (want.returns >= 0 && st->returns != (uint64_t)want.returns) {
+    setup_failed("a case whose compiled entries returned another number of times than it must");
   }
 #endif
 }
@@ -1516,13 +1595,56 @@ static bool bench_tick(GLTANG_NativeCall * call, void * user) {
   return true;
 }
 
+/* The template `t` of a steady-state case that names one (with_template), when it is not bench_template();
+ * and whether the execution also carries the `data` library of the per-row case. */
+static GLTANG_Program * steady_tpl;
+static int steady_with_rows;
+static uint64_t steady_next_row;
+/* When set, steady_run_x renders the output after each run, requires it to be this many bytes, and
+ * stamps the last tick after the render (replacing the script's own last stamp). */
+static int64_t steady_render_length = -1;
+
+/* `data.row()`: the next row of a listing, as a host hands a template its data: a map
+ * `{name: "<item k>" (tagged HTML), row: [k, "r<k>"]}` made through the handle API, k counting up
+ * from 0 over the run (every call is a new row). */
+static bool bench_row(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  const uint64_t k = steady_next_row++;
+  char name[40];
+  char cell[32];
+  const int name_length = snprintf(name, sizeof name, "<item %llu>", (unsigned long long)k);
+  const int cell_length = snprintf(cell, sizeof cell, "r%llu", (unsigned long long)k);
+  GLTANG_Handle map, text, row, number, second;
+  if (gltang_handle_make_map(call, 2, &map) != GLTANG_OK
+      || gltang_handle_make_string(call, name, (size_t)name_length, GLTANG_UNICODE_STRING_TYPE_HTML, &text) != GLTANG_OK
+      || gltang_handle_map_set(call, map, "name", 4, GLTANG_UNICODE_STRING_TYPE_TRUSTED, text) != GLTANG_OK
+      || gltang_handle_make_array(call, 2, &row) != GLTANG_OK
+      || gltang_handle_make_integer(call, (int64_t)k, &number) != GLTANG_OK
+      || gltang_handle_array_push(call, row, number) != GLTANG_OK
+      || gltang_handle_make_string(call, cell, (size_t)cell_length, GLTANG_UNICODE_STRING_TYPE_TRUSTED, &second) != GLTANG_OK
+      || gltang_handle_array_push(call, row, second) != GLTANG_OK
+      || gltang_handle_map_set(call, map, "row", 3, GLTANG_UNICODE_STRING_TYPE_TRUSTED, row) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, map);
+  return true;
+}
+
 static void setup_tick(GLTANG_Execution * execution, int with_template) {
   GLTANG_Library * library = NULL;
+  GLTANG_Library * data = NULL;
+  steady_next_row = 0;
   if (gltang_library_create(NULL, &library) != GLTANG_OK
       || gltang_library_add_native(library, "tick", bench_tick, NULL) != GLTANG_OK
-      || (with_template && gltang_library_add_template(library, "t", bench_template(), 100000, GLTANG_SCOPE_EMPTY) != GLTANG_OK)
+      || (with_template && gltang_library_add_template(library, "t", steady_tpl ? steady_tpl : bench_template(), 100000, GLTANG_SCOPE_EMPTY) != GLTANG_OK)
+      || (steady_with_rows && (gltang_library_create("data", &data) != GLTANG_OK
+                               || gltang_library_add_native(data, "row", bench_row, NULL) != GLTANG_OK
+                               || gltang_library_add_library(library, data) != GLTANG_OK))
       || gltang_execution_set_libraries(execution, library) != GLTANG_OK) {
     setup_failed("a tick library");
+  }
+  if (data) {
+    gltang_library_release(data);
   }
   gltang_library_release(library);
 }
@@ -1551,6 +1673,15 @@ static uint64_t steady_run_x(const char * source, GLTANG_ValueKind kind, int wit
     GRCORE_Result r = grcore_run(e.context, gltang_execution_entry, e.execution, &outcome);
     if (r != GRCORE_OK || steady_tick_count != stamps || !result_ok(e.execution, kind)) {
       setup_failed("a steady-state case that did not compute its answer");
+    }
+    if (steady_render_length >= 0) {
+      char * text = NULL;
+      size_t length = 0;
+      if (gltang_execution_output_render(e.execution, &text, &length) != GLTANG_OK || (int64_t)length != steady_render_length) {
+        setup_failed("a steady-state case whose rendered output is not the one it prints");
+      }
+      steady_ticks[stamps - 1] = now_ns();
+      gltang_buffer_free(text);
     }
     total += (steady_ticks[which + 1] - steady_ticks[which]) / divisor;
     (void)gltang_execution_jit_stats(e.execution, &last_jit_stats);
@@ -1604,23 +1735,145 @@ static uint64_t steady_fib22_compiled_first(uint64_t it, double * el) { return s
 static uint64_t steady_fib22_interpreted_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 0, 1, 2, 20, it, el); }
 static uint64_t steady_fib22_compiled_warm(uint64_t it, double * el) { return steady_fib(22, 17711, 1, 1, 2, 20, it, el); }
 
-/* A template called repeatedly in one execution. The template's function 0 is counted at
- * its entry poll, once for each call, so the default threshold (200) is crossed by the
- * warm-up and its compiled code, if it can be compiled, stays in the execution's table
- * for the calls after. The template's output is 13 bytes. */
-static uint64_t steady_template(int jit_on, int which, uint64_t warm, uint64_t timed, uint64_t iterations, double * elapsed) {
-  char source[512];
-  snprintf(source, sizeof(source),
+/* The script of every template row: one call, `warm` calls, `timed` calls, with a tick between the phases. */
+static void steady_template_script(char * source, size_t size, uint64_t warm, uint64_t timed) {
+  snprintf(source, size,
       "use t; use tick; tick(); n = t().length; tick(); i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); "
       "i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); n;",
       (unsigned long long)warm, (unsigned long long)timed);
-  return steady_run(source, (int64_t)(13u * (1u + warm + timed)), 1, jit_on, which, timed, iterations, elapsed);
+}
+
+/* A template called repeatedly in one execution. The template's function 0 is counted at
+ * its entry poll, once for each call, so the default threshold (200) is crossed by the
+ * warm-up and its compiled code, if it can be compiled, stays in the execution's table
+ * for the calls after. The template's output is 13 bytes. The row asserts the template
+ * policy (want_template): a compiled call that left compiled code, or a template function
+ * discarded, fails --smoke. */
+static uint64_t steady_template(int jit_on, int which, uint64_t warm, uint64_t timed, uint64_t iterations, double * elapsed) {
+  char source[512];
+  steady_template_script(source, sizeof(source), warm, timed);
+  /* steady_run runs at the default threshold (jit_mode 1). */
+  want_template(jit_on ? 1 : 0, TPL_STAYS, 1u + warm + timed);
+  uint64_t sink = steady_run(source, (int64_t)(13u * (1u + warm + timed)), 1, jit_on, which, timed, iterations, elapsed);
+  want_none();
+  return sink;
 }
 
 static uint64_t steady_template_interpreted_first(uint64_t it, double * el) { return steady_template(0, 0, 0, 0, it, el); }
 static uint64_t steady_template_compiled_first(uint64_t it, double * el) { return steady_template(1, 0, 0, 0, it, el); }
 static uint64_t steady_template_interpreted_warm(uint64_t it, double * el) { return steady_template(0, 1, 400, 2000, it, el); }
 static uint64_t steady_template_compiled_warm(uint64_t it, double * el) { return steady_template(1, 1, 400, 2000, it, el); }
+
+/* A real template, run as a template is in a page: called once per row of a listing, with the row from
+ * the host (`data.row()`), text, `<%= item.name %>` (a map's attribute: untrusted text, tagged HTML, whose
+ * `<` and `>` are escaped when the page is rendered), `<%= row[0] %>` (an array's element), and the
+ * concatenation of a top-level variable and a string. What is measured is the cost of one row of a page
+ * rendered for a browser: the template call, the script printing its value, and the row's share of
+ * rendering the page (gltang_execution_output_render, which escapes the name), interpreted against
+ * compiled. The first and warm-up calls only add up their lengths; the timed calls print, and the host
+ * renders the output after the run and stamps the end of the timed phase itself, so the render is inside
+ * the clock and covers the timed rows only. The compiled side runs at a threshold of one, so every call
+ * is compiled; the figure is one row of the timed phase. */
+static const char steady_row_template[] =
+    "<% use data; item = data.row(); row = item.row; label = \"row \"; %>"
+    "<li><%= item.name %>|<%= row[0] %>|<%= label + row[1] %></li>";
+
+/* The length of row k's output, d the digits of k: "<li>" (4), "<item k>" (7 + d), "|" (1), k (d), "|" (1),
+ * "row " (4), "r" k (1 + d), "</li>" (5). That is the value's length (a string's length counts its
+ * characters); rendered, the name is "&lt;item k&gt;", 6 more. */
+static int64_t steady_row_length(uint64_t k, int rendered) {
+  char digits[32];
+  const int d = snprintf(digits, sizeof digits, "%llu", (unsigned long long)k);
+  return 4 + (7 + d) + 1 + d + 1 + 4 + (1 + d) + 5 + (rendered ? 6 : 0);
+}
+
+
+static uint64_t steady_template_rows(int jit_on, uint64_t iterations, double * elapsed) {
+  const uint64_t warm = 400u;
+  const uint64_t timed = 2000u;
+  const uint64_t calls = 1u + warm + timed;
+  const int jit_mode = jit_on ? 2 : 0;
+  int64_t expected = 0;
+  int64_t rendered = 0;
+  for (uint64_t k = 0; k < calls; k++) {
+    if (k <= warm) {
+      expected += steady_row_length(k, 0);
+    }
+    else {
+      rendered += steady_row_length(k, 1);
+    }
+  }
+  char source[512];
+  snprintf(source, sizeof(source),
+      "use t; use tick; tick(); n = t().length; tick(); i = 0; while (i < %llu) { n += t().length; i += 1; } tick(); "
+      "i = 0; while (i < %llu) { print(t()); i += 1; } tick(); n;",
+      (unsigned long long)warm, (unsigned long long)timed);
+  steady_tpl = compile_source(steady_row_template, GLTANG_PARSE_TEMPLATE);
+  steady_with_rows = 1;
+  steady_render_length = rendered;
+  want_template(jit_mode, TPL_STAYS, calls);
+  have_expected_integer = 1;
+  expected_integer = expected;
+  uint64_t sink = steady_run_x(source, GLTANG_KIND_INTEGER, 1, jit_mode, 4, 2, (double)timed, iterations, elapsed);
+  have_expected_integer = 0;
+  want_none();
+  steady_render_length = -1;
+  steady_with_rows = 0;
+  gltang_program_release(steady_tpl);
+  steady_tpl = NULL;
+  return sink;
+}
+
+static uint64_t steady_template_rows_interpreted(uint64_t it, double * el) { return steady_template_rows(0, it, el); }
+static uint64_t steady_template_rows_compiled(uint64_t it, double * el) { return steady_template_rows(1, it, el); }
+
+/* The "before" of planning/unboxed-float-output.md: a compiled template that prints, in a loop, a float it
+ * computed (`i * 0.5`, held raw in compiled code), and two that concatenate a label and such a float, the
+ * label a string constant (a designed box exit, as the print's) or a top-level variable (an exit that
+ * counts: the eighth compiled call discards the template). Each asserts its exits and discard as they are
+ * today (want_template); the optimization that prints and concatenates a raw float without leaving
+ * compiled code is to change these rows' policy to TPL_STAYS and be judged by their figures. The loop
+ * keeps the compile from declining the template (a loop-free function whose every path ends at a box exit
+ * is never compiled). Output: 0. 0.5 1. 1.5, each followed by ';', with "v=" before each in the two
+ * concatenations (a float's text: fixed notation, trailing zeros removed, the point kept). */
+typedef struct {
+  const char * source;
+  TemplatePolicy policy;
+  int64_t length;
+} FloatTemplate;
+
+static const FloatTemplate float_templates[] = {
+  {"<% i = 0; while (i < 4) { %><%= i * 0.5 %>;<% i += 1; } %>", TPL_BOX_EXIT, 14},
+  {"<% i = 0; while (i < 4) { %><%= \"v=\" + i * 0.5 %>;<% i += 1; } %>", TPL_BOX_EXIT, 22},
+  {"<% label = \"v=\"; i = 0; while (i < 4) { %><%= label + i * 0.5 %>;<% i += 1; } %>", TPL_COUNTED, 22},
+};
+
+static uint64_t steady_template_float(int idx, int jit_on, uint64_t iterations, double * elapsed) {
+  const FloatTemplate * f = &float_templates[idx];
+  const uint64_t warm = 400u;
+  const uint64_t timed = 2000u;
+  const uint64_t calls = 1u + warm + timed;
+  char source[512];
+  steady_template_script(source, sizeof(source), warm, timed);
+  const int jit_mode = jit_on ? 2 : 0;
+  steady_tpl = compile_source(f->source, GLTANG_PARSE_TEMPLATE);
+  want_template(jit_mode, f->policy, calls);
+  have_expected_integer = 1;
+  expected_integer = f->length * (int64_t)calls;
+  uint64_t sink = steady_run_x(source, GLTANG_KIND_INTEGER, 1, jit_mode, 4, 2, (double)timed, iterations, elapsed);
+  have_expected_integer = 0;
+  want_none();
+  gltang_program_release(steady_tpl);
+  steady_tpl = NULL;
+  return sink;
+}
+
+static uint64_t steady_tfloat_print_i(uint64_t it, double * el) { return steady_template_float(0, 0, it, el); }
+static uint64_t steady_tfloat_print_c(uint64_t it, double * el) { return steady_template_float(0, 1, it, el); }
+static uint64_t steady_tfloat_const_i(uint64_t it, double * el) { return steady_template_float(1, 0, it, el); }
+static uint64_t steady_tfloat_const_c(uint64_t it, double * el) { return steady_template_float(1, 1, it, el); }
+static uint64_t steady_tfloat_label_i(uint64_t it, double * el) { return steady_template_float(2, 0, it, el); }
+static uint64_t steady_tfloat_label_c(uint64_t it, double * el) { return steady_template_float(2, 1, it, el); }
 
 /* ---- Floats and division (spec-runtime-float story 8, CAP-6) ----------------------------
  *
@@ -2341,6 +2594,14 @@ static const Case cases[] = {
     {"steady-template-compiled-first-call", steady_template_compiled_first, 1000u, 2u},
     {"steady-template-interpreted-warm-call", steady_template_interpreted_warm, 50u, 2u},
     {"steady-template-compiled-warm-call", steady_template_compiled_warm, 50u, 2u},
+    {"steady-template-rows-interpreted-per-row", steady_template_rows_interpreted, 20u, 2u},
+    {"steady-template-rows-compiled-per-row", steady_template_rows_compiled, 20u, 2u},
+    {"steady-template-float-print-interpreted-warm-call", steady_tfloat_print_i, 20u, 2u},
+    {"steady-template-float-print-compiled-warm-call", steady_tfloat_print_c, 20u, 2u},
+    {"steady-template-float-constant-label-interpreted-warm-call", steady_tfloat_const_i, 20u, 2u},
+    {"steady-template-float-constant-label-compiled-warm-call", steady_tfloat_const_c, 20u, 2u},
+    {"steady-template-float-label-interpreted-warm-call", steady_tfloat_label_i, 20u, 2u},
+    {"steady-template-float-label-compiled-warm-call", steady_tfloat_label_c, 20u, 2u},
     PROGRAM_ROWS("jit-float-loop-ret", "steady-float-loop-ret", p_loop_ret, 3u, 20u, 2u, 8u)
     PROGRAM_ROWS("jit-float-loop-cast", "steady-float-loop-cast", p_loop_cast, 3u, 20u, 2u, 8u)
     PROGRAM_ROWS("jit-float-merge-int0", "steady-float-merge-int0", p_merge_int0, 3u, 3u, 2u, 2u)
@@ -2456,6 +2717,14 @@ int main(int argc, char ** argv) {
           (unsigned long long)last_jit_stats.functions_compiled, (unsigned long long)last_jit_stats.compile_failures,
           (unsigned long long)last_jit_stats.entries, (unsigned long long)last_jit_stats.deopts, (unsigned long long)last_jit_stats.deepest_chain);
     }
+    if (strncmp(cases[c].name, "steady-template-", 16) == 0) {
+      /* What the template policy asserts (want_template), printed for the record and for a build that
+       * runs unchecked (BENCH_UNCHECKED, the "before" of an A/B). */
+      printf("  %s: returns %llu, exits_expected %llu, exits_counted %llu, functions_discarded %llu, native calls %llu, member loads %llu\n",
+          cases[c].name, (unsigned long long)last_jit_stats.returns, EXITSTAT(exits_expected), EXITSTAT(exits_counted),
+          (unsigned long long)last_jit_stats.functions_discarded, (unsigned long long)last_jit_stats.native_calls,
+          (unsigned long long)last_jit_stats.member_loads);
+    }
     if (strncmp(cases[c].name, "jit-float-", 10) == 0 || strncmp(cases[c].name, "jit-intdiv-", 11) == 0
         || strncmp(cases[c].name, "steady-float-", 13) == 0 || strncmp(cases[c].name, "float-", 6) == 0) {
       printf("  %s: entries %llu, deopts %llu, values_boxed %llu, box_pool_made %llu, functions_compiled %llu, functions_discarded %llu, compile_failures %llu, "
@@ -2482,7 +2751,7 @@ int main(int argc, char ** argv) {
 #ifndef GLTANG_WITH_JIT
   /* Named, not left out: the cases of the compiled float and division operations need the JIT. */
   printf("jit-float-*, jit-intdiv-*, steady-float-*, float-return-*, float-print-*, float-store-*, float-arg-*, float-entry-*, float-exit-*, float-request-*, "
-         "steady-fib-*, fib-*, jit-loop-*: skipped, this build has no JIT (JIT=no)\n");
+         "steady-fib-*, steady-template-*, fib-*, jit-loop-*: skipped, this build has no JIT (JIT=no)\n");
 #endif
   return 0;
 }
