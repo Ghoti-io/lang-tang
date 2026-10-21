@@ -1244,7 +1244,7 @@ TEST(JitTemplates, ANumberOperatorTheInterpreterRunsSlowAndCompiledCodeInlineLea
   EXPECT_EQ(compiled.stats.value_calls, 1u) << "the string constant, made in compiled code";
   std::set<std::string> kinds;
   size_t refused_polls = 0;
-  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+  for (uint64_t budget = sweep_floor(sc, measured.memory_peak / 2); budget <= measured.memory_peak + 64; budget += 8) {
     Scenario tight = sc;
     tight.memory_bytes = budget;
     Outcome plain, jit;
@@ -1286,7 +1286,7 @@ TEST(JitTemplates, AStandingOperationThatDidNotPollLeavesNoIdentityForALaterRefu
     EXPECT_GE(compiled.stats.value_calls, 2u) << source << ": the standing operation and the constant, compiled";
     std::set<std::string> kinds;
     size_t refused_polls = 0;
-    for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+    for (uint64_t budget = sweep_floor(sc, measured.memory_peak / 2); budget <= measured.memory_peak + 64; budget += 8) {
       Scenario tight = sc;
       tight.memory_bytes = budget;
       Outcome plain, jit;
@@ -1322,7 +1322,7 @@ TEST(JitTemplates, AScopeThatRunsOutInsideAStandingOperationLeavesNoStandForTheC
   ASSERT_TRUE(measured.finished);
   std::set<std::string> kinds;
   size_t scope_stops = 0;
-  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+  for (uint64_t budget = sweep_floor(sc, measured.memory_peak / 2); budget <= measured.memory_peak + 64; budget += 8) {
     Scenario tight = sc;
     tight.memory_bytes = budget;
     Outcome plain, jit;
@@ -1538,7 +1538,7 @@ TEST(JitTemplates, ALiteralWhoseAllocationTheMemoryBudgetRefusesFailsAsInterpret
   EXPECT_EQ(compiled.stats.value_calls, 40u * 6u);
   std::set<std::string> kinds;
   size_t refused_in_a_literal = 0;
-  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+  for (uint64_t budget = sweep_floor(sc, measured.memory_peak / 2); budget <= measured.memory_peak + 64; budget += 8) {
     Scenario tight = sc;
     tight.memory_bytes = budget;
     Outcome plain, jit;
@@ -1568,7 +1568,7 @@ TEST(JitTemplates, AMapLiteralWhoseKeyTheMemoryBudgetRefusesIsTheOutOfMemoryErro
   Outcome compiled = run(sc, 1);
   EXPECT_EQ(compiled.stats.deopts, 0u);
   size_t out_of_memory = 0, maps = 0;
-  for (uint64_t budget = measured.memory_peak / 2; budget <= measured.memory_peak + 64; budget += 8) {
+  for (uint64_t budget = sweep_floor(sc, measured.memory_peak / 2); budget <= measured.memory_peak + 64; budget += 8) {
     Scenario tight = sc;
     tight.memory_bytes = budget;
     Outcome plain, jit;
@@ -2107,7 +2107,7 @@ TEST(JitTemplates, AStringPrintedWhereItsTemporaryCannotBeHeldIsTheInterpretersA
   EXPECT_EQ(before_run, 0u) << "the temporaries are unallocated when the run starts";
   EXPECT_GT(after_run, 0u) << "and the first print of a string allocated them";
   EXPECT_EQ(compiled.stats.fast_prints, 2u) << "\"y\" and the second print of `s`; the first could not hold its temporary";
-  const uint64_t low = std::min(measured.memory_peak, compiled.memory_peak) / 2;
+  const uint64_t low = sweep_floor(sc, std::min(measured.memory_peak, compiled.memory_peak) / 2);
   const uint64_t high = std::max(measured.memory_peak, compiled.memory_peak) + 64;
   std::set<std::string> kinds;
   for (uint64_t budget = low; budget <= high; budget += 8) {

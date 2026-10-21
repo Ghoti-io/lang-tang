@@ -142,11 +142,12 @@ void gltang_sink_free(GLTANG_Sink * sink) {
   sink->segments = NULL;
 }
 
-static bool grow(GLTANG_Execution * exec, void ** pointer, size_t * capacity, size_t needed, size_t element) {
+/** Grows `*pointer` to hold `needed` elements, from `first` elements when it has none, doubling. */
+static bool grow_from(GLTANG_Execution * exec, void ** pointer, size_t * capacity, size_t needed, size_t element, size_t first) {
   if (needed <= *capacity) {
     return true;
   }
-  size_t grown = *capacity ? *capacity : 64u;
+  size_t grown = *capacity ? *capacity : first;
   while (grown < needed) {
     if (grown > SIZE_MAX / 2u) {
       return false;
@@ -164,6 +165,20 @@ static bool grow(GLTANG_Execution * exec, void ** pointer, size_t * capacity, si
   *capacity = grown;
   return true;
 }
+
+static bool grow(GLTANG_Execution * exec, void ** pointer, size_t * capacity, size_t needed, size_t element) {
+  return grow_from(exec, pointer, capacity, needed, element, 64u);
+}
+
+/**
+ * The segments an output starts with. Every template call has an output of its own, which its
+ * first print makes, and most calls end with a few segments (one per change of tag). Sixty-four
+ * (1 KiB) was more than the allocator's small-block cache serves, so every call's first print
+ * went to glibc's general allocator, whose cost depended on how the call's other blocks had been
+ * freed (story 4e: about 260 instructions a call compiled, against about 100 interpreted, for the
+ * same allocations); four (64 bytes) is served from that cache, and the array doubles as before.
+ */
+#define GLTANG_OUTPUT_FIRST_SEGMENTS 4u
 
 /** Paces the work of an append: a bytes-per-fuel charge and a poll per chunk. */
 static GLTANG_Status sink_pace(GLTANG_Sink * sink, size_t bytes) {
@@ -183,7 +198,7 @@ static bool output_add_segment(GLTANG_Execution * exec, GLTANG_OutBuf * out, GLT
     return true;
   }
   void * segments = out->segments;
-  if (!grow(exec, &segments, &out->segment_capacity, out->segment_count + 1u, sizeof(GLTANG_OutputSegment))) {
+  if (!grow_from(exec, &segments, &out->segment_capacity, out->segment_count + 1u, sizeof(GLTANG_OutputSegment), GLTANG_OUTPUT_FIRST_SEGMENTS)) {
     return false;
   }
   out->segments = segments;

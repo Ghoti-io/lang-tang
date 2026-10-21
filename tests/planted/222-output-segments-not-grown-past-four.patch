@@ -1,0 +1,20 @@
+# 222 an output's segments are never grown past the first four
+# defect: output_add_segment, whose array now starts at four segments (story 4e; it was 64), retags
+#   the fourth segment instead of growing the array, so a fifth change of tag renders the fourth's
+#   bytes with the fifth's tag
+# caught by: the texts and HTML strings that alternate, five segments, their rendered output
+#   (testJit_templates, JitTemplates.ATextAfterAnotherTag*)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -195,6 +195,10 @@
+ 
+ static bool output_add_segment(GLTANG_Execution * exec, GLTANG_OutBuf * out, GLTANG_String_Type type) {
+   if (out->segment_count && out->segments[out->segment_count - 1u].type == type) {
++    return true;
++  }
++  if (out->segment_count == GLTANG_OUTPUT_FIRST_SEGMENTS) {  /* planted: never past four */
++    out->segments[out->segment_count - 1u].type = type;
+     return true;
+   }
+   void * segments = out->segments;

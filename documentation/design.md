@@ -1914,6 +1914,7 @@ breaks nothing as not caught. Observed:
 | 219 integer-operator-call-not-synced | the interpreter's integer path of the binary operators (two inline integers its inline arm does not compute) calls without `SYNC` | the offset of a division's and a modulo's error against the disassembly (`testEngine`, `ErrorOrigin.AnOperatorOfTwoIntegersThatTheInterpreterCalls*`) | the error names an earlier place on the same line |
 | 220 natives-never-made | the table of natives, made at the first compile since story 4e, is marked tried and never made | the loop of library calls in a compiled function (`testNative_calls`) | every library call is an exit |
 | 221 entry-arrays-sized-for-the-largest-frame | every entry from the interpreter takes the call with arrays for the largest frame (16 KiB) | the tiny native stack's 16 KiB row (`testJit_calls`, `JitCalls.ATinyNativeStack*`) | no small function is entered there |
+| 222 output-segments-not-grown-past-four | an output's segment array, which starts at four, retags its fourth segment instead of growing | the texts and HTML strings that alternate (`JitTemplates.ATextAfterAnotherTag*`): the rendered output | the fourth segment's bytes rendered with the fifth's tag |
 | 223 site-word-halves-swapped | the one 64-bit store of a compiled operation's position puts the offset in the function's word | the template tests (`testJit_templates`): errors, polls and identities against the interpreter's | the tiers name different places |
 | 224 execution-passed-to-library-calls | the execution is passed first to every native, the library calls' too | the natives of every arity (`testNative_calls`) | a fifteen-argument call is past runtime-jit's limit, and every library call misreads its callee |
 
@@ -1923,14 +1924,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 218 are story 4d's fast paths: 205, 214 and 215 in the JIT's helpers, 217 in the emitter and the rest in the vm's fast functions, which are compiled into a JIT=no build too but called only by compiled code, so only the JIT arm runs their tests. 219 to 224 are story 4e's: 219 in the interpreter's integer path of the binary operators (both builds run it), 220 in the table of natives the first compile makes, 221 in the entry, 223 and 224 in the emitter; 176 was rewritten there for the one test of both operands of `+`'s slow path, its defect unchanged.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 218 are story 4d's fast paths: 205, 214 and 215 in the JIT's helpers, 217 in the emitter and the rest in the vm's fast functions, which are compiled into a JIT=no build too but called only by compiled code, so only the JIT arm runs their tests. 219 to 224 are story 4e's: 219 in the interpreter's integer path of the binary operators (both builds run it), 220 in the table of natives the first compile makes, 221 in the entry, 222 in the output both tiers share (seen by a test of the JIT arm), 223 and 224 in the emitter; 176 was rewritten there for the one test of both operands of `+`'s slow path, its defect unchanged.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177, 179 to 221, 223 and 224 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 224 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the two hundred and eleven that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the two hundred and twelve that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2906,7 +2907,13 @@ touched (Valgrind's lackey, between two calls) named them:
   parameter count); the entry takes no reference of its own, since the registry's and the slot's are
   retired, not released, while its JIT record is open; and after a first call through
   `grjit_code_call`, which refuses code built against another layout of the context, the entry point is
-  called directly (`grjit_code_entry`, the same convention).
+  called directly (`grjit_code_entry`, the same convention). Simulated data-TLB misses of the warm row
+  fell from 52,261 to 6,756 (interpreted: 4,074).
+- *The first print of every call went to glibc's general allocator.* An output's segment array started
+  at 64 entries (1 KiB), more than the allocator's per-thread cache serves, so each call's first print
+  took `_int_malloc`, whose cost depended on how the call's other blocks had been freed (about 260
+  instructions a call compiled against 100 interpreted). It starts at four (64 bytes) and doubles as
+  before; both tiers gain (the interpreted warm call by about 190 instructions, the compiled by 385).
 - *Compiled code is large.* runtime-jit's x86-64 back end keeps every virtual register in a stack slot
   and reloads the instance pointer for each use, so an IR operation is about 38 bytes of machine code:
   the per-row template's function 0 is 11.6 KB, of which a call executes some 900 instructions spread
@@ -2921,6 +2928,35 @@ What still makes a warm call of a three-text template dearer compiled than inter
 activation record runtime-core opens and leaves around it (`grcore_activation_enter`, `drop_top`,
 `leave`, `grcore_stack_owned`, `grcore_registry_release_retired`: about 245 instructions a call), which
 AD-17 and AD-21 require and which is runtime-core's to make cheaper.
+
+Measured (callgrind, `--toggle-collect=<case function>`, `bench --smoke --only <row>`, built with GCC
+16.2.0 in `ghoti-build:gcc16` against dependencies built by the host's GCC 14.2; `aafa9c3` and `bb0d434`
+built with the bench of story 4e's last commit and `BENCH_UNCHECKED`; instructions, whole case):
+
+| row | `aafa9c3` | `bb0d434` | story 4e |
+|---|---|---|---|
+| run-loop-1000 | 5,520,811 | +3.76% | -0.23% |
+| run-fib-15 | 6,556,024 | +6.48% | +3.90% |
+| run-string-build-200 | 2,118,444 | +2.85% | -1.22% |
+| run-array-build-1000 | 6,163,984 | +0.45% | -0.36% |
+| run-use-member-200 | 2,745,944 | +3.10% | -0.53% |
+| run-native-call-1000 | 7,205,700 | +0.21% | -0.51% |
+| run-template-call-200 | 8,659,416 | +10.56% | +7.21% |
+| host-print-2000-no-sink | 7,739,972 | +0.99% | +0.28% |
+| host-print-2000-with-sink | 8,420,092 | +1.03% | +0.38% |
+| workaround-list-20-precompiled | 774,292 | +14.49% | -18.83% |
+| steady-template-interpreted-warm-call | 34,494,962 | +0.34% | -2.35% |
+| steady-template-compiled-warm-call | 35,673,575 | +2.02% | -3.54% |
+| steady-template-rows-interpreted-per-row | 124,777,507 | -0.14% | -1.38% |
+| steady-template-rows-compiled-per-row | 125,386,642 | -1.31% | -4.42% |
+
+What is still above `aafa9c3`: `run-fib-15`, the compile of `+`'s slow path in `fib` (a native call
+with its two frame states and a join), which is what compiling a concatenation costs; and
+`run-template-call-200`, whose template is compiled in every execution of the row, where at
+`aafa9c3` its compile stopped at the first print (the 200 calls themselves are about 4% cheaper than at
+`aafa9c3`). The host-print rows' 0.3% is the interpreter's stand at a print (story 4b). A compiled
+warm call is now 151 instructions above an interpreted one (7,166 against 7,015 a call), less than
+the JIT record runtime-core opens around it; per row compiled is 668 below interpreted.
 
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,

@@ -206,6 +206,32 @@ inline bool context_can_be_made(const Scenario & sc, long threshold) {
   return context.ok();
 }
 
+/**
+ * The lowest budget, from `low` up in steps of 8, at which both tiers can make their context and
+ * name the run (what run() does before it runs): the
+ * floor of a sweep over memory budgets that starts at a fraction of the run's peak. A run's peak
+ * is not a fixed multiple of what the context alone needs (story 4e made a template call's first
+ * output smaller, and half of some runs' peaks fell below the context's own allocations).
+ */
+inline bool run_can_start(const Scenario & sc, long threshold) {
+  Compiled page(sc.source, sc.mode, "jit.tang");
+  if (!page.ok()) {
+    return false;
+  }
+  Context context(page.program, config_of(sc, threshold));
+  return context.ok() && gltang_execution_set_name(context.execution, "page") == GLTANG_OK;
+}
+
+inline uint64_t sweep_floor(const Scenario & sc, uint64_t low) {
+  for (uint64_t budget = low;; budget += 8) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    if (run_can_start(tight, 0) && run_can_start(tight, 1)) {
+      return budget;
+    }
+  }
+}
+
 inline Outcome run(const Scenario & sc, long threshold) {
   Outcome out;
   Compiled page(sc.source, sc.mode, "jit.tang");
