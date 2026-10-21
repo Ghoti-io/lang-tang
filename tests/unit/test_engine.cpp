@@ -845,6 +845,44 @@ TEST(ErrorOrigin, AnErrorMadeInsideAFunctionNamesThatFunction) {
   EXPECT_STREQ(gltang_program_function_name(compiled.program, origin.function), "bad");
 }
 
+TEST(ErrorOrigin, AnOperatorOfTwoIntegersThatTheInterpreterCallsRecordsItsOwnOffset) {
+  // `/` and `%` of two inline integers are not computed by the interpreter's inline arm: they are
+  // the call of gltang_vm_op_binary on its integer path (story 4e of spec-template-compiled), and the
+  // error the call makes records the position SYNC gave it. The line alone cannot tell the operator
+  // from the statement's poll before it (both are on line 2), so the offset is compared with the
+  // disassembly's: it must name the operator itself.
+  struct Case { const char * source; const char * op; GLTANG_ErrorKind kind; };
+  const Case cases[] = {
+      {"a = 6;\nb = a + 1; c = b / 0;\n", "DIV", GLTANG_ERROR_DIVIDE_BY_ZERO},
+      {"a = 6;\nb = a + 1; c = b % 0;\n", "MOD", GLTANG_ERROR_MODULO_BY_ZERO},
+  };
+  for (const Case & c : cases) {
+    Compiled compiled(c.source, Mode::Script, "ops.tang");
+    FILE * file = temp_file();
+    ASSERT_NE(file, nullptr);
+    gltang_program_dump(compiled.program, file);
+    rewind(file);
+    long op_offset = -1;
+    char line[512];
+    while (fgets(line, sizeof line, file)) {
+      unsigned pc = 0, src = 0;
+      char name[64];
+      if (sscanf(line, " %u line %u %63s", &pc, &src, name) == 3 && std::string(name) == c.op) {
+        op_offset = (long)pc;
+      }
+    }
+    fclose(file);
+    ASSERT_GE(op_offset, 0) << c.source;
+    Context context(compiled.program);
+    ASSERT_TRUE(context.execute());
+    ASSERT_TRUE(context.is_error()) << c.source;
+    GLTANG_ErrorOrigin origin = context.error_origin();
+    EXPECT_EQ(context.error_kind(), c.kind) << c.source;
+    EXPECT_EQ(origin.line, 2) << c.source;
+    EXPECT_EQ(origin.offset, (uint64_t)op_offset) << c.source << ": the error names the operator, not an earlier place";
+  }
+}
+
 TEST(ErrorOrigin, AResultThatIsNotAnErrorHasNoOriginAndWritesNothing) {
   tt::Run run("1 + 1;");
   GLTANG_ErrorKind kind = GLTANG_ERROR_KIND_COUNT;

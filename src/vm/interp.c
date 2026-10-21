@@ -99,6 +99,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   size_t sp;
   uint32_t halt_at;         // the HALT whose body runs (halt_frame), interpreted or after a compiled return
   GLTANG_Value halt_text;   // a template call's value, made by that body
+  GLTANG_Value binary_r;    // a binary operator's result, from its call (one of three paths)
 
   if (grcore_stack_frame_count(stack) == 0) {
     if (exec->state != GLTANG_EXECUTION_NEW) {
@@ -422,26 +423,35 @@ resume_loop:
             S[sp - 2u] = gltang_v_from_small_int(r);
             goto binary_fast_done;
           }
+          // Two inline integers the switch above does not compute (`*`, `/`, `%`, a result
+          // outside the inline range): numbers, which stand nowhere (below), so the call is
+          // made without the test.
+          SYNC();
+          binary_r = gltang_vm_op_binary(exec, op, x, y);
+          goto binary_called;
         }
         SYNC();
         // A long concatenation or repetition polls inside (its pacing), and so may a host-defined
         // type's operation: the frame there stands at the operation, the state and identity
         // compiled code's call of `+` carries, and that a guard exit before any of them leaves
         // in the rebuilt frame. Two numbers are computed inline by compiled code, which stands
-        // nowhere, so neither does the interpreter (gltang_vm_binary_may_pace).
+        // nowhere, so neither does the interpreter (gltang_vm_binary_may_pace). The stand and its
+        // end are on their own path, so an operator of two numbers stores neither.
         if (gltang_vm_binary_may_pace(x, y)) {
           SAVE_AT_OP();
           STAND_AT_OP();
-        }
-        {
-          GLTANG_Value r = gltang_vm_op_binary(exec, op, x, y);
+          binary_r = gltang_vm_op_binary(exec, op, x, y);
           STOOD();
-          if (r == GLTANG_V_UNWIND) {
-            goto unwound;
-          }
-          RELOAD();
-          S[sp - 2u] = r;
         }
+        else {
+          binary_r = gltang_vm_op_binary(exec, op, x, y);
+        }
+      binary_called:
+        if (binary_r == GLTANG_V_UNWIND) {
+          goto unwound;
+        }
+        RELOAD();
+        S[sp - 2u] = binary_r;
       binary_fast_done:
         S[--sp] = 0;
         break;

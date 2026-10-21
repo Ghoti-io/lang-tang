@@ -61,6 +61,14 @@ void gltang_jit_note_operand_guard(GLTANG_Execution * exec) {
   exec->jit->refusal = GLTANG_REFUSAL_OPERAND_GUARD;
 }
 
+uint64_t gltang_jit_operands_custom(GLTANG_Execution * exec, uint64_t a, uint64_t b) {
+  if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
+    exec->jit->refusal = GLTANG_REFUSAL_OPERAND_GUARD;
+    return 1;
+  }
+  return 0;
+}
+
 void gltang_jit_clear_result(GLTANG_Execution * exec) {
   ++exec->jit_stats.result_clears;
   gltang_vm_set_result(exec, GLTANG_V_NULL, false);

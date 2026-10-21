@@ -1,0 +1,18 @@
+# 220 the table of natives is never made
+# defect: gltang_jit_natives, which makes the table at the first compile (story 4e; it was made when
+#   the JIT was attached), marks it tried and makes nothing, so no library call, member load, output
+#   or value operation is compiled as a call: each stays an exit
+# caught by: the loop of library calls in a compiled function, which asserts no exit
+#   (testNative_calls, NativeCalls.ALoopOfLibraryCallsInACompiledFunctionMakesNoExit)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -154,7 +154,7 @@
+     jit->natives_tried = true;
+     // Optional: without the table no library call or member load is compiled (they stay
+     // exits, and the statistic says so).
+-    if (gltang_jit_natives_create(exec, &jit->natives) != GRJIT_OK) {
++    if (jit->natives_tried /* planted: never made */ || gltang_jit_natives_create(exec, &jit->natives) != GRJIT_OK) {
+       jit->natives = NULL;
+     }
+   }

@@ -303,6 +303,10 @@ static inline GLTANG_Value gltang_value_of(const void * object) {
 static inline bool gltang_v_is_kind(GLTANG_Value v, GLTANG_ObjectKind kind) {
   return gltang_v_is_object(v) && gltang_object_kind(v) == (uint32_t)kind;
 }
+/** @brief Whether `v` is a number (an inline or boxed integer, or a float): gltang_vm_is_number, inline. */
+static inline bool gltang_v_is_number(GLTANG_Value v) {
+  return gltang_v_is_small_int(v) || gltang_v_is_kind(v, GLTANG_OBJ_INTEGER) || gltang_v_is_kind(v, GLTANG_OBJ_FLOAT);
+}
 static inline uint32_t * gltang_map_index(const GLTANG_MapStore * store) {
   return (uint32_t *)(void *)((char *)store + sizeof(GLTANG_MapStore) + (size_t)store->capacity * 2u * sizeof(GLTANG_Value));
 }
@@ -713,7 +717,7 @@ bool gltang_vm_is_number(GLTANG_Value v);
  *   same on both tiers. The one predicate for both, so they cannot drift.
  */
 static inline bool gltang_vm_binary_may_pace(GLTANG_Value a, GLTANG_Value b) {
-  return !gltang_vm_is_number(a) || !gltang_vm_is_number(b);
+  return !gltang_v_is_number(a) || !gltang_v_is_number(b);
 }
 bool gltang_vm_is_container(GLTANG_Value v);
 int64_t gltang_vm_int(GLTANG_Value v);

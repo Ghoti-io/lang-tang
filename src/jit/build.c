@@ -1728,6 +1728,28 @@ static void guard_not_custom(Ctx * c, uint32_t i, uint32_t d, uint32_t pos) {
   set_block(c, go_on);
 }
 
+/**
+ * The same test of both operands of `+`'s slow path (`d - 2` and `d - 1`), as one call of a
+ * no-GC leaf (gltang_jit_operands_custom, which notes the refusal) and one exit. The slow path
+ * already calls the interpreter's `+`, so the leaf costs little there, and it keeps every
+ * function that adds out of the four blocks and two exits (each with its frame state) the two
+ * inline tests made, which every compile of such a function paid for, used or not.
+ */
+static void guard_neither_custom(Ctx * c, uint32_t i, uint32_t d) {
+  GRJIT_BlockId custom, go_on;
+  GRJIT_Operand args[3] = {I((int64_t)(intptr_t)c->exec), V(c->stack[d - 2u]), V(c->stack[d - 1u])};
+  flush_cost(c);
+  B(grjit_builder_call(c->b, c->tmp[TMP_R], (uint64_t)(uintptr_t)gltang_jit_operands_custom, GRJIT_CALL_NO_GC,
+      GRCORE_SITE_GC_POINT_CALL, args, 3, (GRCORE_PollIdentity){0, 0, 0}, NULL, 0));
+  new_block(c, &custom);
+  new_block(c, &go_on);
+  B(grjit_builder_br_if(c->b, V(c->tmp[TMP_R]), custom, go_on));
+  c->open = false;
+  set_block(c, custom);
+  emit_exit(c, i, d);
+  set_block(c, go_on);
+}
+
 /** A string `CONST k`: the execution's cached string, made on first use (the call records the position only then, as the interpreter's SYNC is only then). */
 static void emit_string_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   set_stack_kind(c, d, KIND_REF);  // the value lands in position d, whatever was left there
@@ -1803,8 +1825,7 @@ static void end_add_slow_path(Ctx * c, uint32_t i, uint32_t d, GRJIT_BlockId slo
   new_block(c, &join);
   branch_to(c, join);  // the small-integer path, with its fuel
   set_block(c, slow);
-  guard_not_custom(c, i, d, d - 2u);
-  guard_not_custom(c, i, d, d - 1u);
+  guard_neither_custom(c, i, d);
   GRJIT_Operand args[2] = {V(c->stack[d - 2u]), V(c->stack[d - 1u])};
   emit_native(c, i, d, GLTANG_JIT_NATIVE_ADD, args, 2, c->stack[d - 2u], d - 1u);
   branch_to(c, join);
@@ -2591,7 +2612,7 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
   // Library calls and member loads are compiled when the execution has the table
   // of natives and the backend calls them; otherwise they stay exits, and the
   // statistic counts the sites that would have been compiled.
-  c->natives_on = exec->jit && exec->jit->natives && !exec->jit->test_natives_off && grjit_backend_calls_available();
+  c->natives_on = exec->jit && !exec->jit->test_natives_off && grjit_backend_calls_available() && gltang_jit_natives(exec);
   if (!inline_op(c, GLTANG_INSTRUCTION_OP(fn->code[1]), GLTANG_INSTRUCTION_A(fn->code[1]))) {
     *out = NULL;
     result = GLTANG_OK;

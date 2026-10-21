@@ -1,0 +1,18 @@
+# 219 the interpreter calls an operator of two integers without recording its position
+# defect: the integer path of the interpreter's binary operators (`/`, `%`, `*` and a result outside
+#   the inline range, called without the stand test) does not SYNC, so the error a division by zero
+#   makes names whatever place was recorded before it, on the same line
+# caught by: the offset of a division's and a modulo's error, compared with the disassembly
+#   (testEngine, ErrorOrigin.AnOperatorOfTwoIntegersThatTheInterpreterCalls*)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -426,7 +426,7 @@
+           // Two inline integers the switch above does not compute (`*`, `/`, `%`, a result
+           // outside the inline range): numbers, which stand nowhere (below), so the call is
+           // made without the test.
+-          SYNC();
++          /* planted: no SYNC */
+           binary_r = gltang_vm_op_binary(exec, op, x, y);
+           goto binary_called;
+         }

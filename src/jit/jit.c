@@ -142,14 +142,23 @@ void gltang_jit_attach(GLTANG_Execution * exec) {
     gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), jit);
     return;
   }
-  // The natives compiled code calls. Optional: without the table no library call
-  // or member load is compiled (they stay exits, and the statistic says so).
-  if (gltang_jit_natives_create(exec, &jit->natives) != GRJIT_OK) {
-    jit->natives = NULL;
-  }
+  // The natives compiled code calls are made at the first compile (gltang_jit_natives).
   exec->jit = jit;
   exec->jit_threshold = GLTANG_JIT_DEFAULT_THRESHOLD;
   exec->jit_settled_fword = UINT64_MAX;
+}
+
+GRJIT_NativeTable * gltang_jit_natives(GLTANG_Execution * exec) {
+  GLTANG_Jit * jit = exec->jit;
+  if (!jit->natives_tried) {
+    jit->natives_tried = true;
+    // Optional: without the table no library call or member load is compiled (they stay
+    // exits, and the statistic says so).
+    if (gltang_jit_natives_create(exec, &jit->natives) != GRJIT_OK) {
+      jit->natives = NULL;
+    }
+  }
+  return jit->natives;
 }
 
 /**

@@ -202,7 +202,8 @@ typedef struct GLTANG_Jit {
   GRCORE_Stack * stack;          ///< The guest stack of `stack_context`, found once by the hooks (a context's stack is made when the engine registers and never replaced): the push and pop of every compiled call would otherwise look it up through the context's keyed slots.
   void * stack_context;          ///< The context `stack` was found for.
   GRCORE_Port * port;            ///< Posts it; taken at the first post.
-  GRJIT_NativeTable * natives;   ///< The thunks of the library calls and loads; NULL if it could not be made (then no site is compiled as one).
+  GRJIT_NativeTable * natives;   ///< The thunks of the library calls and loads, made at the first compile (gltang_jit_natives); NULL before, or if it could not be made (then no site is compiled as one).
+  bool natives_tried;            ///< Whether gltang_jit_natives has tried to make `natives` (it tries once).
   GRCORE_DeoptReservation * reservation;  ///< Made once, empty; extended by each entry and compiled call by the callee's `max_converting` (AD-27).
   GLTANG_Value * pool;           ///< Float boxes made ahead of time, for `convert` to hand out: precise roots of the execution. The first `pool_count` are boxes not yet handed out.
   size_t pool_count;
@@ -321,6 +322,8 @@ void gltang_jit_note_callee_guard(GLTANG_Execution * exec);
 void gltang_jit_note_native_guard(GLTANG_Execution * exec);
 /** @brief The same for the guard of a value operation that its operand is not a host-defined value. No GC point. */
 void gltang_jit_note_operand_guard(GLTANG_Execution * exec);
+/** @brief Whether `a` or `b` is a host-defined value (1, the refusal noted as gltang_jit_note_operand_guard does) or neither (0): the test before `+`'s slow path. A leaf: no GC point. */
+uint64_t gltang_jit_operands_custom(GLTANG_Execution * exec, uint64_t a, uint64_t b);
 /**
  * @brief `CLEAR_RESULT` from compiled code: the interpreter's own
  *   `gltang_vm_set_result(exec, null, false)`. It neither allocates in the heap nor polls,
@@ -387,6 +390,13 @@ uint64_t gltang_jit_callee_is_native(uint64_t callee, uint64_t member);
  * @return ::GRJIT_OK or the table's error; on an error nothing is left.
  */
 GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTable ** out);
+/**
+ * @brief The execution's table of natives, made by the first call (the first compile), not when
+ *   the JIT is attached: an execution that compiles nothing (most of a short script's, or of a
+ *   template run once by its host) does not pay for thirty-odd registrations. NULL if it could not
+ *   be made; it is tried once.
+ */
+GRJIT_NativeTable * gltang_jit_natives(GLTANG_Execution * exec);
 /**
  * @brief The poll slow path of compiled code, the one GC point of a function
  *   that makes no call. Returns 0 to continue, 1 after a pause verdict, 2 after an

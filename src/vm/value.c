@@ -191,7 +191,7 @@ bool gltang_vm_is_error(GLTANG_Value v) {
 }
 
 bool gltang_vm_is_number(GLTANG_Value v) {
-  return gltang_v_is_small_int(v) || gltang_v_is_kind(v, GLTANG_OBJ_INTEGER) || gltang_v_is_kind(v, GLTANG_OBJ_FLOAT);
+  return gltang_v_is_number(v);
 }
 
 bool gltang_vm_is_container(GLTANG_Value v) {

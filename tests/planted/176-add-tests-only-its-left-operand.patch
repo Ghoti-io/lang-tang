@@ -1,17 +1,19 @@
 # 176 the slow path of a compiled `+` tests only its left operand for a host-defined value
-# defect: `end_add_slow_path` tests the left operand and not the right, so `"x" + m` with m a
-#   host-defined value is given to the helper instead of leaving before the operation
+# defect: gltang_jit_operands_custom (the one test of both operands before `+`'s slow path, story 4e)
+#   tests the left operand and not the right, so `"x" + m` with m a host-defined value is given to the
+#   helper instead of leaving before the operation
 # caught by: the host-defined operand of each value operation, its "right of +" row: exact counted
 #   exits and helper calls (testJit_templates, JitTemplates.AHostDefinedOperand*)
 #
---- a/src/jit/build.c
-+++ b/src/jit/build.c
-@@ -1621,7 +1621,7 @@
-   branch_to(c, join);  // the small-integer path, with its fuel
-   set_block(c, slow);
-   guard_not_custom(c, i, d, d - 2u);
--  guard_not_custom(c, i, d, d - 1u);
-+  /* planted: the right operand is not tested */
-   GRJIT_Operand args[2] = {V(c->stack[d - 2u]), V(c->stack[d - 1u])};
-   emit_native(c, i, d, GLTANG_JIT_NATIVE_ADD, args, 2, c->stack[d - 2u], d - 1u);
-   branch_to(c, join);
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -62,7 +62,8 @@
+ }
+ 
+ uint64_t gltang_jit_operands_custom(GLTANG_Execution * exec, uint64_t a, uint64_t b) {
+-  if (gltang_v_is_custom(a) || gltang_v_is_custom(b)) {
++  (void)b;
++  if (gltang_v_is_custom(a) /* planted: the right operand is not tested */) {
+     exec->jit->refusal = GLTANG_REFUSAL_OPERAND_GUARD;
+     return 1;
+   }
