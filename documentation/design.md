@@ -2958,6 +2958,24 @@ with its two frame states and a join), which is what compiling a concatenation c
 warm call is now 151 instructions above an interpreted one (7,166 against 7,015 a call), less than
 the JIT record runtime-core opens around it; per row compiled is 668 below interpreted.
 
+Timed (best of six alternating runs on the Pi 4, of ten on the EVO-X2, which was busy and whose times
+are noisy; ns a unit; the records are `notes/lang-tang/perf/2026-10-21-template-4e/` in the workspace):
+
+| row | Pi `bb0d434` | Pi `0fe87ff` | EVO-X2 `bb0d434` | EVO-X2 `0fe87ff` |
+|---|---|---|---|---|
+| warm template call, interpreted | 3,168 | 2,954 | 406.2 | 388.9 |
+| warm template call, compiled | 3,794 | 3,268 | 456.8 | 403.4 |
+| template per row, interpreted | 12,884 | 12,094 | 1,512.8 | 1,505.6 |
+| template per row, compiled | 14,462 | 13,486 | 1,545.6 | 1,514.8 |
+
+Compiled is still slower than interpreted per unit: on the Pi by 10.6% (warm call) and 11.5% (per row),
+with fewer instructions, from runtime-jit's code size (1.7 to 1.9 times the interpreter's L1 instruction
+refills) and runtime-core's JIT record; on the EVO-X2, whose larger caches and TLBs hide most of it, by
+3.7% and 0.6%. On the Pi, `run-loop-1000` is also 6.6% slower than at `aafa9c3` with 0.6% fewer
+instructions: its branch mispredictions move by a factor of five between commits that do not touch its
+path and by three between runs of one binary (from 6 to 172 million), which is the layout of
+`gltang_vm_run`'s branches under GCC 16 for arm64, not a change's logic, and is not addressed here.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
