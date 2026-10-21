@@ -171,7 +171,7 @@ TEST(FuzzDiff, CallGraphsAgreeWithCtangPlainAndWithEveryFunctionCompiledAtItsFir
   std::string dir = work_dir(runner);
   size_t agreed = 0, killed = 0, shown = 0, paused = 0;
   uint64_t compiled_calls = 0;
-  // FUZZ_DIFF_CALL_GRAPHS=N runs N programs from FUZZ_DIFF_SEED (the campaign on the EVO).
+  // FUZZ_DIFF_CALL_GRAPHS=N runs N programs from FUZZ_DIFF_SEED (the campaign on the x86-64 build box).
   const char * count_text = std::getenv("FUZZ_DIFF_CALL_GRAPHS");
   const char * seed_text = std::getenv("FUZZ_DIFF_SEED");
   const uint64_t kCount = count_text && *count_text ? std::strtoull(count_text, nullptr, 10) : 300;

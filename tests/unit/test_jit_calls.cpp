@@ -1053,7 +1053,7 @@ TEST(JitCalls, PausesInOneHotFunctionNeverDiscardItWhileGuardExitsStillDoAtTheEi
 }
 
 /// GLTANG_LONG_RUN_FUNCTIONS=N: how many functions the thrashing program has
-/// (1,000 on the EVO; a small number in `make test`).
+/// (1,000 on the x86-64 build box; a small number in `make test`).
 int thrash_functions() {
   const char * v = std::getenv("GLTANG_LONG_RUN_FUNCTIONS");
   int n = v && *v ? std::atoi(v) : 0;
@@ -1096,7 +1096,7 @@ TEST(JitCalls, ARetiredCodeListStaysWithinTheDiscardedFunctionsOfALongCompiledRu
   ASSERT_TRUE(jit.finished) << "the thrashing program runs to its end";
   EXPECT_EQ(plain.key(), jit.key());
   EXPECT_GE(jit.stats.functions_discarded, static_cast<uint64_t>(kFunctions) / 2);
-  // Measured 0 (on the EVO with 1,000 functions and here with 40): a discard is
+  // Measured 0 (on the x86-64 build box with 1,000 functions and here with 40): a discard is
   // applied after the entry's record is left, so core frees the retired code at
   // once. The bound is therefore zero, not the 2x the discards the claim allows; a
   // peak above zero would mean a discard made while a record was open, which this
@@ -1293,7 +1293,7 @@ TEST(JitCalls, TheEmittedMetadataHasNoDerivedPointerAndNoConvertingLocation) {
 TEST(JitCalls, GeneratedCallGraphsRunToTheSameVerdictWithEveryFunctionCompiledAtItsFirstPollAndTheFrameDifferentialShowsNoExitAtACompiledCall) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // GLTANG_CALL_GRAPH_SEEDS=N and GLTANG_CALL_GRAPH_FIRST=S run N programs from seed S
-  // (the soak on the EVO runs tens of thousands, under GC torture and a moving stack).
+  // (the soak on the x86-64 build box runs tens of thousands, under GC torture and a moving stack).
   const char * seeds_text = std::getenv("GLTANG_CALL_GRAPH_SEEDS");
   const char * first_text = std::getenv("GLTANG_CALL_GRAPH_FIRST");
   const uint64_t kSeeds = seeds_text && *seeds_text ? std::strtoull(seeds_text, nullptr, 10) : (tt::heavy_instruments() ? 60 : 300);
