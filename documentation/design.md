@@ -15,8 +15,10 @@ and restored, into another context on any thread, to finish as an uninterrupted
 run does), and the two services a developer asks of a running program: a
 sampling profiler and a retention query ("Profiling and retention"). What is
 still not here is listed at the end. The
-architecture it follows is the runtime stack's spine (AD-2, AD-3, AD-9, AD-13,
-AD-14, AD-16, AD-20, AD-21, AD-22, AD-23, AD-25, AD-26).
+architectural decisions it follows are cited by the numbers the runtime
+libraries share (AD-2, AD-3, AD-9, AD-13, AD-14, AD-16, AD-20, AD-21, AD-22,
+AD-23, AD-25, AD-26), and the text around each citation states the rule it
+applies.
 
 ## What this library is
 
@@ -98,7 +100,7 @@ The names changed by one rule: `GTA_` became `GLTANG_`, `gta_` became `gltang_`,
   ctang's JIT) is gone. Only 64-bit targets are supported; ctang's 32-bit
   branch never defined the vector type its nodes use, so it could not have
   built.
-- **Exported data** is declared with `GLTANG_API_DATA` (CONVENTIONS section 4),
+- **Exported data** is declared with `GLTANG_API_DATA`,
   not `GLTANG_API`: ctang's spelling made every AST header fail to compile as
   C++ under `extern "C"`.
 - **`GLTANG_NO_DISCARD`** is the GNU attribute in C and C++ alike, which is what
@@ -144,7 +146,7 @@ language reference, section 13.1). Here the result carries the distinction:
 | `GLTANG_ERR_OOM` | An allocation failed; nothing is left to free |
 | `GLTANG_ERR_INVALID` | A NULL source or tree, or a bad mode |
 
-An output parameter is written only on success, as CONVENTIONS section 5 says.
+An output parameter is written only on success, as everywhere in the suite.
 `error_out` is the one exception, deliberately: it is a diagnostic, written
 when and only when the result is `ERR_FORMAT`, and optional.
 
@@ -360,9 +362,9 @@ and that is all a budget needs. A debugger needs more: a breakpoint can only
 fire where the engine polls, so with those sites alone a breakpoint on a line in
 a straight run of statements never fires, and a step over a statement has
 nowhere to stop (runtime-debug's design.md states that as the contract an engine
-has to meet). **This was an extension of AD-4's list of poll sites, and the spine now
-ratifies it: AD-4 lists the statement boundary among its poll sites (commit
-`afc292d` of the workspace).** It is opt-in, so that nothing in the suite moves
+has to meet). **This was an extension of AD-4's list of poll sites (function entry, loop
+back-edges and throw points), and AD-4 now includes it: an engine may also poll
+at statement boundaries, so that a debugger can stop on a line.** It is opt-in, so that nothing in the suite moves
 unless a host asks.
 
 The `LINE` instruction is emitted at the start of every statement
@@ -723,7 +725,7 @@ description to fill), and a native function's answer
 again). The existing scalar `GLTANG_FactoryFn`, `GLTANG_HostValue` and
 `gltang_call_return_*` are unchanged.
 
-**The names.** The spine and the decision document call the object a
+**The names.** The runtime stack's design calls the object a
 *description* and a handle to a node in it a *ref*, so the types are
 `GLTANG_ValueDescription` and `GLTANG_ValueRef` and the functions
 `gltang_value_*` (decided with Corey, 2026-10-16). `GLTANG_HostValue` was taken
@@ -816,7 +818,7 @@ value (`use cfg.a.b`) materializes the whole member and reads the attributes of
 the copy, as a library member is read; the benchmark measures a path read so that
 a cost shows if it is one.
 
-**Measured** (`notes/lang-tang/perf-history.md`, "Story 2: host-described values, measured"). The 20-link list that took 95 us through 20 engines takes 17.8 us as one host array, building the description in the clock, and 15.5 us when it is built once. A description of 50,000 integers costs 0.47 ms to reach (a script-built array of the same size, 0.42 ms); a string element about 36 ns, an integer about 9 ns. A path read through a described value copies the whole member (10 us for a map holding 1,000 elements). On the existing cases the stop rule found one repair (the call object's cleanup cost each native call 91 instructions, +1.1%; out of line it is +0.64%) and five float-print micro-cases that are 12 to 15 ns slower at identical instruction counts, which is code placement and was not chased.
+**Measured.** The 20-link list that took 95 us through 20 engines takes 17.8 us as one host array, building the description in the clock, and 15.5 us when it is built once. A description of 50,000 integers costs 0.47 ms to reach (a script-built array of the same size, 0.42 ms); a string element about 36 ns, an integer about 9 ns. A path read through a described value copies the whole member (10 us for a map holding 1,000 elements). On the existing cases the stop rule found one repair (the call object's cleanup cost each native call 91 instructions, +1.1%; out of line it is +0.64%) and five float-print micro-cases that are 12 to 15 ns slower at identical instruction counts, which is code placement and was not chased.
 
 **Snapshots.** A copy is plain heap data (arrays, maps, strings, numbers), so a
 snapshot of an execution that holds one needs nothing of the description, and
@@ -914,12 +916,11 @@ them are zero for a call that never asks for a handle, and the cleanup of a call
 is still two loads and a branch for one that sets no answer by description or
 handle.
 
-**Measured** (`notes/lang-tang/perf-history.md`, "Story 3: handle scopes, measured"). A native that never asks for a handle costs +0.72% instructions over the story-0 engine (`run-native-call-1000`; +0.9% in the A/B wall clock, inside its spread). A call that reads its bound value through a handle costs 1.17 to 1.22 times a scalar call (about 1,260 more instructions: a frame, two handle operations, a close). Building 20 lists of 20 rows through the handle API costs 6.8 us a list, 2.6 times less than handing the same list over as a description, which is the tool for plain data the host already holds. One existing case, `workaround-list-20-precompiled`, is +1.10% in instructions on a path with no handle code (allocator slow-path calls; not attributed, recorded); the wall-clock flags against the story-0 table are session drift and the A/B shows none.
+**Measured.** A native that never asks for a handle costs +0.72% instructions over the story-0 engine (`run-native-call-1000`; +0.9% in the A/B wall clock, inside its spread). A call that reads its bound value through a handle costs 1.17 to 1.22 times a scalar call (about 1,260 more instructions: a frame, two handle operations, a close). Building 20 lists of 20 rows through the handle API costs 6.8 us a list, 2.6 times less than handing the same list over as a description, which is the tool for plain data the host already holds. One existing case, `workaround-list-20-precompiled`, is +1.10% in instructions on a path with no handle code (allocator slow-path calls; not attributed, recorded); the wall-clock flags against the story-0 table are session drift and the A/B shows none.
 
 ### The host context, the language layer, the output sink and the string helpers
 
-Four small pieces of the host API (`planning/tang-host-extensibility.md` 5.12;
-ledger D-053 to D-056).
+Four small pieces of the host API (ledger D-053 to D-056).
 
 **The host context** is one pointer on the execution
 (`gltang_execution_set_host_context`) that the engine never reads, copies or
@@ -971,13 +972,13 @@ puts each grapheme in the run it began in, so it does not copy the grapheme
 offsets of its inputs (ctang's did, and a combining mark at the start of the
 second string stayed a grapheme of its own).
 
-**Measured** (`notes/lang-tang/perf-history.md`, "Story 4 ... measured"). A native that reads the host context costs what one that returns an integer costs (0.96 times the scalar native call). A `use` that reaches a library of the language layer costs what a `use` of the execution's own library does. An output sink adds about 5% of the wall clock to a run that does little but print (+8% instructions: an indirect call and a constant-time search from the last segment for each print). On existing paths the cost is a layer's NULL test per `use` and about 105 instructions for each execution created and destroyed (the layer's lock, retain and release): `run-use-member-200` is +0.66% and `workaround-list-20-precompiled`, which makes 20 executions for one list, is +1.38%, over the 1% rule and recorded; a program that makes one execution for a request pays it once.
+**Measured.** A native that reads the host context costs what one that returns an integer costs (0.96 times the scalar native call). A `use` that reaches a library of the language layer costs what a `use` of the execution's own library does. An output sink adds about 5% of the wall clock to a run that does little but print (+8% instructions: an indirect call and a constant-time search from the last segment for each print). On existing paths the cost is a layer's NULL test per `use` and about 105 instructions for each execution created and destroyed (the layer's lock, retain and release): `run-use-member-200` is +0.66% and `workaround-list-20-precompiled`, which makes 20 executions for one list, is +1.38%, over the 1% rule and recorded; a program that makes one execution for a request pays it once.
 
 ### Host-defined value types: the custom kind
 
 A host gives a template its own values (an `account`, a `money`) through one new
-kind, `custom` (`planning/tang-host-extensibility.md` 5.1 to 5.3; spine AD-29;
-ledger D-032 to D-038). The public API is `type.h` (`stable`), which also declares the two execution
+kind, `custom` (AD-29: an engine's value set admits kinds that a host or a
+module describes; ledger D-032 to D-038). The public API is `type.h` (`stable`), which also declares the two execution
 calls this kind added (`gltang_execution_attach_types`,
 `gltang_snapshot_refused_type`) so that none of it is in the `free`
 `execution.h`, and the custom-value calls of `handle.h`.
@@ -1095,7 +1096,7 @@ code exits to the interpreter on a custom operand, as on any operand that fails
 its guard (story 10 compiles the dispatch). Finalizers, weak slots, pins and
 in-place byte access are story 7; module identity is stories 11 and 12.
 
-**Measured** (`notes/lang-tang/perf-history.md`, "Story 5 ... measured" and "... at the reviewed commit"). On the x86-64 build box an add that a type answers costs 118 ns where the interpreter's integer add costs 29 (4.1 times: a native activation record, a handle scope with two handles, the callback and a new instance, and the bracket is the larger part); an attribute read that a type answers costs 84 ns where a map's costs 48 (1.75 times); a constructor that makes an instance costs a native call and a 24-byte allocation (93 ns against 60). Paths that existed before are level: every existing case is within 1% of the commit before this story in instructions (the largest rise +0.21%) and the ten-run wall-clock A/B against it puts none past its spread + 2%. The first cut was not level (three cases over 1%: `gltang_vm_kind` no longer inlined, a kind switch's dispatch changed by an eleventh arm, and the execution struct past a malloc size class), which is why `custom` sits in the `default` arm of those switches and the struct keeps its size.
+**Measured.** On the x86-64 build box an add that a type answers costs 118 ns where the interpreter's integer add costs 29 (4.1 times: a native activation record, a handle scope with two handles, the callback and a new instance, and the bracket is the larger part); an attribute read that a type answers costs 84 ns where a map's costs 48 (1.75 times); a constructor that makes an instance costs a native call and a 24-byte allocation (93 ns against 60). Paths that existed before are level: every existing case is within 1% of the commit before this story in instructions (the largest rise +0.21%) and the ten-run wall-clock A/B against it puts none past its spread + 2%. The first cut was not level (three cases over 1%: `gltang_vm_kind` no longer inlined, a kind switch's dispatch changed by an eleventh arm, and the execution struct past a malloc size class), which is why `custom` sits in the `default` arm of those switches and the struct keeps its size.
 
 ### The seed sequence and the generator per context
 
@@ -1318,7 +1319,6 @@ stable and `seeds.h` labelled free are refused.
 text called it `stable`).** Promoting it needs `value.h`, `program.h` and
 `library.h` to be stable first, because it names their types, and none of them
 is ready: calls in compiled code and floating point
-(`planning/specs/spec-runtime-calls/`, `planning/specs/spec-runtime-float/`)
 will change the JIT statistics (`GLTANG_JitStats`) and the execution options
 this header carries, and a `stable` label would make each of those a breaking
 change. The label follows the decision to freeze, and that decision comes after
@@ -1342,7 +1342,8 @@ its own, and the compiler of the next story adds its pass beside the nodes
 (the headers are `free`, so that is allowed to change them).
 
 **`GLTANG_` names versus reusing `GTA_`.** Two libraries in one process with
-the same prefix is the situation CONVENTIONS section 4 exists to prevent, and
+the same prefix is the situation the suite's versioned symbol namespaces exist
+to prevent, and
 it is the situation the oracle test runner is in: it links ctang and lang-tang
 together. Versioned symbols would keep the linker honest, but a reader would
 still have two things called `GTA_Ast_Node`. AD-3 forbids `GTA` outright.
@@ -1357,7 +1358,7 @@ other generator in the suite is: a hard error naming what is missing, and the
 output never committed.
 
 **Keeping the AST's `print` writing to stdout versus taking a stream.** Ported
-as is. `print` is a debugging dump (`_dump` in CONVENTIONS section 3), the
+as is. `print` is a debugging dump (the suite's name for one is `_dump`), the
 `tang` command and the tests are its only callers, and a stream parameter
 would change forty signatures for a function whose output the oracle does not
 compare. The tests capture stdout; the day a host wants the dump elsewhere,
@@ -1378,8 +1379,8 @@ oracle would take the test with it. A child with a wall-clock kill turns a
 crash or a hang into a verdict. It also keeps ctang's `GTA_` symbols and its
 global state out of the test process, which links lang-tang.
 
-**Counting ctang's `killed` as agreement with lang-tang's `paused`.** The
-spine's rule (AD-16), and the right one: a runaway template is stopped by the
+**Counting ctang's `killed` as agreement with lang-tang's `paused`.** An
+architectural rule (AD-16), and the right one: a runaway template is stopped by the
 harness on one side and paused on its budget on the other, and both are the
 same observation. It agrees *only* with `paused`; a ctang that is killed where
 lang-tang rejects is a divergence, and the unit tests show that. `paused` is
@@ -2067,12 +2068,11 @@ whether it still needs to be the oracle is a later decision (AD-16 retirement).
 **Since 2026-10-16 the ledger is not closed.** The rows had since grown to 31
 (the float spec's D-031 among them), and D-032 to D-056 are a new category,
 `capability-removed`: one row for each host-visible capability that ctang
-offered and lang-tang lacks, found by comparing the two engines' host surfaces
-(`planning/tang-host-extensibility.md`, section 3). They are `open` until
+offered and lang-tang lacks, found by comparing the two engines' host surfaces. They are `open` until
 `spec-tang-host-extensibility` restores each one, and a row becomes `fixed` when
 its test passes: D-032 to D-038 (story 5) and D-048 to D-056 (stories 2 to 4)
-are, and D-039 to D-047 are open. Because ctang retires only when the ledger is closed (spine
-AD-3), ctang stays while a capability it offered is missing. The milestone-1
+are, and D-039 to D-047 are open. Because ctang retires only when the ledger is closed
+(AD-3), ctang stays while a capability it offered is missing. The milestone-1
 claim above that the ledger was closed was true of the divergences it
 compared; it did not compare what a host could do, which is how these were lost
 without a decision.
@@ -2131,8 +2131,8 @@ sweep.
 
 ## The strict-aliasing exception
 
-The suite's default is `-Wstrict-aliasing=1` (CONVENTIONS section 6, and the
-`check-aliasing` gate that proves it is armed). The AST is built on the C
+The suite's default is `-Wstrict-aliasing=1` (the `check-aliasing` gate
+proves it is armed). The AST is built on the C
 struct-inheritance downcast - `(GLTANG_Ast_Node_Binary *) self`, where `self`
 points at the first member of that struct - which C17 6.7.2.1p15 makes well
 defined and which level 1 reports 669 times in ctang. The ported AST and the
@@ -2341,7 +2341,7 @@ the hooks, the exits and the discard limit, and the figures ("Calls, measured").
 treated every `CALL` as an exit, so a compiled function left compiled code at each call
 and its callee re-entered its own code, which made call-heavy code slower with the JIT
 than without it. The rule behind it ("no JIT frame calls a JIT frame") was story 15's,
-not the spine's. The alternatives this library rejected are under "Why this and not
+not an architectural rule. The alternatives this library rejected are under "Why this and not
 something else", below.
 
 ### How it works
@@ -2563,22 +2563,21 @@ callback (an activation record, a handle scope, `in_host`, and a callback that m
 code), which this spec does not run from inside a compiled helper, so the interpreter runs the
 operation. The exit is a real one and counts toward the discard limit; the deopt hook tells it from a
 native-stack refusal at the same site by the refusal the test leaves (`GLTANG_REFUSAL_OPERAND_GUARD`).
-Compiling that dispatch is `spec-tang-host-extensibility` story 10's
-(`planning/specs/spec-tang-host-extensibility/stories.yaml`, id "10").
+Compiling that dispatch is `spec-tang-host-extensibility` story 10's.
 
 *Raw floats.* (As story 3 left them; story 4g compiled the concatenations, below, "A raw float's
 text".) No thunk is given a raw float. `INDEX` and `SLICE` with a raw operand are the designed
 box exit (`reads_raw`, `apply_kinds`). `"x" + f`, with f raw and a string constant on the other side
 (the analysis records which side's producer is the `CONST` of a string, `str_side`), is a
 concatenation that converts the float to text: the designed box exit too, and the interpreter makes
-the text (a raw-float concatenation is `planning/unboxed-float-output.md`'s). Only a string whose
+the text (a raw-float concatenation was left to the work below, "A raw float's text"). Only a string whose
 producer is a `CONST` is known: any other string beside a raw float is float arithmetic in compiled
 code, and the unbox of the string is a counted guard exit. Known counted exits of that kind, with f
 raw: `label + f` (a string from a variable), `s + "a" + f` (the left side is a `+`'s result),
 `item.name + f` and `row[1] + f` (an attribute's or an element's), and `"x" + ("y" + f)` (the inner `+`
 is itself the box exit; the outer one then runs in the interpreter). The predicate is deliberately not
 widened: making these free is the same work as printing an unboxed float, and goes with it
-(`planning/unboxed-float-output.md`). A test row holds `label + f` to its counted exit.
+(below, "A raw float's text"). A test row holds `label + f` to its counted exit.
 
 *The frame at a poll inside one.* A long concatenation, a slice, a retag (`.html` and the others) and
 `.render` poll inside, at their pacing, and so can a string's grapheme (a substring). As for the prints,
@@ -2967,7 +2966,7 @@ warm call is now 151 instructions above an interpreted one (7,166 against 7,015 
 the JIT record runtime-core opens around it; per row compiled is 668 below interpreted.
 
 Timed (best of six alternating runs on the Cortex-A72 board, of ten on the x86-64 build box, which was busy and whose times
-are noisy; ns a unit; the records are `notes/lang-tang/perf/2026-10-21-template-4e/` in the workspace):
+are noisy; ns a unit):
 
 | row | arm64 `bb0d434` | arm64 `0fe87ff` | x86-64 `bb0d434` | x86-64 `0fe87ff` |
 |---|---|---|---|---|
@@ -3037,8 +3036,7 @@ instructions. Now each is a call that is given the double:
   whose guard exits when the value word is a string.
 
 Measured (callgrind as story 4e's, GCC 16.2.0 in `ghoti-build:gcc16`, the whole case; before is
-`4258eca`, whose counts are `0fe87ff`'s within a few hundred instructions; the records are
-`notes/lang-tang/perf/2026-10-21-template-4g/` in the workspace):
+`4258eca`, whose counts are `0fe87ff`'s within a few hundred instructions):
 
 | row | interpreted before | compiled before | interpreted after | compiled after |
 |---|---|---|---|---|
@@ -3254,7 +3252,7 @@ casts over a raw double (the next section):
   exits of a kind that counts toward a function's limit whether or not the function was still
   compiled to be charged (a nested run can discard it while a record is open), and the entry
   classifies each exit once, after its rebuild succeeded. **What still thrashes (decided, not
-  fixed here; the shared-code rate or work-based policy that fixes it is in `deferred-work.md`):** a
+  fixed here; the shared-code rate or work-based policy fixes it):** a
   function with a loop or a normal return whose designed exit dominates its entry, so that each call
   pays an entry, a rebuild and a re-execution by the interpreter and never gets discarded, because
   nothing counts; above all a function with a short loop (a trip count of one or a few) that ends at
@@ -3262,8 +3260,8 @@ casts over a raw double (the next section):
   It is measurable per call from the statistics: `exits_expected` against `entries + calls` (every
   designed exit is made by an entry or a compiled call, so the ratio is at most one; a function that
   thrashes is near one), and `functions_discarded` stays zero for it. The limit itself is a
-  short-run heuristic that must become a rate before compiled code is shared between executions:
-  `planning/template-architecture.md`. Compiled code never boxes.
+  short-run heuristic that must become a rate before compiled code is shared between executions
+  (exits per entry over a window, or a counter that decays on successful runs). Compiled code never boxes.
 - *Merges.* Where the ways into a jump target disagree on a slot's kind (a local first
   assigned a float inside a loop, `if (c) { x = 1.5; } else { x = 2; }`) every raw source
   of the function becomes an exit and the analysis is run again, so the function is then
@@ -3585,7 +3583,7 @@ For comparison, the fresh-engine cases of the same job (medians; minima in brack
 
 **Retired code, measured (the claim to test).** Compiled code a discard retires stays on the context's retired list until no JIT record is open, so the claim is that the list is bounded by the functions of the program: each is discarded at most once and never compiled again. Read with `grcore_code_retired_peak` on the x86-64 build box (GCC 14, story 8's build; the figures in this paragraph are from the x86-64 build box; `make test` runs the same test with 40 functions, 12 under torture or a moving stack, and the 1,000 are `GLTANG_LONG_RUN_FUNCTIONS=1000`): a generated program of 1,000 functions, each called from a compiled loop with a guard that fails eight times, all in one run, discards all 1,000 and the peak of the retired list is **0** (a discard is applied after the entry's record is left, so core releases the retired reference at once); 26 ranges are registered at the end (the program's 25 drivers and its top level); and `fib(30)`, 2,692,536 compiled calls and no call exit, retires nothing (peak 0) and keeps its two ranges registered. The bound holds with room (0 against twice the 1,000 discarded), and it holds because of where the discard is made, not because of a bound in core: a discard made while a record is open (a nested activation) is the case below.
 
-**Retired code with a nested record open (story 9): an open risk, owned by core's epoch.** The same thrashing program run so that the discards are made under an open JIT record: a compiled function calls the driver of each group through a native that re-enters guest code (the `reenter` test native), so each function is discarded at its eighth failed guard while the compiled caller's record is open, and core cannot free what it retires until that record is left. The retired peak is exactly twice the discards, at every size measured (x86-64, GCC 14, `GLTANG_LONG_RUN_FUNCTIONS` = 1, 5, 40, 200, 1,000, `testNative_calls`): **2, 10, 80, 400, 2,000** for 1, 5, 40, 200 and 1,000 discarded, with 3, 3, 3, 7 and 27 ranges registered at the end. A discard retires two references, the registry's range and the slot's code, and both wait. So the result that the list is bounded by twice the functions discarded (story 8's claim, which the test asserts) **sits on its bound, it does not hold with room**, and the growth is linear in the discards made under one open record, released all at once when the outermost record is left. What bounds it here is that a function is discarded once and never compiled again (`discard` in `jit.c` marks it never-compile), so the number of discards is at most the number of functions; one function cannot be discarded repeatedly to grow the list, and the repeated thing is the count across functions. A thrashing run that stays inside one record for a long time, with a program of many functions, therefore holds code in proportion to its size and nothing frees it, and a bound or an epoch for retired code (free what no open record can reach, not only when none is open) is core's design: it is not done here, and the test would not catch a regression that kept the list at exactly twice. **Decided (Corey, 2026-10-09): accepted and documented**, here and in runtime-core's `design.md`, as an open risk. It should be looked at again when a long-lived record outlives many discards (a host that keeps one nested activation open across a long run of a large, thrashing program); `deferred-work.md` names that condition and what would settle it (an epoch in the core).
+**Retired code with a nested record open (story 9): an open risk, owned by core's epoch.** The same thrashing program run so that the discards are made under an open JIT record: a compiled function calls the driver of each group through a native that re-enters guest code (the `reenter` test native), so each function is discarded at its eighth failed guard while the compiled caller's record is open, and core cannot free what it retires until that record is left. The retired peak is exactly twice the discards, at every size measured (x86-64, GCC 14, `GLTANG_LONG_RUN_FUNCTIONS` = 1, 5, 40, 200, 1,000, `testNative_calls`): **2, 10, 80, 400, 2,000** for 1, 5, 40, 200 and 1,000 discarded, with 3, 3, 3, 7 and 27 ranges registered at the end. A discard retires two references, the registry's range and the slot's code, and both wait. So the result that the list is bounded by twice the functions discarded (story 8's claim, which the test asserts) **sits on its bound, it does not hold with room**, and the growth is linear in the discards made under one open record, released all at once when the outermost record is left. What bounds it here is that a function is discarded once and never compiled again (`discard` in `jit.c` marks it never-compile), so the number of discards is at most the number of functions; one function cannot be discarded repeatedly to grow the list, and the repeated thing is the count across functions. A thrashing run that stays inside one record for a long time, with a program of many functions, therefore holds code in proportion to its size and nothing frees it, and a bound or an epoch for retired code (free what no open record can reach, not only when none is open) is core's design: it is not done here, and the test would not catch a regression that kept the list at exactly twice. **Decided (Corey, 2026-10-09): accepted and documented**, here and in runtime-core's `design.md`, as an open risk. It should be looked at again when a long-lived record outlives many discards (a host that keeps one nested activation open across a long run of a large, thrashing program); what would settle it is an epoch in the core.
 
 **A compiled call site, as emitted** (`fib`, `return fib(n - 1) + fib(n - 2)`, the IR printed with `grjit_function_print` and the code disassembled with `objdump -D -b binary -mi386:x86-64`, from a scratch build with a print statement added):
 
@@ -3632,7 +3630,7 @@ The state is the guest frame: the function, `pc` after the `CALL` (15) and `sp` 
 
 Passing the execution as the JIT environment (`f0725b9`) made compiled `fib` 5.8% (`fib(15)`) and 6.8% (`fib(22)`) slower than before it, outside the spread of six alternating runs on the x86-64 build box. Counted with callgrind on `fib(22)` (`bench --only fib-22-jit-default --smoke`), the whole process went from 70.44M instructions to 77.77M, 128 more for each of 57,096 compiled calls: the call site called a C helper (`gltang_jit_slot_entry_address`) to find its callee's slot, which looked the function record up by token (about 60 with its call); the push hook asked the callee's compiled code for its result count (27); the six-argument hooks and their checks (about 26); and the environment moves in the generated code (about 16). The helper also answered zero for a function with no record, and the call then loaded its entry from address 0.
 
-The repair keeps the contract (the code holds no execution's address; the callee's environment is passed on every call): the slot is found by three loads through the environment (`INSTANCE`, then the execution's JIT state, its table of the program's function records, and the callee's record, whose first word is the slot), after every function of the program was given a slot before any was built (`gltang_jit_prepare_slots`; a slot that cannot be made fails the build, counted in `compile_failures`); the code's result count is checked once, where its slot is bound; and the hooks keep the context's guest stack instead of looking it up through the context's keyed slots at every push and pop. Now 70.53M instructions (+0.1%), and in the six-run comparison compiled `fib(15)` is +2.5% and `fib(22)` -2.8%, both inside the spread. The guard is `JitCalls.ACompiledCallLooksNoFunctionUp...`: `record_lookups` is the same for `fib(8)` and `fib(20)`; planted defect 83 puts a lookup in every push. The record of the comparison, with the other cases and the cost that remains in runtime-jit, is in `_bmad-output/implementation-artifacts/spec-runtime-jit-wasm-ir.md` of the workspace.
+The repair keeps the contract (the code holds no execution's address; the callee's environment is passed on every call): the slot is found by three loads through the environment (`INSTANCE`, then the execution's JIT state, its table of the program's function records, and the callee's record, whose first word is the slot), after every function of the program was given a slot before any was built (`gltang_jit_prepare_slots`; a slot that cannot be made fails the build, counted in `compile_failures`); the code's result count is checked once, where its slot is bound; and the hooks keep the context's guest stack instead of looking it up through the context's keyed slots at every push and pop. Now 70.53M instructions (+0.1%), and in the six-run comparison compiled `fib(15)` is +2.5% and `fib(22)` -2.8%, both inside the spread. The guard is `JitCalls.ACompiledCallLooksNoFunctionUp...`: `record_lookups` is the same for `fib(8)` and `fib(20)`; planted defect 83 puts a lookup in every push.
 
 ### Floats, measured (spec-runtime-float, CAP-6, AD-26)
 
@@ -3791,9 +3789,9 @@ What these show:
 
 Before the rule, a loop-free body ending in a returned float lost 13.23 us once per execution: call 1 cost 10.67 us more than the interpreter's (the compile, the entry and the first exit) and each of the seven calls after it 366 ns more (that is 10.67 us + 7 x 366 ns); the print lost 13.78 us, the global store 14.28 us, the call argument 22.70 us (two functions compile). It repaid itself from the break-even bodies of the table, and after the eighth exit the function was the interpreter's, so a float-returning loop ran at interpreted speed in the steady state. A per-request shape paid the loss again in every request, because the counter is per execution. The error exits lost 11.01 us to 15.40 us and had no loop to repay it.
 
-**The decision (2026-10-12, taken by Corey after these measurements): an exit whose only reason is boxing a raw float for its consumer does not count toward the discard limit, and a function with no loop whose every path ends at such an exit is declined at the compile.** Real failures still count. The rate-based limit that shared code needs is a separate requirement (`planning/template-architecture.md`) and is not part of this decision.
+**The decision (2026-10-12, taken by Corey after these measurements): an exit whose only reason is boxing a raw float for its consumer does not count toward the discard limit, and a function with no loop whose every path ends at such an exit is declined at the compile.** Real failures still count. The rate-based limit that shared code needs is a separate requirement and is not part of this decision.
 
-**The cost of the decision, plainly.** The rule turns a bounded loss into an unbounded per-call one for a float-returning function with a short loop, and for any function whose designed exit dominates its entry: it stays compiled, pays an entry, a rebuild and the interpreter's re-execution of the exit instruction on every call, and nothing ever discards it. Before the rule the eighth exit bounded that loss. Corey accepted the cost on 2026-10-12; the fix, a work-based or rate-based discard policy, is the shared-code requirement and is recorded in `deferred-work.md`. It is measurable from the statistics: `exits_expected` against `entries + calls` is at most one, and a function that thrashes is near one with `functions_discarded` zero. Measured here (x86-64 build box, job `float8-two`, calls 10 on, each; interpreted and compiled, before the rule and after it):
+**The cost of the decision, plainly.** The rule turns a bounded loss into an unbounded per-call one for a float-returning function with a short loop, and for any function whose designed exit dominates its entry: it stays compiled, pays an entry, a rebuild and the interpreter's re-execution of the exit instruction on every call, and nothing ever discards it. Before the rule the eighth exit bounded that loss. Corey accepted the cost on 2026-10-12; the fix, a work-based or rate-based discard policy, is the shared-code requirement. It is measurable from the statistics: `exits_expected` against `entries + calls` is at most one, and a function that thrashes is near one with `functions_discarded` zero. Measured here (x86-64 build box, job `float8-two`, calls 10 on, each; interpreted and compiled, before the rule and after it):
 
 | Body (iterations) | Interpreted, before | Compiled, before the rule | Interpreted, after | Compiled, after the rule | After less interpreted (after tree) |
 | --- | --- | --- | --- | --- | --- |
@@ -3833,7 +3831,7 @@ After the rule the compiled call of a float-returning function is slower than th
 
 The float-returning loops are compiled in every call (a warm call of case 1 is 8.08 times as fast as the interpreter's where it was 1.00); the loop-free consumers cost what the interpreter's do and no longer pay the compile, **a saving of about 11.65 us for the return** (the before loss, 13.23 us, less the decline's remaining cost) per execution on the x86-64 build box; and the exit is paid on every call instead of eight times: about 234 ns for a `return` (two live raw values), 415 ns for a `print`, 242 ns for a store and 358 ns for a call argument, over the same function without the exit. The compiled caller of a declined helper (`float-caller-declined`: a compiled loop of ten iterations calling a loop-free float helper) leaves compiled code at its first call site on every call, as a remembered exit that counts nowhere: its call costs 1.56 us against the interpreter's 1.37 us after the rule and 1.53 us against 1.34 us before it (there the helper was compiled, its exits counted, and after eight of them the helper was discarded and became the same remembered exit): the rule changes nothing about the end state of that shape, and the end state is a loss per call of the caller.
 
-*What remains, and what to measure later.* The discard limit counts failures per execution (eight, lifetime of the execution). That is a short-run heuristic: once compiled code outlives an execution and is shared (`planning/template-architecture.md`, "the discard policy is a rate, not a lifetime count"), a lifetime count would eventually discard every function that fails rarely, and nothing would re-promote it; the limit must become a rate (failures per entry over a window, or a counter that decays on successful runs) before code is shared. The exit that boxes a float stays out of that rate by design, but it is now paid on every call of a float-returning function, about 234 ns for the rebuild of two live raw values at a `return` on this machine (more raw values live at the exit cost more: the rebuild boxes one per live raw value). In a shared-code world measure: the per-call exit cost against the number of live raw values at the exit (here two); the ratio `exits_expected` / (`entries` + `calls`) per function, which decides whether the work-based or rate-based discard of the thrashing short-loop shape pays; the pool's re-making at every host return for code shared between requests (up to 57.9 ns per host return at one call a return); and the failure rate of real exits (guard failures) per entry, which is what the shared-code limit will count.
+*What remains, and what to measure later.* The discard limit counts failures per execution (eight, lifetime of the execution). That is a short-run heuristic: once compiled code outlives an execution and is shared, a lifetime count would eventually discard every function that fails rarely, and nothing would re-promote it; the limit must become a rate (failures per entry over a window, or a counter that decays on successful runs) before code is shared. The exit that boxes a float stays out of that rate by design, but it is now paid on every call of a float-returning function, about 234 ns for the rebuild of two live raw values at a `return` on this machine (more raw values live at the exit cost more: the rebuild boxes one per live raw value). In a shared-code world measure: the per-call exit cost against the number of live raw values at the exit (here two); the ratio `exits_expected` / (`entries` + `calls`) per function, which decides whether the work-based or rate-based discard of the thrashing short-loop shape pays; the pool's re-making at every host return for code shared between requests (up to 57.9 ns per host return at one call a return); and the failure rate of real exits (guard failures) per entry, which is what the shared-code limit will count.
 
 ### Integer-only functions and the float work: a regression found, bisected and repaired
 
@@ -4015,7 +4013,7 @@ The float work added bookkeeping to the compiled-call hooks, and a claim that in
   operands are compiled (above); a float that must become a value word, a float's truthiness and
   the error cases are the exits of "The exits that remain, and why". **No rate-based discard
   policy** for shared code: the limit counts failures per execution and must become a rate before compiled code is
-  shared (`planning/template-architecture.md`); "Floats, measured" says what to measure then.
+  shared; "Floats, measured" says what to measure then.
 - **Hardening** of the generated code (guard pages, randomised layout, constant
   blinding): the pages are never writable and executable at once, and that is all.
 - **Compile-time limits tuned to a benchmark.** The supported set, the threshold
@@ -4035,7 +4033,7 @@ frozen state. The golden flow is in `examples/snapshot_start.c`.
 
 ### How it works
 
-Three libraries carry it, each behind the seam the spine names (AD-19: hooks on a
+Three libraries carry it, each behind the seam kept for snapshots (AD-19: hooks on a
 key; AD-12: nothing is keyed by address).
 
 - **runtime-core** keeps a snapshot as one named blob per key that has hooks, and
