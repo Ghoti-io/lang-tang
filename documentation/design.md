@@ -3055,6 +3055,36 @@ move by less than 0.15%: `run-fib-15` +0.07% and `run-template-call-200` +0.12% 
 natives in the table, the evidence of each `+`), the host-print rows -0.13% (`render_number`'s smaller
 frame).
 
+**Template calls, measured (spec-template-compiled story 5).** On the final code (lang-tang `d591a77`,
+runtime-core `246100e`, whose activation record stories 4c and 4f cut from 451 to 135 instructions a
+call), against `aafa9c3`, the commit before the spec, on the same dependencies and with this tree's
+`bench/bench.c` on both sides (`BENCH_UNCHECKED` for the base). Wall clock, compiled against
+interpreted in the same build; an x86-64 build box (best of ten alternating runs, one core, its L3
+cluster idle) and a Cortex-A72 board (best of ten):
+
+| row | x86-64 | Cortex-A72 |
+|---|---|---|
+| warm template call | 1.041 (397.0 against 381.4 ns) | 1.078 (3,318 against 3,079 ns) |
+| template per row | 1.006 (1,412.2 against 1,404.4 ns) | 1.105 (13,394 against 12,119 ns) |
+| float print | 0.858 | 0.851 |
+| float beside a constant | 0.872 | 0.902 |
+| float beside a variable | 0.863 | 0.906 |
+
+Every warm compiled call stays compiled, with no exit and no discard (`bench --smoke` asserts it). In
+instructions (callgrind) the compiled warm call is 5.2% and the compiled per-row call 5.3% below
+`aafa9c3`, and per call the compiled warm call is 39 instructions above the interpreted one and the
+per-row call 812 below. **The spec's goal, compiled faster than interpreted, is met for templates
+that print a float they computed and missed for the others**: level per row and 4.1% slower on the
+warm call on x86-64, 7.8% and 10.5% slower on the Cortex-A72. There the compiled path runs no more
+instructions but 1.09 to 1.14 times the cycles per instruction, with 1.4 to 1.6 times the L1
+instruction refills (runtime-jit keeps every virtual register in a stack slot, about 38 bytes of code
+an IR operation: the per-row template's function 0 is 11.6 KB) and several times the data-TLB refills,
+which the cache simulation of story 4e does not reproduce. Both are outside this library. Programs
+with no template: `run-fib-15` is 4.0% above `aafa9c3` in instructions (the compile of `+`'s slow path)
+and `run-template-call-200` 6.1% (its template is now compiled in every execution); the other rows are
+level or below in instructions, though `run-native-call-1000` (+4.8%) and `run-array-build-1000`
+(+2.2%) are slower in wall clock with fewer instructions, which is not explained here.
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
