@@ -806,7 +806,7 @@ name_of_test() {
     206-*) echo "testJit_templates (the loop of texts with a host sink: its deliveries)" ;;
     207-*) echo "testJit_templates (the strings at and below the pacing interval: their polls)" ;;
     208-*|210-*) echo "testJit_templates (the texts and HTML strings that alternate: the rendered output)" ;;
-    209-*) echo "testJit_templates (the memory sweep over a long print after a fast one: the rollback)" ;;
+    209-*) echo "testJit_templates (the memory sweep over a long print refused after a fast one: the rollback)" ;;
     211-*) echo "testJit_templates (the loop of a map's attribute: the heap objects made)" ;;
     212-*) echo "testJit_templates (the sixteen-byte texts: the fast-path count the requirement gives)" ;;
     213-*) echo "testJit_templates (the memory sweep over a first print of a string)" ;;

@@ -176,13 +176,8 @@ struct Outcome {
 // run() and expect_same() serve the JIT arm only; the JIT=no arm has no test that
 // calls them, and -Wunused-function would report them there.
 #ifdef GLTANG_WITH_JIT
-inline Outcome run(const Scenario & sc, long threshold) {
-  Outcome out;
-  Compiled page(sc.source, sc.mode, "jit.tang");
-  EXPECT_TRUE(page.ok()) << page.error.message;
-  if (!page.ok()) {
-    return out;
-  }
+/// The context run() makes for `sc` at `threshold`.
+inline Config config_of(const Scenario & sc, long threshold) {
   Config config;
   config.fuel = sc.fuel;
   config.torture = sc.torture;
@@ -194,6 +189,31 @@ inline Outcome run(const Scenario & sc, long threshold) {
   config.native_stack_bytes = sc.native_stack_bytes;
   config.calls = sc.calls;
   config.jit_threshold = threshold;
+  return config;
+}
+
+/**
+ * Whether run() could make its context for `sc` at `threshold` (the memory budget, under torture
+ * and verify especially, can be too small for the context itself). For a sweep over budgets, which
+ * must not count a budget where no run starts as a run that agreed.
+ */
+inline bool context_can_be_made(const Scenario & sc, long threshold) {
+  Compiled page(sc.source, sc.mode, "jit.tang");
+  if (!page.ok()) {
+    return false;
+  }
+  Context context(page.program, config_of(sc, threshold));
+  return context.ok();
+}
+
+inline Outcome run(const Scenario & sc, long threshold) {
+  Outcome out;
+  Compiled page(sc.source, sc.mode, "jit.tang");
+  EXPECT_TRUE(page.ok()) << page.error.message;
+  if (!page.ok()) {
+    return out;
+  }
+  Config config = config_of(sc, threshold);
   Context context(page.program, config);
   EXPECT_TRUE(context.ok());
   if (!context.ok()) {

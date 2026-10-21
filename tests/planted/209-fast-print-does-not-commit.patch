@@ -1,8 +1,9 @@
 # 209 the fast path does not move the point a failed print rolls back to
 # defect: a print done by the fast path leaves `committed` where it was, so a later print that fails rolls back
 #   past it and drops its bytes, where the interpreter keeps them
-# caught by: the memory sweep over a template whose long print fails after a short string the fast path copied
-#   (testJit_templates, JitTemplates.APrintThatFailsAfterFastTexts*)
+# caught by: the memory sweep over a long print, refused alone, after a short string the fast path copied into the
+#   main output (testJit_templates, JitTemplates.APrintThatFailsAfterFastTexts*): the output differs at the budgets
+#   that refuse it, plain and under torture and verify
 #
 --- a/src/vm/text.c
 +++ b/src/vm/text.c

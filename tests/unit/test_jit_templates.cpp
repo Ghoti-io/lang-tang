@@ -1994,35 +1994,69 @@ TEST(JitTemplates, AMapsAttributeIsTheFastPathOnceItsNameIsMadeAndAMissingKeyOrA
 
 TEST(JitTemplates, APrintThatFailsAfterFastTextsRollsBackToTheSameByteOnBothTiersAtEveryMemoryBudget) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // A template's output is never delivered, so the one way a print of it fails is memory: the long
-  // string after a text and a short string must grow the output, and a budget that refuses the
-  // growth fails the print, which rolls back what it appended to the end of the last print that
-  // finished. The short string was the fast path, which must have moved that point as the slow path
-  // does. (Texts side by side are one text: compile.c joins them.) Swept from an eighth of the run's
-  // peak to above it; the tiers agree at every budget, and the sweep sees the rolled-back print.
-  Scenario sc = scenario("use card; x = card(); print(\"|\"); x;\n");
-  sc.parts.push_back(card("<% s = \"two\"; b = \"0123456789\"; k = 0; while (k < 8) { b = b + b; k += 1; } %><p>one</p><%= s %><%= b %><p>three</p>"));
+  // The one way a print fails without a sink is memory. A string of 10240 bytes is printed 102
+  // times, so the output fills most of 1 MiB; the short string fits after it and is the fast path;
+  // the long string after that must grow the output to 2 MiB while the 1 MiB one is live, the
+  // largest request of the run by far, so a band of budgets refuses that print and nothing before
+  // it on every heap mode, and the failed print rolls back what it appended to the end of the last
+  // print that finished: the short string, which the fast path must have moved that point to as the
+  // slow path does. The output is the main activation's (no sink), so the bytes are read as they
+  // are, with nothing built from them afterwards. (The first version printed into a template's
+  // output, about 4 KiB, then 128 KiB: under torture and verify a collection's own working memory
+  // was larger than that growth, so no budget refused the print alone, and where it was refused the
+  // template's output string, built after it, was refused too and hid the rollback.) Swept from an
+  // eighth of the run's peak to above it; the tiers agree at every budget, and the sweep sees the
+  // rolled-back output by its bytes. The sweep's lowest budgets cannot hold the context itself, on
+  // either tier under torture and verify: such a budget is counted and passed over (a budget where
+  // only one tier's context can be made is a failure).
+  Scenario sc = scenario(
+      "function p(b, n) { i = 0; while (i < n) { print(b); i += 1; } return 0; }\n"
+      "function f() { s = \"two\"; b = \"0123456789\"; k = 0; while (k < 10) { b = b + b; k += 1; }\n"
+      "  print(\"<p>one</p>\"); p(b, 102); print(s); print(b); print(\"<p>three</p>\"); return 1; }\n"
+      "f();\n");
   sc.memory_reserve = 0;
   Outcome measured = run(sc, 0);
   Outcome compiled = run(sc, 1);
   ASSERT_TRUE(measured.finished);
   ASSERT_TRUE(compiled.finished);
   EXPECT_EQ(compiled.stats.fast_prints, 2u) << "the short string, and the last text";
+  std::string b = "0123456789";
+  for (int k = 0; k < 10; ++k) {
+    b += b;
+  }
+  std::string rolled = "<p>one</p>";
+  for (int k = 0; k < 102; ++k) {
+    rolled += b;
+  }
+  rolled += "two<p>three</p>";
   const uint64_t peak = std::max(measured.memory_peak, compiled.memory_peak);
   bool rolled_back = false;
   std::set<std::string> kinds;
-  for (uint64_t i = 0; i <= 128; ++i) {
-    const uint64_t budget = peak / 8 + (peak - peak / 8 + 2000) * i / 128;
+  uint64_t no_context = 0;
+  for (uint64_t i = 0; i <= 256; ++i) {
+    const uint64_t budget = peak / 8 + (peak - peak / 8 + 2000) * i / 256;
     Scenario tight = sc;
     tight.memory_bytes = budget;
+    const bool made_plain = context_can_be_made(tight, 0);
+    const bool made_jit = context_can_be_made(tight, 1);
+    EXPECT_EQ(made_plain, made_jit) << "memory " << budget << ": a context made on one tier only";
+    if (!made_plain || !made_jit) {
+      ++no_context;
+      continue;
+    }
     Outcome plain = run(tight, 0);
     Outcome jit = run(tight, 1);
-    kinds.insert(plain.key());
-    EXPECT_EQ(plain.key(), jit.key()) << "memory " << budget;
+    // Compared whole, reported by size: a key holds the megabyte of output, and a message per
+    // budget that printed both would hold gigabytes when a defect makes every one differ.
+    const std::string plain_key = plain.key(), jit_key = jit.key();
+    kinds.insert(std::to_string(std::hash<std::string>{}(plain_key)));
+    EXPECT_TRUE(plain_key == jit_key) << "memory " << budget << ": the runs differ (output " << plain.raw.size() << " and "
+                                      << jit.raw.size() << " bytes; results " << plain.result.substr(0, 60) << " and " << jit.result.substr(0, 60) << ")";
     EXPECT_EQ(plain.polls, jit.polls) << "memory " << budget;
-    rolled_back = rolled_back || plain.result.find("<p>one</p>two<p>three</p>") != std::string::npos;
+    rolled_back = rolled_back || plain.raw == rolled;
   }
-  EXPECT_TRUE(rolled_back) << "no budget refused the long print alone";
+  EXPECT_LT(no_context, 256u) << "almost no budget of the sweep could make a context";
+  EXPECT_TRUE(rolled_back) << "no budget refused the last long print alone (" << no_context << " budgets could not make a context)";
   EXPECT_GE(kinds.size(), 3u);
 }
 
