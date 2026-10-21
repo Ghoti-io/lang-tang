@@ -6,10 +6,10 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -160,7 +160,7 @@
+@@ -177,7 +177,7 @@
  
- static GRJIT_NativeResult thunk_attr(void * context, uint64_t container, uint64_t constant) {
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+ static GRJIT_NativeResult thunk_attr(void * context, uint64_t execution, uint64_t container, uint64_t constant) {
+   GLTANG_Execution * exec = execution_from(context, execution);
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
 +  /* planted: the load of a member by name is charged nothing */
    ++exec->jit_stats.member_loads;

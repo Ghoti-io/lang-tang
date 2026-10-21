@@ -96,6 +96,13 @@ typedef struct GLTANG_JitFn {
   GRCORE_Code * code;  ///< The cache's reference; compiled code's payload is a ::GLTANG_JitCode.
   GRCORE_EntrySlot * slot;  ///< Created when the function is first named; kept for the execution. Its state mirrors `state`.
   uintptr_t start;     ///< The registered range's start while `code` is registered; 0 otherwise.
+  // What an entry from the interpreter needs of the code, copied here when it is installed so that
+  // the entry reads neither the handle nor its payload (gltang_jit_enter): valid while `state` is
+  // COMPILED.
+  GRJIT_Code * jcode;      ///< The payload's code.
+  GRJIT_EntryFn entry;     ///< Its entry point, once a call through grjit_code_call has not been refused; NULL before.
+  uint32_t out_words;      ///< grjit_code_out_words of the code.
+  uint32_t parameter_count;
 } GLTANG_JitFn;
 
 /** @brief The functions of one program an execution has run. */

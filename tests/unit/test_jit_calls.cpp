@@ -698,9 +698,12 @@ TEST(JitCalls, ATinyNativeStackDeoptimizesTheChainAtTheCallAndTheInterpreterFini
   base.calls = 10000;
   Outcome plain = run(base, 0);
   uint64_t previous = UINT64_MAX;
-  // 512 and 16,384 bytes do not even hold the interpreter's own frames and one
-  // compiled function: every entry leaves at its first stack check, without a
-  // compiled frame to rebuild, and the interpreter runs the function. 100,000
+  // 512 bytes does not even hold the interpreter's own frames and one compiled
+  // function: every entry leaves at its first stack check, without a compiled
+  // frame to rebuild, and the interpreter runs the function. 16,384 did not either
+  // until story 4e of spec-template-compiled sized the entry's argument and exit
+  // arrays to the function (they were 16 KiB, below which compiled code ran): it
+  // now holds a few compiled frames, and the chain leaves at a call. 100,000
   // holds about 370 compiled frames (about 270 bytes each), so the chain leaves at
   // the call that would pass the limit.
   for (uint64_t bytes : {uint64_t{512}, uint64_t{16384}, uint64_t{100000}, uint64_t{1} << 20, uint64_t{16} << 20}) {
@@ -714,8 +717,11 @@ TEST(JitCalls, ATinyNativeStackDeoptimizesTheChainAtTheCallAndTheInterpreterFini
       EXPECT_GE(jit.stats.call_exits_native_stack, 1u) << "native stack " << bytes << ": below the need the chain deoptimizes at the call";
       EXPECT_GE(jit.stats.deepest_chain, 100u);
     }
-    if (bytes <= 16384) {
+    if (bytes <= 512) {
       EXPECT_EQ(jit.stats.calls, 0u) << "native stack " << bytes << ": nothing is entered";
+    }
+    if (bytes == 16384) {
+      EXPECT_GT(jit.stats.calls, 0u) << "native stack " << bytes << ": an entry of a small function does not put compiled code 16 KiB down the stack";
     }
     if (bytes >= (uint64_t{16} << 20)) {
       EXPECT_EQ(jit.stats.call_exits_native_stack, 0u);

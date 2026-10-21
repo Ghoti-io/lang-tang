@@ -7,8 +7,8 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -338,7 +338,7 @@
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+@@ -355,7 +355,7 @@
+   GLTANG_Execution * exec = execution_from(context, execution);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
    ++exec->jit_stats.value_calls;
 -  exec->standing = true;

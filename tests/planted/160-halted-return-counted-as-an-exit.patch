@@ -4,12 +4,12 @@
 #
 --- a/src/jit/jit.c
 +++ b/src/jit/jit.c
-@@ -515,6 +515,12 @@
+@@ -599,6 +599,12 @@
        ++exec->jit_stats.returns;
-       *out_value = out[0];
+       *out_value = out0;
        result = GLTANG_JIT_RETURNED;
 +      /* planted: a halted return is charged as an exit */
-+      if ((out[0] & GLTANG_TAG_MASK) == GLTANG_TAG_MASK) {
++      if ((out0 & GLTANG_TAG_MASK) == GLTANG_TAG_MASK) {
 +        ++exec->jit_stats.exits_counted;
 +        jit->exit_fword = fword;
 +        counted = true;

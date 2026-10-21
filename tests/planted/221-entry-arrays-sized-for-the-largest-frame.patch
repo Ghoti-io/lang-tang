@@ -1,0 +1,18 @@
+# 221 every entry from the interpreter puts its arrays in a frame for the largest function
+# defect: gltang_jit_enter always takes call_large, whose argument and exit arrays are sized for
+#   GLTANG_JIT_MAX_SLOTS (16 KiB), so compiled code and everything it calls run 16 KiB below the
+#   interpreter's frame on every entry, as before story 4e
+# caught by: the tiny native stack, whose 16 KiB row must enter a small function
+#   (testJit_calls, JitCalls.ATinyNativeStack*)
+#
+--- a/src/jit/jit.c
++++ b/src/jit/jit.c
+@@ -568,7 +568,7 @@
+   uint64_t out0 = 0;
+   const GRJIT_Code * const called = f->jcode;
+   const bool checked = f->entry != NULL;
+-  const uint32_t exit = f->out_words <= GLTANG_JIT_SMALL_FRAME && f->parameter_count < GLTANG_JIT_SMALL_FRAME
++  const uint32_t exit = f->out_words <= GLTANG_JIT_SMALL_FRAME && f->parameter_count < GLTANG_JIT_SMALL_FRAME && !jit  /* planted: always the large frame */
+       ? call_small(f, stack, context, exec, &out0)
+       : call_large(f, stack, context, exec, &out0);
+   if (!checked && exit != GRJIT_EXIT_REFUSED && f->state == GLTANG_JITFN_COMPILED && f->jcode == called) {

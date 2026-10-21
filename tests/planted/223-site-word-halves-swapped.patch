@@ -1,0 +1,18 @@
+# 223 compiled code stores an operation's position with its two words swapped
+# defect: emit_site's one 64-bit store of the function and the offset (story 4e; it was two 32-bit
+#   stores) puts the offset in the function's word, so an error a compiled helper makes, and a poll
+#   inside one, name another place than the interpreter's
+# caught by: the template tests, which compare each tier's errors, polls and identities
+#   (testJit_templates)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1537,7 +1537,7 @@
+       "the position's two words are adjacent, the function's first");
+   _Static_assert(offsetof(GLTANG_Execution, current_function) % sizeof(uint64_t) == 0, "the position's two words are one aligned 64-bit word");
+   B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_function), 64,
+-      I((int64_t)(((uint64_t)i << 32) | (uint64_t)c->function_index))));
++      I((int64_t)(((uint64_t)c->function_index << 32) | (uint64_t)i))));  /* planted: the halves swapped */
+ #else
+   B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_function), 32, I((int64_t)c->function_index)));
+   B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_offset), 32, I((int64_t)i)));

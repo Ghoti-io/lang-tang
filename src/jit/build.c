@@ -1529,8 +1529,19 @@ static void emit_call(Ctx * c, uint32_t i, uint32_t d, uint32_t n, uint32_t k) {
 
 /** Records where the instruction at `i` is, as the interpreter's SYNC does, for the errors the call makes and for a native's poll. */
 static void emit_site(Ctx * c, uint32_t i) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  // The two words are adjacent and the targets little-endian: one 64-bit store of both, which is
+  // half the machine code of two (a site is stored before nearly every template op, and a
+  // template's code is what the instruction cache has to hold; story 4e).
+  _Static_assert(offsetof(GLTANG_Execution, current_offset) == offsetof(GLTANG_Execution, current_function) + sizeof(uint32_t),
+      "the position's two words are adjacent, the function's first");
+  _Static_assert(offsetof(GLTANG_Execution, current_function) % sizeof(uint64_t) == 0, "the position's two words are one aligned 64-bit word");
+  B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_function), 64,
+      I((int64_t)(((uint64_t)i << 32) | (uint64_t)c->function_index))));
+#else
   B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_function), 32, I((int64_t)c->function_index)));
   B(grjit_builder_store(c->b, c->ep, (int32_t)offsetof(GLTANG_Execution, current_offset), 32, I((int64_t)i)));
+#endif
 }
 
 /**
@@ -1550,7 +1561,19 @@ static void emit_native_at(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const G
   fill_state(c, c->state2, i + 1u, after_depth);
   GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
   GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
-  B(grjit_builder_call_native(c->b, dst, id, args, argc, &before, &after));
+  if (id >= GLTANG_JIT_NATIVE_USE) {
+    // A template op's thunk takes the execution first (natives.c, execution_from).
+    GRJIT_Operand with_execution[8];
+    assert(argc + 1u <= sizeof(with_execution) / sizeof(with_execution[0]) && "a template op's native takes at most seven arguments");
+    with_execution[0] = I((int64_t)(intptr_t)c->exec);
+    for (size_t k = 0; k < argc; ++k) {
+      with_execution[1u + k] = args[k];
+    }
+    B(grjit_builder_call_native(c->b, dst, id, with_execution, argc + 1u, &before, &after));
+  }
+  else {
+    B(grjit_builder_call_native(c->b, dst, id, args, argc, &before, &after));
+  }
   c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
 }
 
@@ -1895,7 +1918,8 @@ static void emit_literal(Ctx * c, uint32_t i, uint32_t d, uint32_t a, bool map) 
   const uint32_t count = map ? 2u * a : a;
   const uint32_t at = d - count;
   GRJIT_Operand args[6];
-  args[0] = I((int64_t)a);
+  args[0] = I((int64_t)(intptr_t)c->exec);  // the thunk takes the execution first (natives.c)
+  args[1] = I((int64_t)a);
   emit_site(c, i);
   flush_cost(c);
   fill_state(c, c->state, i, d);
@@ -1903,7 +1927,7 @@ static void emit_literal(Ctx * c, uint32_t i, uint32_t d, uint32_t a, bool map) 
   c->state2[H + c->lc + at] = grjit_frame_slot_vreg(c->built);
   GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
   GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
-  B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 1, &before, &after));
+  B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 2, &before, &after));
   c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
   const uint32_t chunk = map ? 2u * GLTANG_JIT_FILL_PAIRS : GLTANG_JIT_FILL_ELEMENTS;
   for (uint32_t done = 0; done < count; done += chunk) {

@@ -8,12 +8,12 @@
 #
 --- a/src/jit/jit.c
 +++ b/src/jit/jit.c
-@@ -465,7 +465,7 @@
+@@ -537,7 +537,7 @@
+   // them there).
    const size_t ext_base = jit->ext_count;
    const size_t ext_outer_floor = jit->ext_floor;
-   const GLTANG_JitCode * jc = grcore_code_payload(f->code);
--  if (jc->max_converting != 0 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {
-+  if (jc->max_converting > 1 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {  /* planted: one raw float is not extended for */
+-  if (f->max_converting != 0 && !gltang_jit_extend(exec, f->max_converting, 0, fword)) {
++  if (f->max_converting > 1 && !gltang_jit_extend(exec, f->max_converting, 0, fword)) {  /* planted: one raw float is not extended for */
      return GLTANG_JIT_NOT_ENTERED;
    }
    // The native-depth budget (AD-21): a refusal means "not this time", and the

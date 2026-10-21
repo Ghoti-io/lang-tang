@@ -6,8 +6,8 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -189,7 +189,7 @@
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+@@ -206,7 +206,7 @@
+   GLTANG_Execution * exec = execution_from(context, execution);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
    ++exec->jit_stats.output_calls;
 -  exec->standing = true;
@@ -15,8 +15,8 @@
    // The operand is in the call's frame state, as it is on the interpreter's operand
    // stack while its PRINT runs: the value is replaced by the result, null or an error.
    GLTANG_Value result = gltang_vm_op_print(exec, value);
-@@ -201,7 +201,7 @@
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+@@ -218,7 +218,7 @@
+   GLTANG_Execution * exec = execution_from(context, execution);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT_CONST];
    ++exec->jit_stats.output_calls;
 -  exec->standing = true;

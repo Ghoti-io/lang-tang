@@ -7,8 +7,8 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1786,9 +1786,12 @@
-   args[0] = I((int64_t)a);
+@@ -1922,9 +1922,12 @@
+   args[1] = I((int64_t)a);
    emit_site(c, i);
    flush_cost(c);
 -  fill_state(c, c->state, i, d);
@@ -20,8 +20,8 @@
 +  }
    GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
    GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
-   B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 1, &before, &after));
-@@ -1804,7 +1807,7 @@
+   B(grjit_builder_call_native(c->b, c->built, map ? GLTANG_JIT_NATIVE_MAP : GLTANG_JIT_NATIVE_ARRAY, args, 2, &before, &after));
+@@ -1940,7 +1943,7 @@
        args[argc++] = I((int64_t)n);
      }
      for (uint32_t k = 0; k < chunk; ++k) {

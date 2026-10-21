@@ -6,8 +6,8 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -251,8 +251,7 @@
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+@@ -268,8 +268,7 @@
+   GLTANG_Execution * exec = execution_from(context, execution);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_INDEX];
    ++exec->jit_stats.value_calls;
 -  // A string's grapheme is a substring, paced by its bytes.

@@ -178,6 +178,8 @@ static void discard(GLTANG_Execution * exec, GLTANG_JitFn * f) {
   grcore_code_release(f->code);
   f->code = NULL;
   f->max_converting = 0;
+  f->jcode = NULL;
+  f->entry = NULL;
   f->state = GLTANG_JITFN_NEVER;
 }
 
@@ -318,6 +320,10 @@ bool gltang_jit_compile_function(GLTANG_Execution * exec, uint64_t fword) {
   f->code = handle;
   f->start = start;
   f->max_converting = jc->max_converting;
+  f->jcode = jc->code;
+  f->entry = NULL;  // the first call is checked (gltang_jit_enter)
+  f->out_words = (uint32_t)grjit_code_out_words(jc->code);
+  f->parameter_count = jc->parameter_count;
   jit->floaty = jit->floaty || jc->max_converting != 0;
   f->state = GLTANG_JITFN_COMPILED;
   ++exec->jit_stats.functions_compiled;
@@ -451,6 +457,64 @@ void gltang_jit_return_depth(GLTANG_Execution * exec, size_t lent) {
   jit->depth_lent -= lent;
 }
 
+/**
+ * The call of compiled code from the interpreter, with the arguments (the parameters, then the
+ * hidden flag: 1 from here, because the interpreter has made this function's entry poll; a
+ * compiled call passes 0 and the callee makes its own) and the words an exit writes (`out`, of
+ * grjit_code_out_words) in arrays of this function's own frame. A function with no parameters (a
+ * template's function 0, a program's top level) reads nothing of the guest frame. Only `out[0]`
+ * is read after the call (the value returned, or the exit's cause), into `*out0`.
+ *
+ * Two sizes, so that what the arrays need is paid only by the functions that need it: arrays for
+ * the largest frame (GLTANG_JIT_MAX_SLOTS, 16 KiB) put compiled code, and every native and helper it
+ * calls, 16 KiB below the interpreter's frame on every entry, on stack pages and data-TLB entries
+ * the interpreter never touches (story 4e: the per-call working set of a compiled template's call
+ * was a quarter more pages than the interpreted one's, which a 32-entry TLB does not hold). Each is
+ * its own function, not inlined into gltang_jit_enter, so the large one's frame exists only while
+ * it runs.
+ */
+#define GLTANG_JIT_SMALL_FRAME 32u
+#if defined(__GNUC__) || defined(__clang__)
+#define GLTANG_JIT_NOINLINE __attribute__((noinline))
+#else
+#define GLTANG_JIT_NOINLINE
+#endif
+
+#define GLTANG_JIT_CALL_BODY(words) \
+  uint64_t args[(words)]; \
+  uint64_t out[(words)]; \
+  if (call->parameter_count != 0) { \
+    const uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack)); \
+    for (uint32_t k = 0; k < call->parameter_count; ++k) { \
+      args[k] = S[H + k]; \
+    } \
+  } \
+  args[call->parameter_count] = 1u; \
+  out[0] = 0; \
+  const uint32_t exit = call->entry ? call->entry(context, exec, args, out) : grjit_code_call(call->jcode, context, exec, args, out); \
+  *out0 = out[0]; \
+  return exit
+
+// The entry is generated code, which carries no type signature in front of it: clang's
+// -fsanitize=function would read one at the indirect call (grjit_code_call says the same of its own).
+#if defined(__clang__)
+#define GLTANG_JIT_NO_FUNCTION_SANITIZER __attribute__((no_sanitize("function")))
+#else
+#define GLTANG_JIT_NO_FUNCTION_SANITIZER
+#endif
+
+GLTANG_JIT_NOINLINE GLTANG_JIT_NO_FUNCTION_SANITIZER static uint32_t call_small(const GLTANG_JitFn * call, GRCORE_Stack * stack, GRCORE_Context * context, GLTANG_Execution * exec, uint64_t * out0) {
+  GLTANG_JIT_CALL_BODY(GLTANG_JIT_SMALL_FRAME);
+}
+
+GLTANG_JIT_NOINLINE GLTANG_JIT_NO_FUNCTION_SANITIZER static uint32_t call_large(const GLTANG_JitFn * call, GRCORE_Stack * stack, GRCORE_Context * context, GLTANG_Execution * exec, uint64_t * out0) {
+  GLTANG_JIT_CALL_BODY(GLTANG_JIT_MAX_SLOTS + 2u);
+}
+
+#undef GLTANG_JIT_CALL_BODY
+#undef GLTANG_JIT_NOINLINE
+#undef GLTANG_JIT_NO_FUNCTION_SANITIZER
+
 GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * context, uint64_t fword, GLTANG_Value * out_value) {
   GLTANG_Jit * jit = exec->jit;
   if (!jit) {
@@ -473,8 +537,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   // them there).
   const size_t ext_base = jit->ext_count;
   const size_t ext_outer_floor = jit->ext_floor;
-  const GLTANG_JitCode * jc = grcore_code_payload(f->code);
-  if (jc->max_converting != 0 && !gltang_jit_extend(exec, jc->max_converting, 0, fword)) {
+  if (f->max_converting != 0 && !gltang_jit_extend(exec, f->max_converting, 0, fword)) {
     return GLTANG_JIT_NOT_ENTERED;
   }
   // The native-depth budget (AD-21): a refusal means "not this time", and the
@@ -487,27 +550,12 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
     return GLTANG_JIT_NOT_ENTERED;
   }
   ++jit->records_open;
-  // One reference for the duration of the call, so code discarded during the
-  // run (a deopt that was the eighth) is freed only after the call ends.
-  GRCORE_Code * handle = grcore_code_retain(f->code);
-  // The payload again, from the reference held for the call: the extension above allocates, and
-  // `jc` was read before it.
-  jc = grcore_code_payload(handle);
-  uint64_t args[GLTANG_JIT_MAX_SLOTS];
-  uint64_t out[GLTANG_JIT_MAX_SLOTS + 2u];
-  {
-    // The parameters, then the hidden flag: 1 from here, because the interpreter
-    // has made this function's entry poll; a compiled call passes 0 and the
-    // callee makes its own. A function with none (a template's function 0, a
-    // program's top level) reads nothing of the guest frame.
-    if (jc->parameter_count != 0) {
-      const uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
-      for (uint32_t k = 0; k < jc->parameter_count; ++k) {
-        args[k] = S[H + k];
-      }
-    }
-    args[jc->parameter_count] = 1u;
-  }
+  // No reference of its own is taken for the call: code discarded while it runs (a nested
+  // run's deopt that was the eighth) loses only the cache's reference, and the registry's and
+  // the slot's are retired, not released, while this JIT record is open (registry.h), so the code
+  // outlives the call. What the call needs of the code was copied into `f` when it was
+  // installed (gltang_jit_compile_function), and `f` itself does not move (a program's records
+  // are allocated once), so neither the handle nor its payload is read on the way in or out.
   ++exec->jit_stats.entries;
   // A nested entry (a native re-entering guest code, AD-23) runs inside the
   // chain of an outer run: its own count starts at zero and the outer's is put
@@ -517,7 +565,20 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   jit->exit_valid = false;
   jit->refusal = GLTANG_REFUSAL_NONE;
   jit->ext_floor = jit->ext_count;  // this run's calls extend above its entry's own
-  uint32_t exit = grjit_code_call(jc->code, context, exec, args, out);
+  uint64_t out0 = 0;
+  const GRJIT_Code * const called = f->jcode;
+  const bool checked = f->entry != NULL;
+  const uint32_t exit = f->out_words <= GLTANG_JIT_SMALL_FRAME && f->parameter_count < GLTANG_JIT_SMALL_FRAME
+      ? call_small(f, stack, context, exec, &out0)
+      : call_large(f, stack, context, exec, &out0);
+  if (!checked && exit != GRJIT_EXIT_REFUSED && f->state == GLTANG_JITFN_COMPILED && f->jcode == called) {
+    // The first call went through grjit_code_call, which refuses code built against another
+    // layout of the context than the runtime-core loaded (a core and a JIT of different
+    // versions). It did not refuse, and the layout does not change while the process runs, so
+    // later calls take the entry point itself (grjit_code_entry, the same calling convention),
+    // without reading the code's record and the core's layout again on every call.
+    f->entry = grjit_code_entry(called);
+  }
   // Every exit gives back everything the run opened, the entry's own included
   // (nothing, for a run that extended nothing).
   if (jit->ext_count != ext_base) {
@@ -536,14 +597,14 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
   switch (exit) {
     case GRJIT_EXIT_RETURNED:
       ++exec->jit_stats.returns;
-      *out_value = out[0];
+      *out_value = out0;
       result = GLTANG_JIT_RETURNED;
       break;
     case GRJIT_EXIT_DEOPT: {
       // Every compiled frame of the chain has been rebuilt into its guest frame
       // by the deopt hook; the cause is the poll helper's answer, or 0 for a
       // guard or an exit at a call, or a native's status with the native bit.
-      uint64_t cause = out[0];
+      uint64_t cause = out0;
       exec->jit_stats.last_exit_cause = cause;
       if (cause == 0) {
         ++exec->jit_stats.deopts;
@@ -587,7 +648,7 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
       // own (every frame it pushed is popped, nothing is interpreted on them, no
       // value is made), never continued.
       ++exec->jit_stats.rebuild_failures;
-      exec->jit_stats.last_exit_cause = out[0];
+      exec->jit_stats.last_exit_cause = out0;
       result = GLTANG_JIT_UNWOUND;
       break;
     default:
@@ -595,13 +656,12 @@ GLTANG_JitExit gltang_jit_enter(GLTANG_Execution * exec, GRCORE_Context * contex
       // occur for callable code (the entry has no hook of its own), so the same
       // fatal end.
       ++exec->jit_stats.rebuild_failures;
-      exec->jit_stats.last_exit_cause = out[0];
+      exec->jit_stats.last_exit_cause = out0;
       result = GLTANG_JIT_UNWOUND;
       break;
   }
   jit->exit_valid = false;
   jit->exit_expected = false;
-  grcore_code_release(handle);
   if (counted) {
     // The function whose frame was innermost at the exit is charged for it. At the
     // eighth it is let go: its slot is refused, its range unregistered and the

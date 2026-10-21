@@ -6,8 +6,8 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -275,8 +275,7 @@
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+@@ -292,8 +292,7 @@
+   GLTANG_Execution * exec = execution_from(context, execution);
    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ATTR];
    ++exec->jit_stats.value_calls;
 -  // A retag (`.html` and the others) and `.render` poll inside, at the `ATTR`.

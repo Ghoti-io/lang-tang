@@ -5,10 +5,10 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -282,7 +282,7 @@
+@@ -304,7 +304,7 @@
  
- static GRJIT_NativeResult thunk_cast(void * context, uint64_t value, uint64_t type) {
-   GLTANG_Execution * exec = gltang_vm_execution_of(context);
+ static GRJIT_NativeResult thunk_cast(void * context, uint64_t execution, uint64_t value, uint64_t type) {
+   GLTANG_Execution * exec = execution_from(context, execution);
 -  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CAST];
 +  /* planted: no fuel */
    ++exec->jit_stats.value_calls;
