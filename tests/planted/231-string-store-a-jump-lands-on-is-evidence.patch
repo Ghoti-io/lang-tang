@@ -1,0 +1,19 @@
+# 231 a store that a jump lands on is taken for a store of the string constant before it
+# defect: scan_strings does not look at jump targets, so `t = c ? 2 : "s"` (the CONST of "s" is the instruction
+#   before the store, which the arm of 2 jumps to) is evidence that t holds a string, and `t + x`, with x raw,
+#   is compiled as a raw float's concatenation, whose test of t fails for the 2 at every call: a guard exit
+#   that counts, where float arithmetic would have had none
+# caught by: the string the scan cannot see, the merge's counted exits
+#   (testJit_templates, JitTemplates.AStringTheScanCannotSee*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -799,7 +799,7 @@
+     for (uint32_t j = 0; j < f->code_count; ++j) {
+       const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(f->code[j]);
+       const uint32_t a = GLTANG_INSTRUCTION_A(f->code[j]);
+-      const bool string = after_string && !targets[j];
++      const bool string = after_string;  /* planted: a jump target is no different */
+       if (op == GLTANG_OP_STORE_GLOBAL) {
+         note_string_store(c->global_str, c->program->global_count, a, string);
+       }

@@ -4,11 +4,11 @@
 #
 --- a/src/vm/text.c
 +++ b/src/vm/text.c
-@@ -662,6 +662,7 @@
+@@ -722,6 +722,7 @@
    gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
    bool too_deep = false;
    GLTANG_Status st = gltang_vm_render(&sink, v, GLTANG_RENDER_PRINT, 0, &too_deep);
 +  (void)output_deliver(exec); /* planted: delivered before it is known to be whole */
-   if (st != GLTANG_ST_OK || too_deep) {
-     output_rollback(exec->out);
-     return st != GLTANG_ST_OK ? gltang_vm_failure_value(exec, st) : gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+   return print_finish(exec, st, too_deep);
+ }
+ 

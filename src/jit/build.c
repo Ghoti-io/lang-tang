@@ -90,6 +90,12 @@
  * runtime-jit's verifier requires, in the shapes it recognizes (`guard_nonzero`, the
  * minimum-over-minus-one pair, `trunc_small`).
  *
+ * A raw float's text (spec-template-compiled story 4g): its print, its `+` with a string (either side)
+ * and its cast to string are calls of the interpreter's functions of a float, given the double
+ * (emit_print_float, emit_concat_float, emit_float_string), so they are no exit. Which `+` a raw float's
+ * is, float arithmetic or a concatenation, is decided by evidence of a string beside it (add_concat), or,
+ * where there is none and what follows takes a value word either way, by emitting both (emit_add_fused).
+ *
  * Fuel is the same on every tier: every executed bytecode costs
  * `gltang_opcode_cost_table[op]`. Compiled code adds it directly to the
  * execution's `pending_fuel`, one add for each straight run of operations, before
@@ -171,7 +177,10 @@ typedef struct Ctx {
   int32_t * call_k;               ///< Per index of a CALL: the function it calls, or -1 (an exit).
   const GLTANG_LibraryMember ** call_member;  ///< Per index of a CALL: the library native it calls, or NULL.
   uint32_t * attr_src;            ///< Per index of an ATTR: the instruction that produced the operand it reads.
-  uint8_t * str_side;             ///< Per index of an ADD: bit 0, its left operand is a string constant (the CONST that pushed it); bit 1, its right.
+  uint8_t * str_side;             ///< Per index of an ADD: bit 0, its left operand is a string constant (the CONST that pushed it); bit 1, its right; bits 2 and 3, the left and the right are string-evident (string_evident); bit 4, its value is.
+  uint8_t * global_str;           ///< Per global: whether every store of it the scan saw stores a string constant (STR_*), for string_evident; NULL where no scan was run.
+  uint8_t * local_str;            ///< The same for this function's locals.
+  bool * fused;                   ///< Per index: emitted with a `+` before it (emit_add_fused), so not on its own; made at the first.
   uint32_t * cast_src;            ///< Per index of a CAST to int: the float constant its operand is (the CONST that pushed it, raw), or PROD_NONE.
   bool * load_ok;                 ///< Per index of a USE or ATTR: compiled as a member load.
   uint8_t * end_kind;             ///< Per index reached by the walk: how the walk ended there, if it did (END_*).
@@ -257,6 +266,58 @@ static bool string_constant(const Ctx * c, uint32_t index) {
 static bool string_producer(const Ctx * c, uint32_t producer) {
   return producer != PROD_NONE && producer < c->fn->code_count && GLTANG_INSTRUCTION_OP(c->fn->code[producer]) == GLTANG_OP_CONST
       && string_constant(c, GLTANG_INSTRUCTION_A(c->fn->code[producer]));
+}
+
+/** What the scan of a variable's stores found (`global_str`, `local_str`). */
+enum { STR_NONE = 0, STR_ALL, STR_OTHER };
+
+/** The bits of `str_side`. */
+enum { STR_LEFT_CONST = 1u, STR_RIGHT_CONST = 2u, STR_LEFT = 4u, STR_RIGHT = 8u, STR_MADE = 16u };
+
+/**
+ * Whether the value an instruction produced is evidence of a string, for a `+` beside a raw float
+ * (spec-template-compiled story 4g): a string constant, a cast to string, a `+` that concatenates
+ * (one of its operands is such evidence, or it is a raw float's concatenation), or the load of a
+ * variable every store of which, in the code scanned, stores a string constant (scan_strings). Only
+ * evidence: the `+` it decides tests the operand when it runs, and anything but a string is a guard
+ * exit, so a wrong guess costs speed, never a value. It decides between the two things a `+` with a
+ * raw float can be, which have results of two kinds: a concatenation (a value word) and float
+ * arithmetic (a raw double). Without it a value word beside a raw float is taken for a number, as
+ * before, since a counter beside a float (`i + 0.5`) is the common case.
+ */
+static bool string_evident(const Ctx * c, uint32_t producer) {
+  if (producer == PROD_NONE || producer >= c->fn->code_count) {
+    return false;
+  }
+  const uint32_t a = GLTANG_INSTRUCTION_A(c->fn->code[producer]);
+  switch (GLTANG_INSTRUCTION_OP(c->fn->code[producer])) {
+    case GLTANG_OP_CONST:
+      return string_constant(c, a);
+    case GLTANG_OP_CAST:
+      return a == GLTANG_CAST_TYPE_STRING;
+    case GLTANG_OP_ADD:
+      return (c->str_side[producer] & STR_MADE) != 0;  // as the walk that reached it decided
+    case GLTANG_OP_LOAD_GLOBAL:
+      return c->global_str && a < c->program->global_count && c->global_str[a] == STR_ALL;
+    case GLTANG_OP_LOAD_LOCAL:
+      return c->local_str && a >= c->params && a < c->lc && c->local_str[a] == STR_ALL;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether the `+` at `i`, with `d` operands and the kinds as they stand, is a raw float's
+ * concatenation: one operand raw and the other string-evident, where natives can be called (the
+ * concatenation is a call of the table). Its value is then a value word, not a raw double.
+ */
+static bool add_concat(const Ctx * c, uint32_t i, int32_t d) {
+  if (!c->natives_on || !c->str_side || d < 2) {
+    return false;
+  }
+  const bool left_raw = c->sk[d - 2] == KIND_F64;
+  const bool right_raw = c->sk[d - 1] == KIND_F64;
+  return (left_raw && !right_raw && (c->str_side[i] & STR_RIGHT)) || (right_raw && !left_raw && (c->str_side[i] & STR_LEFT));
 }
 
 /** Whether an instruction other than CALL is compiled inline, or is a deoptimization exit. */
@@ -405,23 +466,27 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
     case GLTANG_OP_OR:
     case GLTANG_OP_RET:
     case GLTANG_OP_ATTR:
-    // A raw float printed is boxed by the exit and printed by the interpreter, so its
-    // text is the interpreter's and compiled code never boxes (AD-27).
-    case GLTANG_OP_PRINT:
-    // The same for a raw float stored in a global, made the statement result or
-    // discarded: each keeps a value word where the interpreter keeps one, so the float is
-    // boxed by the exit (AD-27), and the interpreter runs the operation.
+    // A raw float stored in a global, made the statement result or discarded: each keeps a
+    // value word where the interpreter keeps one, so the float is boxed by the exit (AD-27),
+    // and the interpreter runs the operation.
     case GLTANG_OP_STORE_GLOBAL:
     case GLTANG_OP_SET_RESULT:
     case GLTANG_OP_DISCARD:
       return d >= 1 && c->sk[d - 1] == KIND_F64;
+    // A raw float printed is the interpreter's print of a float given the double (story 4g,
+    // emit_print_float), where natives can be called: one implementation of its text and no box.
+    // Where they cannot, it is boxed by the exit and printed by the interpreter.
+    case GLTANG_OP_PRINT:
+      return d >= 1 && c->sk[d - 1] == KIND_F64 && !c->natives_on;
     // `%` is integers only: with a raw operand the interpreter reports "not supported".
     case GLTANG_OP_MOD:
       return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);
-    // A cast to int or to float reads a raw operand; to bool and to string with one is the designed
-    // box exit, and the interpreter makes the text (a raw-float to-string is not compiled).
+    // A cast to int or to float reads a raw operand, and so does a cast to string where natives can
+    // be called (story 4g: the interpreter's to-string of a float, given the double). To bool, and to
+    // string where they cannot, a raw operand is the designed box exit.
     case GLTANG_OP_CAST:
-      return d >= 1 && c->sk[d - 1] == KIND_F64 && a != GLTANG_CAST_TYPE_INTEGER && a != GLTANG_CAST_TYPE_FLOAT;
+      return d >= 1 && c->sk[d - 1] == KIND_F64
+          && (a == GLTANG_CAST_TYPE_BOOLEAN || (a == GLTANG_CAST_TYPE_STRING && !c->natives_on));
     // An index or a slice of a raw float, or by one: the float is boxed by the exit and the
     // interpreter runs the operation (its error), so the helper is never given one raw.
     case GLTANG_OP_INDEX:
@@ -453,13 +518,15 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
       return false;
     }
     // `+` with a raw float on one side and a string constant on the other is a concatenation,
-    // which converts the float to text: the designed box exit, and the interpreter makes the
-    // text (a raw-float concatenation is planning/unboxed-float-output.md's). With any other
-    // operand beside a raw float it is float arithmetic, whose unbox is a guard (a string from
-    // a variable fails it, a real exit).
+    // which converts the float to text. Where natives can be called it is compiled (story 4g,
+    // add_concat: the interpreter's concatenation given the double, beside any string-evident
+    // operand); where they cannot, it is the designed box exit, and the interpreter makes the text.
+    // With any other operand beside a raw float it is float arithmetic, whose unbox is a guard (a
+    // string fails it, a real exit), except where what follows makes its value a value word
+    // either way (emit_add_fused).
     case GLTANG_OP_ADD:
-      if (d >= 2 && c->str_side) {
-        return (c->sk[d - 2] == KIND_F64 && (c->str_side[i] & 2u)) || (c->sk[d - 1] == KIND_F64 && (c->str_side[i] & 1u));
+      if (d >= 2 && c->str_side && !c->natives_on) {
+        return (c->sk[d - 2] == KIND_F64 && (c->str_side[i] & STR_RIGHT_CONST)) || (c->sk[d - 1] == KIND_F64 && (c->str_side[i] & STR_LEFT_CONST));
       }
       return false;
     // These read a raw operand and compute with it (float arithmetic, a comparison, a negation).
@@ -515,7 +582,7 @@ static bool reads_raw(const Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, i
 }
 
 /** The effect on the kinds of an instruction that flows on (an exit changes nothing, since nothing follows it). */
-static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
+static bool apply_kinds(Ctx * c, uint32_t i, GLTANG_Opcode op, uint32_t a, int32_t d) {
   int64_t unused;
   switch (op) {
     case GLTANG_OP_DUP:
@@ -567,8 +634,10 @@ static bool apply_kinds(Ctx * c, GLTANG_Opcode op, uint32_t a, int32_t d) {
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
     case GLTANG_OP_DIV:
-      // A float result stays raw: either operand being raw makes the operation a float one.
-      set_stack_kind(c, (uint32_t)d - 2u, c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64 ? KIND_F64 : KIND_REF);
+      // A float result stays raw: either operand being raw makes the operation a float one, but for a
+      // raw float's concatenation (add_concat), whose value is a string.
+      set_stack_kind(c, (uint32_t)d - 2u,
+          (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64) && !(op == GLTANG_OP_ADD && add_concat(c, i, d)) ? KIND_F64 : KIND_REF);
       break;
     case GLTANG_OP_MOD:
     case GLTANG_OP_LT:
@@ -690,6 +759,84 @@ static void scan_uses(Ctx * c) {
       }
       else if (store == GLTANG_OP_STORE_LOCAL && f == c->fn) {
         note_declaration(c->local_use, c->lc, slot, GLTANG_INSTRUCTION_A(w));
+      }
+    }
+  }
+}
+
+/**
+ * Whether the function has a raw source at all: a float constant or a cast to float, from which every
+ * raw float compiled code holds is made. Without one no `+` is ever a raw float's, and scan_strings,
+ * whose answer only such a `+` reads, is not run (it reads function 0 too, a cost every compile of a
+ * function with no float would pay for nothing).
+ */
+static bool has_float_source(const Ctx * c) {
+  int64_t unused;
+  for (uint32_t j = 0; j < c->fn->code_count; ++j) {
+    const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(c->fn->code[j]);
+    const uint32_t a = GLTANG_INSTRUCTION_A(c->fn->code[j]);
+    if ((op == GLTANG_OP_CONST && float_constant(c, a, &unused)) || (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_FLOAT)) {
+      return true;
+    }
+    if (op == GLTANG_OP_ITER_NEXT) {
+      ++j;  // the second word is a jump target, not an instruction
+    }
+  }
+  return false;
+}
+
+/** Notes one store of a variable for scan_strings: of a string constant, or of anything else. */
+static void note_string_store(uint8_t * table, uint32_t count, uint32_t slot, bool string) {
+  if (slot >= count) {
+    return;
+  }
+  table[slot] = !string ? STR_OTHER : table[slot] == STR_NONE ? STR_ALL : table[slot];
+}
+
+/**
+ * Which variables hold a string constant wherever they are stored (story 4g, string_evident): the
+ * stores of a global in function 0 and in this function, and of a local in this function, each
+ * either `CONST k; STORE_x s` with k a string constant (the assignment of one) or anything else. A
+ * store that a jump lands on takes its value from more than the instruction before it, so it is
+ * anything else. Only evidence, as string_evident says: a store the scan does not see (another
+ * function's, the host's) can only make the guess wrong, which a test when it runs catches.
+ * `targets` is scratch for one function's jump targets, as long as the longer of the two.
+ */
+static void scan_strings(Ctx * c, bool * targets) {
+  for (int pass = 0; pass < 2; ++pass) {
+    const GLTANG_Function * f = pass == 0 ? &c->program->functions[0] : c->fn;
+    if (pass == 1 && f == &c->program->functions[0]) {
+      break;  // the top level is the function: its stores were just read
+    }
+    memset(targets, 0, f->code_count * sizeof(bool));
+    for (uint32_t j = 0; j < f->code_count; ++j) {
+      const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(f->code[j]);
+      const uint32_t a = GLTANG_INSTRUCTION_A(f->code[j]);
+      if ((op == GLTANG_OP_JMP || op == GLTANG_OP_JMP_FALSE || op == GLTANG_OP_JMP_TRUE || op == GLTANG_OP_AND || op == GLTANG_OP_OR) && a < f->code_count) {
+        targets[a] = true;
+      }
+      if (op == GLTANG_OP_ITER_NEXT) {
+        if (j + 1u < f->code_count && f->code[j + 1u] < f->code_count) {
+          targets[f->code[j + 1u]] = true;  // its second word is where it jumps
+        }
+        ++j;
+      }
+    }
+    bool after_string = false;  // the instruction before is the CONST of a string
+    for (uint32_t j = 0; j < f->code_count; ++j) {
+      const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(f->code[j]);
+      const uint32_t a = GLTANG_INSTRUCTION_A(f->code[j]);
+      const bool string = after_string && !targets[j];
+      if (op == GLTANG_OP_STORE_GLOBAL) {
+        note_string_store(c->global_str, c->program->global_count, a, string);
+      }
+      else if (op == GLTANG_OP_STORE_LOCAL && f == c->fn) {
+        note_string_store(c->local_str, c->lc, a, string);
+      }
+      after_string = op == GLTANG_OP_CONST && string_constant(c, a);
+      if (op == GLTANG_OP_ITER_NEXT) {
+        ++j;  // the second word is a jump target, not an instruction
+        after_string = false;
       }
     }
   }
@@ -932,9 +1079,18 @@ static GLTANG_Result analyse_once(Ctx * c) {
       int32_t branch_depth = d;
       c->end_kind[i] = END_NONE;  // this walk decides how the instruction ends: a walk of it with other kinds is not remembered
       if (op == GLTANG_OP_ADD && d >= 2) {
-        // Which side is a string constant, as this walk's producers say (the last walk's is
-        // what the emission reads, as for every other decision of the walk).
-        c->str_side[i] = (uint8_t)((string_producer(c, c->cur[d - 2]) ? 1u : 0u) | (string_producer(c, c->cur[d - 1]) ? 2u : 0u));
+        // Which side is a string constant, and which is string-evident, as this walk's producers
+        // say (the last walk's is what the emission reads, as for every other decision of the
+        // walk); and whether its own value is: a concatenation of two value words with a
+        // string-evident one, or a raw float's.
+        const bool left = string_evident(c, c->cur[d - 2]);
+        const bool right = string_evident(c, c->cur[d - 1]);
+        c->str_side[i] = (uint8_t)((string_producer(c, c->cur[d - 2]) ? STR_LEFT_CONST : 0u) | (string_producer(c, c->cur[d - 1]) ? STR_RIGHT_CONST : 0u)
+            | (left ? STR_LEFT : 0u) | (right ? STR_RIGHT : 0u));
+        const bool refs = c->sk[d - 2] == KIND_REF && c->sk[d - 1] == KIND_REF;
+        if ((refs && (left || right)) || add_concat(c, i, d)) {
+          c->str_side[i] |= STR_MADE;
+        }
       }
       if (op == GLTANG_OP_CAST && a == GLTANG_CAST_TYPE_INTEGER && d >= 1) {
         // Whether the operand is a float constant, raw as it stands (this walk's producer and
@@ -1131,7 +1287,7 @@ static GLTANG_Result analyse_once(Ctx * c) {
       if (after > (int32_t)c->ms) {
         return GLTANG_ERR_INTERNAL;
       }
-      if (!apply_kinds(c, op, a, d)) {
+      if (!apply_kinds(c, i, op, a, d)) {
         return GLTANG_ERR_INTERNAL;
       }
       if (branch) {
@@ -1552,13 +1708,29 @@ static void emit_site(Ctx * c, uint32_t i) {
  * The position is stored first (`site`) unless the native records it itself, where
  * the interpreter's does only sometimes (a string constant, made on first use).
  */
-static void emit_native_at(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth, bool site) {
+/** No operand position whose kind the call changes (emit_native_state). */
+#define RESULT_KIND_KEPT UINT32_MAX
+
+/**
+ * emit_native_at, for a call whose result replaces a raw operand (story 4g): the frame state after
+ * the call names the operand position `result_at` as a value word, the result's, where the one
+ * before names the raw double.
+ */
+static void emit_native_state(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth, bool site,
+    uint32_t result_at) {
   if (site) {
     emit_site(c, i);
   }
   flush_cost(c);
   fill_state(c, c->state, i, d);
+  const uint8_t kept = result_at != RESULT_KIND_KEPT ? c->sk[result_at] : KIND_REF;
+  if (result_at != RESULT_KIND_KEPT) {
+    c->sk[result_at] = KIND_REF;
+  }
   fill_state(c, c->state2, i + 1u, after_depth);
+  if (result_at != RESULT_KIND_KEPT) {
+    c->sk[result_at] = kept;
+  }
   GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
   GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
   if (id >= GLTANG_JIT_NATIVE_USE) {
@@ -1575,6 +1747,10 @@ static void emit_native_at(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const G
     B(grjit_builder_call_native(c->b, dst, id, args, argc, &before, &after));
   }
   c->native_sites[i >> 3] |= (uint8_t)(1u << (i & 7u));
+}
+
+static void emit_native_at(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth, bool site) {
+  emit_native_state(c, i, d, id, args, argc, dst, after_depth, site, RESULT_KIND_KEPT);
 }
 
 static void emit_native(Ctx * c, uint32_t i, uint32_t d, uint32_t id, const GRJIT_Operand * args, size_t argc, GRJIT_VReg dst, uint32_t after_depth) {
@@ -1707,6 +1883,277 @@ static void emit_print_const(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
   emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT_CONST, args, 1, GRJIT_NO_VREG, d, false);
   branch_to(c, fast);  // the fast path does nothing more: both go on from it
   set_block(c, fast);
+}
+
+// ---------------------------------------------------------------------------
+// A raw float's text (spec-template-compiled story 4g): its print, its `+` with a string and its
+// cast to string, compiled where natives can be called. Compiled code holds the float as a raw
+// double (AD-27) and never boxes it: each operation is the interpreter's function of a float
+// object of that value, given the double (text.c, ops.c; natives.c's thunks), so a float's text has
+// one implementation. A native's arguments are integer words, so a thunk is given the float's 64
+// bits (`REINTERPRET`); the print's fast path, a plain helper call, is given the double in a float
+// register. Each call's frame state before names the raw double where the interpreter's frame holds
+// the box, and the one after names the result, a value word, in its place.
+// ---------------------------------------------------------------------------
+
+static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
+
+/** The bits of the raw double in operand position `pos`, into the temporary `TMP_X`, for a native. */
+static GRJIT_Operand float_bits_of(Ctx * c, uint32_t pos) {
+  B(grjit_builder_unary(c->b, GRJIT_OP_REINTERPRET, c->tmp[TMP_X], V(c->stack_f[pos])));
+  return V(c->tmp[TMP_X]);
+}
+
+/**
+ * `PRINT` of the raw float in slot `d - 1`, which its value (null, or the error a failed print
+ * makes) replaces. As emit_print: the position, then the fast path (gltang_jit_print_float_fast: a
+ * copy that cannot poll, allocate or deliver), and otherwise the native-table call of the
+ * interpreter's print of a float. The slow call is a GC point because a print can be one: the
+ * output's growth is an allocation the memory budget may refuse (a poll, then the error), and a
+ * host's sink that refuses a delivery makes the print's error, a heap object; the sink itself is
+ * given bytes only and may call nothing on the execution, so it neither collects nor re-enters.
+ */
+static void emit_print_float(Ctx * c, uint32_t i, uint32_t d) {
+  GRJIT_Operand args[1] = {V(c->stack_f[d - 1u])};
+  GRJIT_BlockId fast, slow, join;
+  emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_float_fast, args, 1);
+  branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
+  new_block(c, &join);
+  GRJIT_Operand bits[1] = {float_bits_of(c, d - 1u)};
+  emit_native_state(c, i, d, GLTANG_JIT_NATIVE_PRINT_FLOAT, bits, 1, c->stack[d - 1u], d, false, d - 1u);
+  branch_to(c, join);
+  set_block(c, fast);
+  B(grjit_builder_const(c->b, c->stack[d - 1u], (int64_t)GLTANG_V_NULL));
+  branch_to(c, join);
+  set_block(c, join);
+}
+
+/** A cast to string of the raw float in slot `d - 1`: the interpreter's to-string of a float; the string replaces it. */
+static void emit_float_string(Ctx * c, uint32_t i, uint32_t d) {
+  GRJIT_Operand bits[1] = {float_bits_of(c, d - 1u)};
+  emit_native_state(c, i, d, GLTANG_JIT_NATIVE_FLOAT_STRING, bits, 1, c->stack[d - 1u], d, true, d - 1u);
+}
+
+/**
+ * The `+` at `i` of the string in operand position `spos` and the raw float in the other (`d - 2`
+ * and `d - 1`): the interpreter's concatenation of a string and a float, given the double; the
+ * string replaces both operands. The operand must be known to be a string here.
+ */
+static void emit_concat_float(Ctx * c, uint32_t i, uint32_t d, uint32_t spos) {
+  const uint32_t fpos = spos == d - 2u ? d - 1u : d - 2u;
+  GRJIT_Operand args[3] = {V(c->stack[spos]), float_bits_of(c, fpos), I(fpos < spos ? 1 : 0)};
+  emit_native_state(c, i, d, GLTANG_JIT_NATIVE_CONCAT_FLOAT, args, 3, c->stack[d - 2u], d - 1u, true, d - 2u);
+}
+
+/**
+ * The tests, in the current block, that the value word in position `pos` is a heap object (a
+ * non-null pointer, tag 0), and its kind into `TMP_X`; `object` is taken when it is one and `other`
+ * when it is not. The kind is read only after the pointer test (every heap object begins with its
+ * 32-bit kind, vm_internal.h).
+ */
+static void branch_object(Ctx * c, uint32_t pos, GRJIT_BlockId object, GRJIT_BlockId other) {
+  GRJIT_VReg * t = c->tmp;
+  GRJIT_BlockId load;
+  new_block(c, &load);
+  bitcast(c, t[TMP_A], c->stack[pos]);
+  tag_is(c, t[TMP_C], t[TMP_A], 0);
+  cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_A]), I(0));
+  bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  flush_cost(c);
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), load, other));
+  c->open = false;
+  set_block(c, load);
+  B(grjit_builder_load(c->b, t[TMP_X], c->stack[pos], 0, 32, false));
+  B(grjit_builder_br(c->b, object));
+  c->open = false;
+}
+
+/**
+ * A raw float's concatenation (add_concat): the operand beside the raw float is string-evident, and
+ * is tested to be a string; anything else is a guard exit before the `+`, with nothing done (the
+ * interpreter then runs it, whatever it turns out to be), which counts as a failed guard does.
+ */
+static void emit_add_concat(Ctx * c, uint32_t i, uint32_t d) {
+  const uint32_t spos = c->sk[d - 2u] == KIND_F64 ? d - 1u : d - 2u;
+  GRJIT_BlockId object, bad, go;
+  new_block(c, &object);
+  new_block(c, &bad);
+  new_block(c, &go);
+  branch_object(c, spos, object, bad);
+  set_block(c, object);
+  cmp(c, GRJIT_CMP_EQ, c->tmp[TMP_C], V(c->tmp[TMP_X]), I((int64_t)GLTANG_OBJ_STRING));
+  B(grjit_builder_br_if(c->b, V(c->tmp[TMP_C]), go, bad));
+  c->open = false;
+  set_block(c, bad);
+  // The exit is at a native site (the concatenation's), so it says why: otherwise it would be read as
+  // a call the native stack refused, which counts nowhere.
+  call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_note_operand_guard);
+  emit_exit(c, i, d);
+  set_block(c, go);
+  emit_concat_float(c, i, d, spos);
+}
+
+/** The longest run of instructions after a `+` that emit_add_fused emits with it. */
+#define FUSED_MAX 6u
+
+/**
+ * Whether an instruction may be emitted twice, once on each way of a fused `+` (emit_add_fused):
+ * one that can neither leave compiled code at once nor be fused itself, on a raw float or a value
+ * word alike, where natives can be called. A string constant or a value word pushed; a print; a
+ * cast to string; a `+` that is a raw float's concatenation or one of two value words.
+ */
+static bool fusable(const Ctx * c, uint32_t k, uint32_t d) {
+  const uint32_t a = GLTANG_INSTRUCTION_A(c->fn->code[k]);
+  switch (GLTANG_INSTRUCTION_OP(c->fn->code[k])) {
+    case GLTANG_OP_CONST:
+      return string_constant(c, a);
+    case GLTANG_OP_LOAD_LOCAL:
+      return a < c->lc && c->lk[a] == KIND_REF;
+    case GLTANG_OP_LOAD_GLOBAL:
+      return a < c->program->global_count;
+    case GLTANG_OP_PRINT:
+      return d >= 1u;
+    case GLTANG_OP_CAST:
+      return d >= 1u && a == GLTANG_CAST_TYPE_STRING;
+    case GLTANG_OP_ADD:
+      return d >= 2u && ((c->sk[d - 2u] == KIND_REF && c->sk[d - 1u] == KIND_REF) || add_concat(c, k, (int32_t)d));
+    default:
+      return false;
+  }
+}
+
+/**
+ * The last instruction emit_add_fused emits with the `+` at `i` (`d` operands), or 0 for none: the
+ * `+` is of a raw float and a value word that is no evidence of a string, and within FUSED_MAX
+ * fusable instructions after it, none of them a jump target, its value becomes a value word on the
+ * way of float arithmetic too (a print of it, a concatenation of it with a string, a cast to string)
+ * with nothing left above it. The kinds are walked as the analysis has them: float arithmetic's.
+ */
+static uint32_t fused_end(Ctx * c, uint32_t i, uint32_t d) {
+  if (!c->natives_on || d < 2u || (c->sk[d - 2u] == KIND_F64) == (c->sk[d - 1u] == KIND_F64) || add_concat(c, i, (int32_t)d)) {
+    return 0;
+  }
+  uint8_t saved[GLTANG_JIT_MAX_SLOTS];
+  memcpy(saved, c->sk, sizeof(saved));
+  uint32_t end = 0;
+  if (apply_kinds(c, i, GLTANG_OP_ADD, 0, (int32_t)d)) {
+    for (uint32_t k = i + 1u; k <= i + FUSED_MAX && k < c->fn->code_count; ++k) {
+      if (c->target[k] || c->depth[k] < 0 || !fusable(c, k, (uint32_t)c->depth[k])) {
+        break;
+      }
+      const uint32_t at = (uint32_t)c->depth[k];
+      if (!apply_kinds(c, k, GLTANG_INSTRUCTION_OP(c->fn->code[k]), GLTANG_INSTRUCTION_A(c->fn->code[k]), (int32_t)at)) {
+        break;
+      }
+      const uint32_t after = k + 1u < c->fn->code_count && c->depth[k + 1u] >= 0 ? (uint32_t)c->depth[k + 1u] : UINT32_MAX;
+      if (after < d - 1u) {
+        break;  // the `+`'s value was consumed by something that left a raw float or no value
+      }
+      if (after == d - 1u && c->sk[d - 2u] == KIND_REF) {
+        end = k;
+        break;
+      }
+    }
+  }
+  memcpy(c->sk, saved, sizeof(saved));
+  return end;
+}
+
+/** Emits the instructions after a fused `+`, up to `end`, as emit_op does, on the kinds as they stand; false if one ended the block. */
+static bool emit_fused_run(Ctx * c, uint32_t i, uint32_t end) {
+  for (uint32_t k = i + 1u; k <= end; ++k) {
+    const uint32_t at = (uint32_t)c->depth[k];
+    if (!emit_op_kinds(c, k, at)) {
+      return false;
+    }
+    if (!apply_kinds(c, k, GLTANG_INSTRUCTION_OP(c->fn->code[k]), GLTANG_INSTRUCTION_A(c->fn->code[k]), (int32_t)at)) {
+      c->err = GRJIT_ERR_INTERNAL;
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * A `+` of a raw float and a value word that is no evidence of a string (an attribute, an element, a
+ * parameter), whose value the instructions after it make a value word: `<%= item.name + f %>`,
+ * `<%= label + f + "!" %>`. Which `+` it is depends on the value word when it runs, and the two have
+ * results of two kinds, so the `+` and the instructions up to `end` (fused_end) are emitted together,
+ * once for each: a small integer or a float object is float arithmetic, the sum raw (a print of it is
+ * emit_print_float's, a concatenation emit_concat_float's); a string is the concatenation
+ * (emit_concat_float), its value a string; anything else is the guard exit before the `+` that float
+ * arithmetic makes, which counts. The two ways join after `end`, where the kinds agree, and those
+ * instructions are then not emitted on their own (`fused`). The analysis sees the `+` as float
+ * arithmetic, which is one of the two ways; the other's frame states name the string where it is.
+ * Every operation in it is charged, stood and counted as it would be on its own.
+ */
+static void emit_add_fused(Ctx * c, uint32_t i, uint32_t d, uint32_t end) {
+  GRJIT_VReg * t = c->tmp;
+  const bool left_raw = c->sk[d - 2u] == KIND_F64;
+  const uint32_t pos = left_raw ? d - 1u : d - 2u;
+  uint8_t kinds[GLTANG_JIT_MAX_SLOTS];
+  memcpy(kinds, c->sk, sizeof(kinds));
+  GRJIT_BlockId small, other, object, not_float, is_float, arith, text, bad, join;
+  new_block(c, &small);
+  new_block(c, &other);
+  new_block(c, &object);
+  new_block(c, &not_float);
+  new_block(c, &is_float);
+  new_block(c, &arith);
+  new_block(c, &text);
+  new_block(c, &bad);
+  new_block(c, &join);
+  bitcast(c, t[TMP_A], c->stack[pos]);
+  tag_is(c, t[TMP_C], t[TMP_A], GLTANG_TAG_INTEGER);
+  flush_cost(c);  // before the branch, so that no way holds a charge another does not
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), small, other));
+  c->open = false;
+  // A small integer, converted as unbox converts it.
+  set_block(c, small);
+  bin(c, GRJIT_OP_SAR, t[TMP_X], V(t[TMP_A]), I(4));
+  B(grjit_builder_unary(c->b, GRJIT_OP_CONVERT_S, c->tmp_f[0], V(t[TMP_X])));
+  branch_to(c, arith);
+  // A heap object: a float is read, a string concatenated; anything else (or no object) is the exit.
+  set_block(c, other);
+  branch_object(c, pos, object, bad);
+  set_block(c, object);
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_FLOAT));
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), is_float, not_float));
+  c->open = false;
+  set_block(c, not_float);
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_STRING));
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), text, bad));
+  c->open = false;
+  set_block(c, is_float);
+  B(grjit_builder_load(c->b, c->tmp_f[0], c->stack[pos], (int32_t)offsetof(GLTANG_FloatObject, value), 64, false));
+  branch_to(c, arith);
+  // The exit at a native site (the concatenation's) says why, or it would be read as a call the
+  // native stack refused, which counts nowhere.
+  set_block(c, bad);
+  call_exec_helper(c, (uint64_t)(uintptr_t)gltang_jit_note_operand_guard);
+  emit_exit(c, i, d);
+  // Float arithmetic, the operands in the order they stand, then the rest on the raw sum.
+  set_block(c, arith);
+  B(grjit_builder_binary(c->b, GRJIT_OP_FADD, c->stack_f[d - 2u], left_raw ? V(c->stack_f[d - 2u]) : V(c->tmp_f[0]),
+      left_raw ? V(c->tmp_f[0]) : V(c->stack_f[d - 1u])));
+  add_fuel(c, gltang_opcode_cost_table[GLTANG_OP_ADD]);
+  c->sk[d - 2u] = KIND_F64;
+  if (emit_fused_run(c, i, end)) {
+    branch_to(c, join);
+  }
+  // The concatenation, then the rest on the string.
+  memcpy(c->sk, kinds, sizeof(kinds));
+  set_block(c, text);
+  emit_concat_float(c, i, d, pos);
+  c->sk[d - 2u] = KIND_REF;
+  if (emit_fused_run(c, i, end)) {
+    branch_to(c, join);
+  }
+  set_block(c, join);
+  memcpy(c->sk, kinds, sizeof(kinds));  // the kinds before the `+`, which emit_op then applies the run to
+  for (uint32_t k = i + 1u; k <= end; ++k) {
+    c->fused[k] = true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1951,8 +2398,6 @@ static void emit_literal(Ctx * c, uint32_t i, uint32_t d, uint32_t a, bool map) 
   B(grjit_builder_move(c->b, c->stack[at], V(c->built)));
 }
 
-static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d);
-
 /**
  * One instruction. The kinds at its start are in `lk` and `sk` (loaded from the
  * merged state at a jump target, carried by this function from the instruction
@@ -1975,7 +2420,8 @@ static void emit_op(Ctx * c, uint32_t i, uint32_t d) {
     }
   }
   // Only an instruction that flows on changes the kinds; an exit leaves nothing after it.
-  if (emit_op_kinds(c, i, d) && !apply_kinds(c, GLTANG_INSTRUCTION_OP(c->fn->code[i]), GLTANG_INSTRUCTION_A(c->fn->code[i]), (int32_t)d)) {
+  // An instruction emitted with a `+` before it (emit_add_fused) is not emitted again: only its kinds.
+  if (((c->fused && c->fused[i]) || emit_op_kinds(c, i, d)) && !apply_kinds(c, i, GLTANG_INSTRUCTION_OP(c->fn->code[i]), GLTANG_INSTRUCTION_A(c->fn->code[i]), (int32_t)d)) {
     c->err = GRJIT_ERR_INTERNAL;
   }
 }
@@ -2153,6 +2599,10 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
     // The output operations: the thunks charge the two prints' fuel, as the interpreter
     // charges an operation it runs; the clear is charged here, since it cannot leave.
     case GLTANG_OP_PRINT:
+      if (c->sk[d - 1u] == KIND_F64) {
+        emit_print_float(c, i, d);  // the thunks charge the fuel
+        break;
+      }
       emit_print(c, i, d);
       break;
     case GLTANG_OP_PRINT_CONST:
@@ -2232,6 +2682,21 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
     case GLTANG_OP_SUB:
     case GLTANG_OP_MUL:
     case GLTANG_OP_DIV:
+      if (op == GLTANG_OP_ADD && add_concat(c, i, (int32_t)d)) {
+        emit_add_concat(c, i, d);  // the thunk charges the fuel
+        break;
+      }
+      if (op == GLTANG_OP_ADD) {
+        const uint32_t end = fused_end(c, i, d);
+        if (end && !c->fused) {
+          // Made at the first fused `+`; without it the `+` is float arithmetic, as before story 4g.
+          c->fused = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(c->exec), c->fn->code_count, sizeof(bool));
+        }
+        if (end && c->fused) {
+          emit_add_fused(c, i, d, end);
+          break;
+        }
+      }
       if (c->sk[d - 2u] == KIND_F64 || c->sk[d - 1u] == KIND_F64) {
         // A float operation: both operands become doubles (an integer by `(double)`, in the
         // order they stand), every guard runs, and only then is the result written to its slot.
@@ -2348,6 +2813,10 @@ static bool emit_op_kinds(Ctx * c, uint32_t i, uint32_t d) {
       break;
 
     case GLTANG_OP_CAST:
+      if (a == GLTANG_CAST_TYPE_STRING && c->sk[d - 1u] == KIND_F64) {
+        emit_float_string(c, i, d);  // the thunk charges the fuel
+        break;
+      }
       if (a == GLTANG_CAST_TYPE_BOOLEAN || a == GLTANG_CAST_TYPE_STRING) {
         emit_cast_call(c, i, d, a);  // the thunk charges the fuel
         break;
@@ -2647,6 +3116,21 @@ GLTANG_Result gltang_jit_build(GLTANG_Execution * exec, uint32_t program_index, 
     scan_declarations(c);
   }
   scan_uses(c);
+  if (c->natives_on && has_float_source(c)) {
+    // The tables of scan_strings (made only here: string_evident reads a missing one as no evidence),
+    // and its scratch, function 0's targets or this function's (`target` is in use).
+    const size_t longest = program->functions[0].code_count > n ? program->functions[0].code_count : n;
+    bool * targets = gcu_allocator_malloc(GLTANG_JIT_ALLOCATOR(exec), longest * sizeof(bool) + 1u);
+    c->global_str = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (size_t)program->global_count + 1u, sizeof(uint8_t));
+    c->local_str = gcu_allocator_calloc(GLTANG_JIT_ALLOCATOR(exec), (size_t)c->lc + 1u, sizeof(uint8_t));
+    if (!targets || !c->global_str || !c->local_str) {
+      gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), targets);
+      result = GLTANG_ERR_OOM;
+      goto done;
+    }
+    scan_strings(c, targets);
+    gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), targets);
+  }
   result = analyse(c);
   if (result != GLTANG_OK) {
     goto done;
@@ -2887,6 +3371,9 @@ done:
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->declined);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_use);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->local_use);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->global_str);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->local_str);
+  gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->fused);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->prod_at);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->kind_at);
   gcu_allocator_free(GLTANG_JIT_ALLOCATOR(exec), c->cur);
@@ -2923,6 +3410,6 @@ unsigned gltang_vm_jit_test_opcode_policy(unsigned op) {
   Ctx d;
   memset(&d, 0, sizeof(d));
   d.raw_off = true;  // so that CONST does not read a program this state does not have
-  bits |= apply_kinds(&d, (GLTANG_Opcode)op, 0, 3) ? 2u : 0u;
+  bits |= apply_kinds(&d, 0, (GLTANG_Opcode)op, 0, 3) ? 2u : 0u;
   return bits;
 }

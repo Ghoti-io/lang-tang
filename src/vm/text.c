@@ -467,13 +467,28 @@ static bool sink_full(const GLTANG_Sink * sink) {
 // level whether the level printed a number or not: value depth 2048 needed
 // about 1 MiB of C stack, which a host thread with a small stack does not have.
 // (noinline, so that the buffer cannot come back into the recursive frame.)
+/**
+ * A float's text, given the double: the one place a float's text is made for a sink. A float
+ * object's (render_number) is this, and so is what compiled code's raw float becomes in a print, a
+ * concatenation and a cast to string (spec-template-compiled story 4g), so a float has one text
+ * whichever tier holds it, boxed or raw. Inlined where it is called, so that its buffer is the frame of
+ * render_number (kept out of the recursive renderer, below) or of the function compiled code calls.
+ */
+GLTANG_VM_SHARED GLTANG_Status render_float(GLTANG_Sink * sink, double d) {
+  char digits[512];
+  size_t n = gltang_vm_format_float(d, digits, sizeof(digits));
+  return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+}
+
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
 static GLTANG_Status render_number(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_ValueKind kind) {
-  char digits[512];
-  size_t n = kind == GLTANG_KIND_INTEGER ? gltang_vm_format_integer(gltang_vm_int(v), digits)
-                                         : gltang_vm_format_float(gltang_vm_float(v), digits, sizeof(digits));
+  if (kind != GLTANG_KIND_INTEGER) {
+    return render_float(sink, gltang_vm_float(v));
+  }
+  char digits[24];
+  size_t n = gltang_vm_format_integer(gltang_vm_int(v), digits);
   return gltang_sink_text(sink, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
 }
 
@@ -684,13 +699,8 @@ static bool output_deliver(GLTANG_Execution * exec) {
   return taken;
 }
 
-GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
-  // An error prints as nothing (a marker prints itself): it is swallowed here.
-  gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_PRINTED, v, exec->act);
-  GLTANG_Sink sink;
-  gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
-  bool too_deep = false;
-  GLTANG_Status st = gltang_vm_render(&sink, v, GLTANG_RENDER_PRINT, 0, &too_deep);
+/** What a print does once its value's text is appended (`st`, `too_deep`): the rollback and the error of a failure, or the delivery and the commit. */
+GLTANG_VM_SHARED GLTANG_Value print_finish(GLTANG_Execution * exec, GLTANG_Status st, bool too_deep) {
   if (st != GLTANG_ST_OK || too_deep) {
     output_rollback(exec->out);
     return st != GLTANG_ST_OK ? gltang_vm_failure_value(exec, st) : gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
@@ -701,6 +711,24 @@ GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
   }
   exec->out->committed = exec->out->length;
   return GLTANG_V_NULL;
+}
+
+GLTANG_Value gltang_vm_op_print(GLTANG_Execution * exec, GLTANG_Value v) {
+  // An error prints as nothing (a marker prints itself): it is swallowed here.
+  gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_PRINTED, v, exec->act);
+  GLTANG_Sink sink;
+  gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
+  bool too_deep = false;
+  GLTANG_Status st = gltang_vm_render(&sink, v, GLTANG_RENDER_PRINT, 0, &too_deep);
+  return print_finish(exec, st, too_deep);
+}
+
+GLTANG_Value gltang_vm_print_float(GLTANG_Execution * exec, double d) {
+  // gltang_vm_op_print of a float object, whose error swallow does nothing (a float is no error)
+  // and whose render is this one piece.
+  GLTANG_Sink sink;
+  gltang_sink_init(&sink, GLTANG_SINK_OUTPUT, exec);
+  return print_finish(exec, render_float(&sink, d), false);
 }
 
 GLTANG_Value gltang_vm_print_constant(GLTANG_Execution * exec, const GLTANG_StringBlock * s) {
@@ -784,6 +812,14 @@ bool gltang_vm_print_string_fast(GLTANG_Execution * exec, GLTANG_Value v) {
   return one_run(gltang_vm_string(v), &bytes, &length, &type) && print_run_fast(exec, bytes, length, type);
 }
 
+bool gltang_vm_print_float_fast(GLTANG_Execution * exec, double d) {
+  // The text is made as render_float makes it; a float's is at most a few hundred bytes, below the
+  // pacing interval, so only the output's room, its last tag and the sink decide (print_run_fast).
+  char digits[512];
+  size_t n = gltang_vm_format_float(d, digits, sizeof(digits));
+  return print_run_fast(exec, digits, n, GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+}
+
 GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBuf * out, size_t length) {
   GLTANG_Sink sink;
   gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);
@@ -815,6 +851,22 @@ GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBu
   return result;
 }
 
+/** The string a to-string sink built (`st`, `too_deep` as its render left them), or the failure; the sink is freed. */
+GLTANG_VM_SHARED GLTANG_Value to_string_finish(GLTANG_Execution * exec, GLTANG_Sink * sink, GLTANG_Status st, bool too_deep) {
+  GLTANG_Value result;
+  if (st != GLTANG_ST_OK) {
+    result = gltang_vm_failure_value(exec, st);
+  }
+  else if (too_deep) {
+    result = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+  }
+  else {
+    result = gltang_sink_finish(sink);
+  }
+  gltang_sink_free(sink);
+  return result;
+}
+
 GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v) {
   if (gltang_v_is_kind(v, GLTANG_OBJ_STRING)) {
     return v;
@@ -827,16 +879,13 @@ GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v) {
   gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);
   bool too_deep = false;
   GLTANG_Status st = gltang_vm_render(&sink, v, GLTANG_RENDER_ELEMENT, 0, &too_deep);
-  GLTANG_Value result;
-  if (st != GLTANG_ST_OK) {
-    result = gltang_vm_failure_value(exec, st);
-  }
-  else if (too_deep) {
-    result = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
-  }
-  else {
-    result = gltang_sink_finish(&sink);
-  }
-  gltang_sink_free(&sink);
-  return result;
+  return to_string_finish(exec, &sink, st, too_deep);
+}
+
+GLTANG_Value gltang_vm_float_to_string(GLTANG_Execution * exec, double d) {
+  // gltang_vm_to_string of a float object: not a string, not a host-defined value, and its render
+  // is this one piece.
+  GLTANG_Sink sink;
+  gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);
+  return to_string_finish(exec, &sink, render_float(&sink, d), false);
 }

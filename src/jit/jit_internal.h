@@ -151,7 +151,10 @@ typedef enum GLTANG_JitRefusal {
  * small integer or a float inside the small-integer range), the allocation of an
  * `ARRAY` or a `MAP` literal (its count; its elements are stored afterwards by
  * `gltang_jit_array_fill` and `gltang_jit_map_fill`, which are no GC points) and the
- * copy of a container `ADOPT` stores (the value).
+ * copy of a container `ADOPT` stores (the value); and those of story 4g, given a float compiled
+ * code holds raw, as its 64 bits (a native's arguments are integer words on every backend): its
+ * `PRINT`, its `+` with a string (the string, the bits and which side the float is on) and its
+ * cast to string.
  */
 enum {
   GLTANG_JIT_NATIVE_CALL0 = 0,   ///< ... up to GLTANG_JIT_NATIVE_CALL0 + 15.
@@ -168,7 +171,10 @@ enum {
   GLTANG_JIT_NATIVE_ARRAY = 26,
   GLTANG_JIT_NATIVE_MAP = 27,
   GLTANG_JIT_NATIVE_ADOPT = 28,
-  GLTANG_JIT_NATIVE_COUNT = 29
+  GLTANG_JIT_NATIVE_PRINT_FLOAT = 29,
+  GLTANG_JIT_NATIVE_CONCAT_FLOAT = 30,
+  GLTANG_JIT_NATIVE_FLOAT_STRING = 31,
+  GLTANG_JIT_NATIVE_COUNT = 32
 };
 
 /**
@@ -381,6 +387,12 @@ uint64_t gltang_jit_map_fill(GLTANG_Execution * exec, uint64_t map, uint64_t k0,
 uint64_t gltang_jit_print_const_fast(GLTANG_Execution * exec, uint64_t block);
 /** @brief The same for a compiled `PRINT` of `value` (gltang_vm_print_string_fast): 1 if printed, whose value is then null. */
 uint64_t gltang_jit_print_fast(GLTANG_Execution * exec, uint64_t value);
+/**
+ * @brief The same for a compiled `PRINT` of a raw float (gltang_vm_print_float_fast, story 4g),
+ *   given as the double: compiled code passes it in a float register, as runtime-jit passes an
+ *   `F64` argument to a helper on every backend. 1 if printed.
+ */
+uint64_t gltang_jit_print_float_fast(GLTANG_Execution * exec, double value);
 /**
  * @brief The fast path of a compiled `ATTR` by the constant `constant` (its program block `block`,
  *   whose bytes hash to `hash`) of a value not known to be a library: gltang_vm_map_attr_fast,

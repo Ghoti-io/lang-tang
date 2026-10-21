@@ -1,0 +1,20 @@
+# 197 a raw float's concatenation leaves compiled code after its call
+# defect: the thunk of a raw float's `+` with a string asks compiled code to leave once it has made the string
+#   (the status a test native asks with), so every compiled call of the float-label templates leaves at its
+#   first concatenation, the interpreter running the rest. (197 was the template policy's discard limit off by
+#   one; story 4g removed the policy of a template that is discarded, and this is what its row sees now.)
+# caught by: bench --smoke --only steady-template-float-label-compiled-warm-call (the template policy: zero exits, every compiled call returns)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -399,7 +399,9 @@
+   exec->standing = true;
+   GLTANG_Value result = gltang_vm_concat_float(exec, s, float_bits(bits), float_first != 0);
+   exec->standing = false;
+-  return finished(exec, result, false);
++  GRJIT_NativeResult r = finished(exec, result, false);
++  r.status = GRJIT_NATIVE_DEOPT;  /* planted: leave after the call */
++  return r;
+ }
+ 
+ static GRJIT_NativeResult thunk_float_string(void * context, uint64_t execution, uint64_t bits) {

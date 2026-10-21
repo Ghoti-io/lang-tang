@@ -1,0 +1,18 @@
+# 196 a raw float's print is the designed box exit again
+# defect: `reads_raw` takes a print of a raw float for the designed box exit where natives can be called, as
+#   before spec-template-compiled story 4g, so every compiled call of the float-print template leaves at its
+#   first print. (196 was the template policy's TPL_BOX_EXIT taken for an exit that counts; story 4g removed
+#   that policy with the exits it described, and this is the defect its row is now there to see.)
+# caught by: bench --smoke --only steady-template-float-print-compiled-warm-call (the template policy: zero exits, every compiled call returns)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -471,7 +471,7 @@
+     // emit_print_float), where natives can be called: one implementation of its text and no box.
+     // Where they cannot, it is boxed by the exit and printed by the interpreter.
+     case GLTANG_OP_PRINT:
+-      return d >= 1 && c->sk[d - 1] == KIND_F64 && !c->natives_on;
++      return d >= 1 && c->sk[d - 1] == KIND_F64;  /* planted: a box exit wherever natives are */
+     // `%` is integers only: with a raw operand the interpreter reports "not supported".
+     case GLTANG_OP_MOD:
+       return d >= 2 && (c->sk[d - 2] == KIND_F64 || c->sk[d - 1] == KIND_F64);

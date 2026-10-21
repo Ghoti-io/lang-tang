@@ -1,0 +1,16 @@
+# 225 a raw float's print that the fast path copies charges no fuel
+# defect: gltang_jit_print_float_fast copies the text and counts it, and does not add the print's cost
+# caught by: the prints, concatenations and casts of the special values, fuel against the interpreter's
+#   (testJit_templates, JitTemplates.ARawFloatsPrintConcatenation*)
+#
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -143,7 +143,7 @@
+   if (!gltang_vm_print_float_fast(exec, value)) {
+     return 0;
+   }
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
++  /* planted: no fuel */
+   ++exec->jit_stats.output_calls;
+   ++exec->jit_stats.fast_prints;
+   ++exec->jit_stats.raw_float_texts;

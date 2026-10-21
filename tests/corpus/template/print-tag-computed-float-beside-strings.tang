@@ -1,0 +1,2 @@
+<% label = "v="; item = {name: "n"}; k = 0; while (k < 4) { %><%= k * 0.5 %>|<%= "c=" + k * 0.25 %>|<%= k * 0.25 + "=c" %>|<%= label + k * 1.5 %>|<%= item.name + k * 0.75 %>|<%= k * 0.75 + item.name %>|<%= label + "a" + k * 0.5 %>|<%= (k * 0.125) as string %>;
+<% k += 1; } %>

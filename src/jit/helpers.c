@@ -139,6 +139,17 @@ uint64_t gltang_jit_print_fast(GLTANG_Execution * exec, uint64_t value) {
   return 1;
 }
 
+uint64_t gltang_jit_print_float_fast(GLTANG_Execution * exec, double value) {
+  if (!gltang_vm_print_float_fast(exec, value)) {
+    return 0;
+  }
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
+  ++exec->jit_stats.output_calls;
+  ++exec->jit_stats.fast_prints;
+  ++exec->jit_stats.raw_float_texts;
+  return 1;
+}
+
 uint64_t gltang_jit_map_attr_fast(GLTANG_Execution * exec, uint64_t container, uint64_t constant, uint64_t block, uint64_t hash) {
   const GLTANG_StringBlock * name = (const GLTANG_StringBlock *)(uintptr_t)block;
   GLTANG_Value v = gltang_vm_map_attr_fast(exec, container, (uint32_t)constant, gltang_string_bytes(name), (size_t)name->byte_length, hash);

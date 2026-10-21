@@ -121,10 +121,11 @@ TEST(JitArith, ALoopOfPlusMinusAndTimesOverARawFloatAndASmallIntegerAllocatesNot
     EXPECT_EQ(jit_long.heap_allocations, jit_short.heap_allocations) << body << ": the compiled loop allocates nothing per iteration";
     EXPECT_GT(plain_long.heap_allocations, plain_short.heap_allocations + 4000u) << body << ": the interpreter allocates a result per operation";
     EXPECT_EQ(jit_short.stats.deopts, jit_long.stats.deopts) << body << ": the exits do not grow with the loop";
-    // Prints are compiled (spec-template-compiled story 1); a print of a raw float is still the
-    // designed exit that boxes it, so the function's one exit is this print of `s`.
-    EXPECT_EQ(jit_long.stats.deopts, kMain + 1u) << body << ": the one exit of the function is the print of the raw float";
-    EXPECT_EQ(jit_long.stats.exits_expected, 1u) << body << ": and it is the designed exit, the float boxed for the print";
+    // Prints are compiled (spec-template-compiled story 1), and since story 4g a print of a raw float too,
+    // given the double: the function runs to its end with no exit, and boxes nothing.
+    EXPECT_EQ(jit_long.stats.deopts, kMain) << body << ": the print of the raw float is compiled, no exit";
+    EXPECT_EQ(jit_long.stats.exits_expected, 0u) << body;
+    EXPECT_EQ(jit_long.stats.raw_float_texts, 1u) << body << ": the print was given the float raw";
     EXPECT_EQ(jit_long.stats.values_boxed, jit_short.stats.values_boxed) << body;
     EXPECT_EQ(jit_long.stats.conversion_errors, 0u) << body;
     std::printf("  arithmetic slope (%s): compiled allocations %llu at 200 and %llu at 5000; interpreted %llu and %llu\n", body,
@@ -281,13 +282,13 @@ TEST(JitArith, MixedIntegerAndFloatConvertTheIntegerAndKeepTheOrderOfTheOperands
   expect_same_compiled(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.stats.compile_failures, 0u);
-  // The first print is the only exit of each call; what it boxes is what was live: b, c, d, e, g, h and the
-  // operand slot. An exit earlier (at an operation) would have boxed fewer. Prints are compiled now
-  // (spec-template-compiled story 1), and this one still exits because its operand, b, is a raw float: the
-  // designed exit, the float boxed for the print.
-  EXPECT_EQ(jit.stats.values_boxed, 4u * 7u) << "each call exited at its first print, with six locals and the operand raw";
-  EXPECT_EQ(jit.stats.deopts, kMain + 4u);
-  EXPECT_EQ(jit.stats.exits_expected, 4u) << "each call's exit is the print of a raw float";
+  // Every operation is compiled, and so (spec-template-compiled story 4g) is the print of each raw float,
+  // given the double: no call leaves compiled code and nothing is boxed. An exit at an operation would show
+  // here as an exit and boxes, and a wrong operand order in the text below.
+  EXPECT_EQ(jit.stats.values_boxed, 0u) << "nothing left compiled code to be boxed";
+  EXPECT_EQ(jit.stats.deopts, kMain);
+  EXPECT_EQ(jit.stats.exits_expected, 0u);
+  EXPECT_EQ(jit.stats.raw_float_texts, 4u * 6u) << "each call's six prints, each of a raw float";
   EXPECT_NE(jit.raw.find("4.5-1.51.53.50.666667-1.5"), std::string::npos) << jit.raw;
 }
 
@@ -309,8 +310,8 @@ TEST(JitArith, AFloatReadFromAValueWordIsUnboxedAnAnIntegerIsConvertedAndAnythin
       {"(smax + 1)", false, "2305843009213693952."},
   };
   for (const Case & c : cases) {
-    // f prints the sum (the print is itself an exit); g only returns a counter, so its adds are the only
-    // thing that can leave compiled code.
+    // f prints the sum (a raw float's print, compiled since spec-template-compiled story 4g); g only returns
+    // a counter. In both, the adds are the only thing that can leave compiled code.
     Scenario sc = scenario(std::string(kPrelude) + "function f(x) { s = 0.0; i = 0; while (i < 4) { s = s + x; i = i + 1; } print(s); return 0; }\nf(" + c.argument + ");\n");
     Outcome plain, jit;
     expect_same_compiled(sc, &plain, &jit);
@@ -318,7 +319,7 @@ TEST(JitArith, AFloatReadFromAValueWordIsUnboxedAnAnIntegerIsConvertedAndAnythin
     EXPECT_EQ(jit.stats.compile_failures, 0u) << c.argument;
     EXPECT_EQ(jit.raw, c.raw) << c.argument;
     EXPECT_EQ(plain.raw, c.raw) << c.argument;
-    EXPECT_EQ(jit.stats.deopts, kMain + 1u) << c.argument << ": one exit, at the print or at the add";
+    EXPECT_EQ(jit.stats.deopts, kMain + (c.compiled ? 0u : 1u)) << c.argument << (c.compiled ? ": compiled to the end, the print too" : ": one exit, at the add");
     Scenario sg = scenario(std::string(kPrelude) + "function g(x) { s = 0.0; i = 0; while (i < 4) { s = s + x; i = i + 1; } return i; }\nprint(g(" + c.argument + "));\n");
     Outcome gp, gj;
     expect_same_compiled(sg, &gp, &gj);
@@ -382,8 +383,8 @@ TEST(JitArith, EveryCaseTheInterpreterTurnsIntoAnErrorExitsAtTheInstructionAndTh
       {"as int of 2^59", "function f(a) { x = a as float; z = (x - x + 576460752303423488.0) as int; return 0; }", false},
       {"as int of 1e19", "function f(a) { x = a as float; z = (x - x + (\"1e19\" as float)) as int; return 0; }", true},
       // The rows with a string literal: until spec-template-compiled story 3 the string constant was the exit, and now it
-      // is a compiled call, so the exit is the operation after it (`x + "s"` the designed box exit of a concatenation of a
-      // raw float, `<` and `!=` their guards), still one per call.
+      // is a compiled call, so the exit is the operation after it (`<` and `!=` their guards), still one per call. `x + "s"`
+      // was the designed box exit of a concatenation of a raw float until story 4g compiled it: it has no exit now.
       {"a raw operand and a string", "function f(a) { x = a as float; z = x + \"s\"; return 0; }", false},
       {"a raw operand and null", "function f(a) { x = a as float; z = x * null; return 0; }", true},
       {"a raw operand and an array", "function f(a) { x = a as float; z = x - [1]; return 0; }", true},
@@ -408,7 +409,7 @@ TEST(JitArith, EveryCaseTheInterpreterTurnsIntoAnErrorExitsAtTheInstructionAndTh
     EXPECT_EQ(jit.stats.compile_failures, 0u) << c.name;
     EXPECT_EQ(jit.stats.rebuild_failures, 0u) << c.name;
     // One exit per call, at the instruction. (A float in a value word is an exit only for the call that passes the float: f(2) is an integer.)
-    const uint64_t calls_that_exit = std::strcmp(c.name, "modulo of a float word") == 0 ? 1u : 2u;
+    const uint64_t calls_that_exit = std::strcmp(c.name, "modulo of a float word") == 0 ? 1u : std::strcmp(c.name, "a raw operand and a string") == 0 ? 0u : 2u;
     EXPECT_EQ(jit.stats.deopts, kMain + calls_that_exit) << c.name << ": exactly one exit per call, at the instruction (nothing after it is compiled)";
     EXPECT_EQ(plain.raw.find('[') != std::string::npos || !plain.errors.empty(), c.errors)
         << c.name << ": the interpreter " << (c.errors ? "makes" : "does not make") << " an error value (it prints in brackets or is entered in the list): " << plain.raw << " / " << plain.errors;
@@ -555,11 +556,12 @@ TEST(JitArith, ACastToIntTruncatesTowardZeroAndACastToFloatKeepsTheBits) {
 
 TEST(JitArith, AFunctionWithALoopThatAlwaysEndsInAComputedFloatStaysCompiledAcrossManyCallsBecauseThatExitIsDesigned) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // The exit that boxes a raw float for its consumer (a return, a print) is the design, not a failure: it does not
+  // The exit that boxes a raw float for its consumer (a return, an element of a literal) is the design, not a failure: it does not
   // count toward the discard limit, so the function is not let go however many calls end there. (The old rule counted it
   // and discarded the function at the eighth.) The two calls with an operand that is not a number are real guard failures
   // and are counted, but two are not eight.
-  const char * bodies[] = {"return a * 1.5;", "z = a * 1.5; print(z); return 0;"};
+  // (`print([z])`: the element's ADOPT is the designed exit; a print of a raw float is compiled since spec-template-compiled story 4g.)
+  const char * bodies[] = {"return a * 1.5;", "z = a * 1.5; print([z]); return 0;"};
   for (const char * body : bodies) {
     Scenario sc = scenario(std::string("function f(a) { k = 0; while (k < 1) { k = k + 1; } ") + body + " }\n" +
         "s = 0; k = 0; while (k < 14) { s = f(k); print(s); print(\",\"); k += 1; } print(f(\"x\")); print(f(null)); print(f(2.5));\n");
@@ -581,7 +583,8 @@ TEST(JitArith, AFunctionWithNoLoopWhoseEveryPathEndsInAComputedFloatIsDeclinedAt
   GLTANG_REQUIRE_JIT_BACKEND();
   // No backward jump, no normal return and no real exit: every call would run a few instructions in compiled code and
   // leave. It cannot repay the compile, so it is declined: never entered, no compile failure, no exit.
-  const char * bodies[] = {"return a * 1.5;", "z = a * 1.5; print(z); return 0;"};
+  // (`print([z])`: the element's ADOPT is the designed exit; a print of a raw float is compiled since spec-template-compiled story 4g.)
+  const char * bodies[] = {"return a * 1.5;", "z = a * 1.5; print([z]); return 0;"};
   for (const char * body : bodies) {
     Scenario sc = scenario(std::string("function f(a) { ") + body + " }\n" +
         "s = 0; k = 0; while (k < 14) { s = f(k); print(s); print(\",\"); k += 1; } print(f(\"x\")); print(f(null)); print(f(2.5));\n");
@@ -646,7 +649,7 @@ TEST(JitArith, AFunctionWithAFloatPathAndANormalIntegerReturnIsCompiledNotDeclin
 TEST(JitArith, ALoopFreeFunctionWhoseTwoArmsBothEndAtADesignedExitIsDeclined) {
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc = scenario(
-      "function f(c, a) { x = a * 1.5; if (c) { return x * 2.0; } print(x); return 0; }\n"
+      "function f(c, a) { x = a * 1.5; if (c) { return x * 2.0; } print([x]); return 0; }\n"
       "k = 0; while (k < 10) { print(f(true, k)); print(f(false, k)); k += 1; }\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
@@ -667,10 +670,11 @@ TEST(JitArith, EveryConsumerOfARawFloatThatTheRuleTreatsAsDesignedIsFlaggedNotCo
   };
   const Consumer consumers[] = {
       {"a return", "return x;"},
-      {"a print", "print(x); return 0;"},
+      // A print and a cast to string of a raw float were designed exits until spec-template-compiled story 4g
+      // compiled them (test_jit_templates.cpp, the raw-float tests); an element of a literal stands for them.
+      {"an element", "y = [x]; return 0;"},
       {"a store to a global", "g = x; return 0;"},
       {"a call argument", "h(x); return 0;"},
-      {"as string", "y = x as string; return 0;"},
       {"as bool", "y = x as bool; return 0;"},
       {"truthiness in an if", "if (x) { y = 1; } return 0;"},
       {"not", "y = !x; return 0;"},
@@ -784,9 +788,10 @@ TEST(JitArith, AFunctionWithARealFailurePathIsStillDiscardedAtTheEighthCountedEx
 
 TEST(JitArith, TheDesignedExitsAreCountedByTheirOwnStatisticAndTheCountedOneDoesNotRiseForThem) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // A loop, then every kind of consumer of a raw float in turn, each a designed exit: a return, a print, a store to a
-  // global, a call argument, a cast to string. Called twenty times each: not one counts toward the limit.
-  const char * consumers[] = {"return x;", "print(x); return 0;", "g = x; return 0;", "h(x); return 0;", "y = x as string; return 0;"};
+  // A loop, then every kind of consumer of a raw float in turn, each a designed exit: a return, an element, a store to a
+  // global, a call argument, a cast to bool (a print and a cast to string were until spec-template-compiled story 4g
+  // compiled them). Called twenty times each: not one counts toward the limit.
+  const char * consumers[] = {"return x;", "y = [x]; return 0;", "g = x; return 0;", "h(x); return 0;", "y = x as bool; return 0;"};
   for (const char * consumer : consumers) {
     Scenario sc = scenario(std::string("g = 0;\nfunction h(a) { return 1; }\nfunction f(n) { global g; x = n * 0.5; k = 0; while (k < 1) { k = k + 1; } ") + consumer + " }\n" +
         "for (j = 0; j < 20; j += 1) { f(j); }\n");
@@ -832,7 +837,7 @@ TEST(JitArith, UnaryMinusOfARawFloatFlipsTheSignBitAloneSoNegativeZeroAndNaNAreR
   EXPECT_NE(jit.raw.find("0. -0. true"), std::string::npos) << "-(-0.0) is positive zero: " << jit.raw;
   EXPECT_NE(jit.raw.find("nan"), std::string::npos) << jit.raw;
   EXPECT_NE(jit.stats.entries, 0u);
-  EXPECT_GE(jit.stats.exits_expected, 1u) << "f, which holds the -0.0 row, was compiled and entered: its first call (f(0.0)) ended at the designed exit, the print";
+  EXPECT_GE(jit.stats.raw_float_texts, 2u) << "f, which holds the -0.0 row, was compiled and entered, and printed its raw floats itself (story 4g)";
 }
 
 // ---------------------------------------------------------------------------
@@ -842,8 +847,9 @@ TEST(JitArith, UnaryMinusOfARawFloatFlipsTheSignBitAloneSoNegativeZeroAndNaNAreR
 TEST(JitArith, AComputedFloatThatReachesAConsumerThatIsNotAnOperationExitsThereBoxedOnce) {
   GLTANG_REQUIRE_JIT_BACKEND();
   const char * consumers[] = {
-      "print(s);", "return s;", "y = h(s, 1); print(y);", "g = s; print(g);", "if (s) { i = i + 1; } print(i);", "y = s && 1; print(y);", "y = s || 1; print(y);",
-      "y = !s; print(y);", "y = s as string; print(y);", "y = s as bool; print(y);", "y = s % 2; print(y);", "y = [s]; print(y[0]);", "y = s.name; print(y);",
+      // `print(s)` and `s as string` were here until spec-template-compiled story 4g compiled them.
+      "return s;", "y = h(s, 1); print(y);", "g = s; print(g);", "if (s) { i = i + 1; } print(i);", "y = s && 1; print(y);", "y = s || 1; print(y);",
+      "y = !s; print(y);", "y = s as bool; print(y);", "y = s % 2; print(y);", "y = [s]; print(y[0]);", "y = s.name; print(y);",
   };
   for (const char * consumer : consumers) {
     Scenario sc = scenario(std::string("g = 0;\nfunction h(a, b) { return a; }\n") +

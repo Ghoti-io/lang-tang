@@ -703,6 +703,17 @@ extern const GRHEAP_Type gltang_type_template;
 extern const GRHEAP_Type gltang_type_rng;
 extern const GRHEAP_Type gltang_type_custom;
 
+/**
+ * @brief A static function the compiler is to inline wherever it is called: one body shared by an
+ *   operation's interpreted form and the form compiled code calls with a raw float (story 4g's print,
+ *   concatenation and string conversion), which must cost the interpreter nothing for being shared.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#define GLTANG_VM_SHARED static inline __attribute__((always_inline))
+#else
+#define GLTANG_VM_SHARED static inline
+#endif
+
 GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v);
 bool gltang_vm_truthy(GLTANG_Value v);
 bool gltang_vm_is_error(GLTANG_Value v);
@@ -931,12 +942,31 @@ bool gltang_vm_print_constant_fast(GLTANG_Execution * exec, const GLTANG_StringB
 bool gltang_vm_print_string_fast(GLTANG_Execution * exec, GLTANG_Value v);
 /** @brief The text a value becomes in a `+` with a string; null/function are `Not supported`. */
 GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v);
+/*
+ * A float given as the double itself, for compiled code, which holds a float it computed raw and
+ * never boxes one (AD-27; spec-template-compiled story 4g). Each is the function above it given a
+ * float object of that value, through the same formatting (render_float, gltang_vm_format_float)
+ * and the same output path or string builder, so a float has one text on both tiers.
+ */
+/** @brief gltang_vm_op_print of a float: its text appended, delivered and committed; null, or the failure's error. */
+GLTANG_Value gltang_vm_print_float(GLTANG_Execution * exec, double d);
+/** @brief The common case of gltang_vm_print_float, as gltang_vm_print_string_fast is of a string's print. Not a GC point. */
+bool gltang_vm_print_float_fast(GLTANG_Execution * exec, double d);
+/** @brief gltang_vm_to_string of a float: its text as a string, or the failure. */
+GLTANG_Value gltang_vm_float_to_string(GLTANG_Execution * exec, double d);
 
 // ---------------------------------------------------------------------------
 // Operations (ops.c)
 // ---------------------------------------------------------------------------
 
 GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTANG_Value a, GLTANG_Value b);
+/**
+ * @brief gltang_vm_op_binary's `+` of the string `s` and a float of value `d` (`d` on the left when
+ *   `float_first`), for compiled code holding the float raw (spec-template-compiled story 4g): the
+ *   same steps from the conversion on, with the float's text made by gltang_vm_float_to_string. `s`
+ *   must be a string.
+ */
+GLTANG_Value gltang_vm_concat_float(GLTANG_Execution * exec, GLTANG_Value s, double d, bool float_first);
 GLTANG_Value gltang_vm_op_neg(GLTANG_Execution * exec, GLTANG_Value v);
 GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type);
 GLTANG_Value gltang_vm_op_index(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value index);

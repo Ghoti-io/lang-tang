@@ -1864,7 +1864,7 @@ breaks nothing as not caught. Observed:
 | 169 custom-operand-guard-removed | compiled code calls the value operations' thunks with a host-defined operand | the host-defined operand of each value operation (`testJit_templates`) | f's counted exits are 0, not 3 |
 | 170 compiled-slice-identity-not-set | the `SLICE` thunk does not stand, so a poll inside it writes no identity | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs |
 | 171 concatenation-skips-its-fuel | the `+` thunk adds no cost | the concatenation in a loop (`testJit_templates`) | the fuel differs from the interpreter's |
-| 172 string-beside-a-raw-float-not-a-box-exit | `reads_raw` never takes `"x" + f` for the box exit | the raw float beside a string constant (`testJit_templates`) | no expected exit, and a counted one in its place |
+| 172 raw-float-beside-a-string-never-a-concatenation | `add_concat` never takes `"x" + f` or `t + f` (t a variable that holds a string constant) for a raw float's concatenation (until story 4g: `reads_raw` never took `"x" + f` for the box exit) | the raw float beside a string (`testJit_templates`, `JitTemplates.ARawFloatBeside*`) | a counted exit where there was none |
 | 173 interpreted-slice-not-at-the-slice | the interpreter's `SLICE` neither saves its position nor stands | the long concatenation and slice (`testJit_templates`) | the identity of a poll inside the slice differs from compiled code's |
 | 174 compiled-attribute-identity-not-set | the value `ATTR` thunk does not stand | the long operations' retag and render (`testJit_templates`) | the identity of a poll inside the retag differs |
 | 175 compiled-index-identity-not-set | the `INDEX` thunk does not stand | the long operations' grapheme index (`testJit_templates`) | the identity of a poll inside the substring differs |
@@ -1884,12 +1884,12 @@ breaks nothing as not caught. Observed:
 | 189 constant-cast-lower-bound-exclusive | the constant-cast fold refuses -2^59 (the fold's twin of 61) | the constant casts at both bounds (`testJit_templates`) | -2^59 exits where no exit is expected |
 | 191 refused-map-key-skipped | `gltang_vm_map_fill` skips a key that is the out-of-memory error | the memory sweep where only a long map key is refused (`testJit_templates`) | the literal is a map lacking its entry, not the error |
 | 190 array-fill-into-a-failure | the array fill does not test that the allocation made an array | the memory sweep over a compiled function's literals (`testJit_templates`) | a refused budget's run differs from the interpreter's |
-| 192 bench-warm-template-exits | the warm template row's program gains an exit that counts (a string variable beside a raw float, on a path the compile cannot rule out), its output unchanged | `bench --smoke --only steady-template-compiled-warm-call`: the template policy, zero exits and never discarded | the harness aborts |
+| 192 bench-warm-template-exits | the warm template row's program gains an exit that counts (an array beside a raw float, on a path the compile cannot rule out; a string variable until story 4g compiled its concatenation), its output unchanged | `bench --smoke --only steady-template-compiled-warm-call`: the template policy, zero exits and never discarded | the harness aborts |
 | 193 bench-row-template-box-exit | the per-row template stores a raw float to a top-level variable on a path the compile cannot rule out: a designed box exit at every call, its output unchanged | `bench --smoke --only steady-template-rows-compiled-per-row`: the template policy, zero expected exits and every compiled call returns | the harness aborts |
 | 194 bench-template-top-level-entry-returns | the template policy expects the top level's entry, which leaves at its first statement, to return | `bench --smoke --only steady-template-rows-compiled-per-row`: compiled entries returned exactly | the harness aborts |
 | 195 bench-template-top-level-entry-forgotten | the template policy leaves out the top level's entry at a threshold of one | `bench --smoke --only steady-template-rows-compiled-per-row`: entries into compiled code exactly | the harness aborts |
-| 196 bench-template-box-exit-counted | the template policy takes a designed box exit for an exit that counts | `bench --smoke --only steady-template-float-print-compiled-warm-call`: expected and counted exits exactly | the harness aborts |
-| 197 bench-template-discard-cap-off-by-one | the template policy expects a template whose exits count to be entered nine times before its discard, not eight | `bench --smoke --only steady-template-float-label-compiled-warm-call`: entries and counted exits exactly | the harness aborts |
+| 196 bench-raw-float-print-is-a-box-exit-again | `reads_raw` takes a raw float's print for the designed box exit where natives can be called, as before story 4g (until story 4g: the template policy took a designed box exit for one that counts) | `bench --smoke --only steady-template-float-print-compiled-warm-call`: the template policy, zero exits and every compiled call returns | the harness aborts |
+| 197 bench-raw-float-concatenation-leaves-after-its-call | the thunk of a raw float's concatenation asks compiled code to leave after the call (until story 4g: the template policy's discard limit off by one) | `bench --smoke --only steady-template-float-label-compiled-warm-call`: the template policy, zero exits and every compiled call returns | the harness aborts |
 | 198 poll-inside-an-operation-reports-the-last-poll | the runtime poll does not write the identity of the operation that stands, on either tier | the poll identities located to their lines, each tier on its own (`testJit_templates`, `JitTemplates.APollInsideALongOperation*`, the interpreter's in both arms) | no poll's identity names the concatenation's line (the tiers still agree) |
 | 199 compiled-print-stands-past-its-call | the `PRINT_CONST` thunk does not clear `exec->standing` | the large-print test's third program, whose template's last text follows an HTML string and so is the thunk, not story 4d's fast path, and leaves the stand set for the polls of HALT's output string (`testJit_templates`) | a later poll in an operation that does not stand writes an identity the interpreter's frame never holds |
 | 200 entry-extends-no-single-raw-float | the entry extends the reservation only for a function with more than one raw float at a site | the reservation's capacity across compiled calls and a nested entry (`testJit_floats`) | the capacity at the caller's polls differs, or a rebuild is refused |
@@ -1917,6 +1917,13 @@ breaks nothing as not caught. Observed:
 | 222 output-segments-not-grown-past-four | an output's segment array, which starts at four, retags its fourth segment instead of growing | the texts and HTML strings that alternate (`JitTemplates.ATextAfterAnotherTag*`): the rendered output | the fourth segment's bytes rendered with the fifth's tag |
 | 223 site-word-halves-swapped | the one 64-bit store of a compiled operation's position puts the offset in the function's word | the template tests (`testJit_templates`): errors, polls and identities against the interpreter's | the tiers name different places |
 | 224 execution-passed-to-library-calls | the execution is passed first to every native, the library calls' too | the natives of every arity (`testNative_calls`) | a fifteen-argument call is past runtime-jit's limit, and every library call misreads its callee |
+| 225 fast-float-print-skips-its-fuel | the fast path of a raw float's print does not charge the print's cost | the prints, concatenations and casts of the special values (`testJit_templates`, `JitTemplates.ARawFloatsPrintConcatenation*`): fuel | the two runs' fuel differs |
+| 226 slow-float-print-reads-its-bits-as-an-integer | the thunk of a raw float's print converts its 64 bits to a double as a number | the raw float printed to the host's sink, every print the slow path (`JitTemplates.ARawFloatPrintedToTheHostsSink*`): deliveries and output | another number printed in compiled code |
+| 227 raw-float-concatenation-sides-swapped | the emitter tells the concatenation's thunk the float is on the other side | the prints, concatenations and casts of the special values: their text | `"v=" + x` printed as `x + "v="` |
+| 228 fused-float-sum-skips-its-fuel | the number way of a fused `+` (emit_add_fused) does not charge the `+` | the printed sum of a raw float and a value word (`JitTemplates.APrintedSumOfARawFloat*`): fuel | the two runs' fuel differs |
+| 229 fused-concatenation-of-the-other-operand | the string way of a fused `+` gives the concatenation the float's own position as the string's | the prints, concatenations and casts of the special values (a parameter beside the float): their text | a stale word read as the string, another text or a fault |
+| 230 float-to-string-skips-its-fuel | the thunk of a raw float's cast to string does not charge the cast | the prints, concatenations and casts of the special values: fuel | the two runs' fuel differs |
+| 231 string-store-a-jump-lands-on-is-evidence | the scan of a variable's stores takes a store that a jump lands on for the string constant before it | the string the scan cannot see (`JitTemplates.AStringTheScanCannotSee*`): `t = c ? 2 : "s"` beside a raw float | a counted exit at every call, where float arithmetic had none |
 
 32 to 34 were planted in the interpreter's arithmetic (under `exec->jit_threshold`) while the compiled float arithmetic of `spec-runtime-float` story 7 did not exist, and stood for it: each is a tier-dependent float result, which is what a wrong compiled operation would be. Story 7 moved each into the compiled emission, with the same number, name and instrument, so that they are caught by the real thing (a compiled add no longer runs `arithmetic`, where the old plants lived). The same three kinds of difference are also planted in a recorded trace (`ObserverFails.AOneUlp*`, `ASubnormal*`, `ANaNWhere*`), where the test shows that the text channel alone does not see the first two, and a pair of programs one ulp apart whose text is identical (`TwoRunsOneUlpApart*`) is shown to diverge on the bits and nowhere else.
 
@@ -1924,14 +1931,14 @@ breaks nothing as not caught. Observed:
 
 35 to 47 are the carried float of story 6. The story's third defect, a raw slot written before its conversion finished, is 37 in the form the collector sees (a raw word in the conversion's root cell across a collection) and 47 with the failing-rebuild seam (raw words copied into the guest frame before a rebuild that is then refused); the core's own ordering is tested in runtime-core, `test_rebuild.cpp`.
 
-152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 one in the box-exit and in the counted-exit policy. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 218 are story 4d's fast paths: 205, 214 and 215 in the JIT's helpers, 217 in the emitter and the rest in the vm's fast functions, which are compiled into a JIT=no build too but called only by compiled code, so only the JIT arm runs their tests. 219 to 224 are story 4e's: 219 in the interpreter's integer path of the binary operators (both builds run it), 220 in the table of natives the first compile makes, 221 in the entry, 222 in the output both tiers share (seen by a test of the JIT arm), 223 and 224 in the emitter; 176 was rewritten there for the one test of both operands of `+`'s slow path, its defect unchanged.
+152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 were a mistake in the box-exit and in the counted-exit policy until story 4g removed those two policies with the exits they described, and are now a defect in the compiler and in a thunk that only the float rows' policy sees. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 218 are story 4d's fast paths: 205, 214 and 215 in the JIT's helpers, 217 in the emitter and the rest in the vm's fast functions, which are compiled into a JIT=no build too but called only by compiled code, so only the JIT arm runs their tests. 219 to 224 are story 4e's: 219 in the interpreter's integer path of the binary operators (both builds run it), 220 in the table of natives the first compile makes, 221 in the entry, 222 in the output both tiers share (seen by a test of the JIT arm), 223 and 224 in the emitter; 176 was rewritten there for the one test of both operands of `+`'s slow path, its defect unchanged. 225 to 231 are story 4g's, a raw float's print, concatenation and cast to string compiled: 225 in the JIT's helpers, 226, 197 and 230 in thunks, 196, 227 to 229, 231 and 172 (retargeted from the box exit it was) in the emitter and its analysis.
 
 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 224 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 231 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the two hundred and twelve that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the two hundred and nineteen that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2450,9 +2457,9 @@ print's value (null, or the error of a print that failed: an error printed is sw
 null); `PRINT_CONST` pushes nothing and its value is dropped, as the interpreter drops it; `CLEAR_RESULT`
 touches no slot. A thunk's `GLTANG_V_UNWIND` (a pacing poll that stopped the run, a scope that ran out
 inside the text) leaves through the chain deopt with the state after the call, as a native's does, and
-what the print had appended is already rolled back. A print of a raw float is not given to the thunk:
-it is the designed exit that boxes the float (`reads_raw`), so its text is the interpreter's and compiled
-code never boxes (AD-27). The two prints compile only where natives can be called (`natives_on`, as
+what the print had appended is already rolled back. A print of a raw float was not given to the thunk:
+it was the designed exit that boxes the float (`reads_raw`), until story 4g gave it a thunk of its own
+that takes the double (below, "A raw float's text"). The two prints compile only where natives can be called (`natives_on`, as
 `USE`); elsewhere they stay exits, counted as before. `CLEAR_RESULT` is a plain call and compiles
 everywhere. Neither thunk declares the re-enter flag: a sink may not re-enter guest code.
 
@@ -2487,8 +2494,8 @@ eighth call and ran interpreted from then on. Now none of them is an exit:
   load. The array is not a heap object (the execution's roots, or a template activation's block,
   enumerated as roots), so the store is the value's bits with no barrier, as interpreted; runtime-jit
   refuses a store of a reference, which is why the value is stored as a word.
-- A raw float operand of any of the three is the designed box exit, as a printed one is: each keeps a
-  value word where the interpreter keeps one, and compiled code never boxes (AD-27).
+- A raw float operand of any of the three is the designed box exit, as a printed one was until story
+  4g: each keeps a value word where the interpreter keeps one, and compiled code never boxes (AD-27).
 - **`HALT` is a return, not an exit.** Compiled code charges `HALT`'s fuel and returns the *halted
   word* (`gltang_jit_halted_word`, jit.h: the tag `1111`, which is never a value, with the `HALT`'s
   index above it; the index is never 0, so the word is never `GLTANG_V_UNWIND`). The entry counts it
@@ -2559,7 +2566,8 @@ native-stack refusal at the same site by the refusal the test leaves (`GLTANG_RE
 Compiling that dispatch is `spec-tang-host-extensibility` story 10's
 (`planning/specs/spec-tang-host-extensibility/stories.yaml`, id "10").
 
-*Raw floats.* No thunk is given a raw float. `INDEX` and `SLICE` with a raw operand are the designed
+*Raw floats.* (As story 3 left them; story 4g compiled the concatenations, below, "A raw float's
+text".) No thunk is given a raw float. `INDEX` and `SLICE` with a raw operand are the designed
 box exit (`reads_raw`, `apply_kinds`). `"x" + f`, with f raw and a string constant on the other side
 (the analysis records which side's producer is the `CONST` of a string, `str_side`), is a
 concatenation that converts the float to text: the designed box exit too, and the interpreter makes
@@ -2655,9 +2663,9 @@ whole function fail to compile (story 2's finding). Each now calls the interpret
   deep copy allocates and paces, so both tiers stand at the `ADOPT` then, and only then. `ADOPT` is in
   the story although CAP-3 does not name it: it is in front of every element of a literal that is not
   fresh (`[name, row]`), and without it such a literal would still exit there.
-- **Raw floats**: every element slot of `ARRAY` and `MAP`, the operand of `ADOPT` and of the casts to
-  bool and to string are in `reads_raw`, so a raw float there is the designed box exit and the
-  interpreter runs the operation (`planning/unboxed-float-output.md`).
+- **Raw floats**: every element slot of `ARRAY` and `MAP`, the operand of `ADOPT` and of the cast to
+  bool are in `reads_raw`, so a raw float there is the designed box exit and the interpreter runs the
+  operation. The cast to string of one was too, until story 4g compiled it (below, "A raw float's text").
 
 Rejected: filling a literal through native-table calls (16 arguments fit there) would make every fill a
 GC point with frame states of a half-built literal, which is what a no-GC fill avoids; making the
@@ -2976,6 +2984,77 @@ instructions: its branch mispredictions move by a factor of five between commits
 path and by three between runs of one binary (from 6 to 172 million), which is the layout of
 `gltang_vm_run`'s branches under GCC 16 for arm64, not a change's logic, and is not addressed here.
 
+**A raw float's text (spec-template-compiled story 4g).** Compiled code holds a float it computed raw
+(AD-27) and never boxes it, and until this story a print of one, a `+` of one with a string and a cast of
+one to string each left compiled code: the print and `"x" + f` at the designed box exit, any other string
+beside a raw float at a counted guard exit (the unbox of the string, as float arithmetic), which
+discarded a template doing it on every call at the eighth. Each exit rebuilt the frames, about 5,500
+instructions. Now each is a call that is given the double:
+
+- *One implementation of a float's text.* `render_float` (text.c) is the one place a float's text is
+  made for a sink, a float object's (`render_number`) included. `gltang_vm_print_float` is
+  `gltang_vm_op_print` of a float (the same sink, rollback, delivery and commit, `print_finish`),
+  `gltang_vm_float_to_string` is `gltang_vm_to_string` of one (`to_string_finish`), and
+  `gltang_vm_concat_float` is `gltang_vm_op_binary`'s `+` of a string and a float from the conversion
+  on (`concat_converted`, ops.c, which holds the same temporaries, a null word where the interpreter
+  holds the float's box, so that their storage grows at the same `+`). The shared bodies are forced
+  inline (`GLTANG_VM_SHARED`), so the interpreter pays nothing for sharing them.
+- *The call kind.* The thunks (`thunk_print_float`, `thunk_concat_float`, `thunk_float_string`,
+  natives.c) are native-table calls, GC points with the frame states before and after, because each
+  operation can be one: the output's growth and the strings are allocations the memory budget may
+  refuse (a poll, then the error), and a host sink that refuses a delivery makes the print's error, a
+  heap object. Delivery itself cannot collect: the sink is given bytes only, with `in_host` set, and
+  anything it calls on the execution is refused. A native's arguments are integer words on every
+  backend, so a thunk is given the float's bits (`REINTERPRET`). A print first tries a fast path,
+  `gltang_jit_print_float_fast` (helpers.c, over `gltang_vm_print_float_fast`, the same
+  `print_run_fast` story 4d's string print uses): a no-GC helper call given the double in a float
+  register (runtime-jit passes an `F64` argument to a helper on x86-64 SysV, Win64 and arm64), which
+  copies the text when nothing but the copy can follow (no delivery, room, the tag). Each charges its
+  operation's fuel once, stands as the interpreter's operation stands, and counts itself in
+  `raw_float_texts` beside `output_calls` or `value_calls`. Where natives cannot be called, the three
+  stay the designed box exit.
+- *Which `+` it is.* The kinds are static, and a `+` of a raw float and a value word has a result of
+  one kind or the other: a raw double (float arithmetic) or a value word (a concatenation). It is a
+  concatenation (`add_concat`) when the value word is evidence of a string (`string_evident`): a string
+  constant, a cast to string, a `+` that concatenates (one of its operands is such evidence, or it is a
+  raw float's concatenation: `s + "a" + f`), or the load of a variable every store of which, in function
+  0 and in the function itself, stores a string constant (`scan_strings`, run only for a function with a
+  float constant or a cast to float; a store a jump lands on is no evidence). The value word is tested to
+  be a string when it runs, and anything else is a guard exit, which counts. With no evidence (an
+  attribute, an element, a parameter) it is float arithmetic, as before, unless what follows within six
+  instructions makes its value a value word either way (a print of it, a concatenation of it with a
+  string, a cast to string: `<%= item.name + f %>`, `<%= label + f + "!" %>`): then the `+` and those
+  instructions are emitted twice (`emit_add_fused`), once for a number (a small integer or a float
+  object: float arithmetic, the rest on the raw sum) and once for a string (the concatenation, the rest
+  on the string), joining after them, with anything else the guard exit before the `+`. The exits at a
+  native site name their reason (`GLTANG_REFUSAL_OPERAND_GUARD`), or the deopt hook would take them
+  for a call the native stack refused.
+- *What is left.* A raw float stored in a variable of a template (its globals), returned, passed as an
+  argument or made an element is still the designed box exit, and a variable assigned a float first
+  inside a loop still turns every raw source of its function into an exit (the merge rule). A `+` of a
+  raw float and a value word that is no evidence and is not followed by one of the instructions above
+  (`r = item.name + f;`, `return label + f;` with `label` a parameter) is still float arithmetic,
+  whose guard exits when the value word is a string.
+
+Measured (callgrind as story 4e's, GCC 16.2.0 in `ghoti-build:gcc16`, the whole case; before is
+`4258eca`, whose counts are `0fe87ff`'s within a few hundred instructions; the records are
+`notes/lang-tang/perf/2026-10-21-template-4g/` in the workspace):
+
+| row | interpreted before | compiled before | interpreted after | compiled after |
+|---|---|---|---|---|
+| float print, warm call | 98,127,649 | 125,108,561 (+27.5%) | 98,089,301 | 83,697,659 (-14.7%) |
+| float beside a constant | 148,135,295 | 175,458,496 (+18.4%) | 148,096,730 | 122,474,184 (-17.3%) |
+| float beside a variable | 148,652,253 | 151,005,573 (+1.6%) | 148,614,103 | 122,349,688 (-17.7%) |
+| warm template call | 33,684,368 | 34,410,986 (+2.2%) | 33,684,369 | 34,415,803 (+2.2%) |
+| template per row | 123,060,623 | 119,850,366 (-2.6%) | 123,064,572 | 119,860,845 (-2.6%) |
+
+(Percentages are compiled against interpreted in the same build.) The three float rows stay compiled for
+the whole call now (the bench's template policy: no exit, every compiled call returns); the variable's row
+was interpreted before (discarded at its eighth call), which is why it was within 2%. Elsewhere the rows
+move by less than 0.15%: `run-fib-15` +0.07% and `run-template-call-200` +0.12% (the compile: three more
+natives in the table, the evidence of each `+`), the host-print rows -0.13% (`render_number`'s smaller
+frame).
+
 **The hooks** (`src/jit/hooks.c`). *push* checks its own arguments (a token that
 names a function of a loaded program, the count `parameter_count + 1`, one result,
 and the flag 0; anything else is refused and counted in `hook_argument_errors`), tests the guest
@@ -3288,8 +3367,8 @@ over small integers. The rules:
   when a frame is rebuilt, from story 6's pool; more sites now have raw slots live, so
   `max_converting` may rise, and the reservation follows it with no code change. A function with
   no float constant, no cast to float, no cast to int and no `/` or `%` is emitted as before; integer `/` and `%` are inline now, and an `as int` of a value word declares the two `F64` temporaries (`need_tmp_f`) even when no slot is raw (the temporaries are declared exactly when some slot is ever raw, or a reachable `CAST` to int exists). A float that reaches a
-  consumer that is not an operation (`print`, `return`, a call argument, a store to a global,
-  truthiness, `as string`, `%`) is still an exit at that instruction; it only boxes the value for its consumer, so it is flagged as expected and does not count toward the discard limit (the decision and its measured effect are in "Floats, measured"). A comparison of a raw float with null or a string (`x == null`, `x != "a"`, `x < "a"`): the interpreter answers (false, true, or "not supported"), but compiled code compares only numbers, so the unbox guard fails and the exit counts as a guard exit (`JitArith.ComparingARawFloatWithNullOrAString*` asserts it).
+  consumer that is not an operation (`return`, a call argument, a store to a global,
+  truthiness, `%`; `print` and `as string` too until spec-template-compiled story 4g compiled them) is still an exit at that instruction; it only boxes the value for its consumer, so it is flagged as expected and does not count toward the discard limit (the decision and its measured effect are in "Floats, measured"). A comparison of a raw float with null or a string (`x == null`, `x != "a"`, `x < "a"`): the interpreter answers (false, true, or "not supported"), but compiled code compares only numbers, so the unbox guard fails and the exit counts as a guard exit (`JitArith.ComparingARawFloatWithNullOrAString*` asserts it).
 
 *Rejected:* speculating that a `REF`-`REF` site is float-float with no feedback (wrong for every
 integer loop; each wrong guess exits the other kind); compiling two variants and choosing by
@@ -3308,8 +3387,8 @@ be a value word, a heap object or an error, so no later story removes it without
 
 | Exit | Why it leaves | |
 | --- | --- | --- |
-| A raw float reaching `print`, `return`, a call argument (a guest function or a native), a store to a global, an element or a member | the consumer wants a value word, and making one is an allocation | structural |
-| `as string` of anything | the result is a string object | structural |
+| A raw float reaching `return`, a call argument (a guest function or a native), a store to a global, an element or a member | the consumer wants a value word, and making one is an allocation | structural |
+| (A raw float's `print`, its `+` with a string and its `as string` were here, and so was `as string` of anything: spec-template-compiled stories 4 and 4g compiled them as calls of the interpreter's functions, which make the string objects) | | |
 | An error: float `/` by zero, `as int` of a NaN or of a value outside `[-2^59, 2^59)`, a string, array, map or boolean operand of a float operation, `%` with a raw operand ("not supported") | the interpreter's answer is an error value, an object | structural |
 | Two `REF` operands (`a * b` of two parameters) | the kind of the result would depend on the run-time types of two unknown words: a raw result needs one operand statically raw, and otherwise it would have to be a boxed result (an allocation) or carry a dynamic tag (rejected) | structural without type feedback; with feedback, unimplemented (a different story) |
 | A float local first assigned inside a loop, or assigned values of different kinds on the two arms of a join | the blunt merge rule: the slot is a value word, so the producer would box at every store | unimplemented (a finer merge demotion was rejected: it would force the float producer into a `REF` slot, an exit at the store every iteration, which the blunt rule gives for the same shape) |
@@ -3562,7 +3641,7 @@ What these show:
 - **Mixed integer and float, comparisons and casts, fresh engine** (ratios interpreted over compiled): case 3 10.17 (`/ 3.0`) and 8.27 (`s * 0.999 + i`); case 4, three comparisons an iteration over raw operands, 4.93; case 6, `as float` 7.83 and `as int` of a raw double 4.27.
 - **Integer division and modulo are compiled 2.73 to 2.89 times as fast with a fresh engine** (case 5, constant and steered divisors; in the steady state 2.78 to 2.83). The guards (the zero test and the range check on the quotient) never fire in the timed loop: `deopts` is 1 (the top level's) in every compiled run.
 
-**Cases 7 to 9, 11 and the controls: a function that ends in a float exit.** `g()` runs `a = 1.5`, a loop of L additions (L = 0, meaning no loop at all, 1, 100 and 10,000) and then the consumer: a `return a * 2.0`, a `print(a * 2.0)`, a store to a global, or a call of another function with `a * 2.0` as its argument; every one of them is an exit at that instruction (a float that must become a value word). The two controls do the same float work and exit nowhere: **(ii)** `return (a * 2.0) as int`, which holds a raw float (so it extends the reservation and tops up the pool at every entry) and returns an integer, and **(i)** an integer-only `g` with the same loop. All of them are called from a script loop at a threshold of one and stamped as call 1, calls 2 to 8, call 9 and calls 10 on. With L = 0 the function has no loop, so the four consumers are **declined** (`functions_declined_expected 1`): their "compiled" rows run in the interpreter, which is the point.
+**Cases 7 to 9, 11 and the controls: a function that ends in a float exit.** `g()` runs `a = 1.5`, a loop of L additions (L = 0, meaning no loop at all, 1, 100 and 10,000) and then the consumer: a `return a * 2.0`, a `print(a * 2.0)`, a store to a global, or a call of another function with `a * 2.0` as its argument; every one of them is an exit at that instruction (a float that must become a value word). The two controls do the same float work and exit nowhere: **(ii)** `return (a * 2.0) as int`, which holds a raw float (so it extends the reservation and tops up the pool at every entry) and returns an integer, and **(i)** an integer-only `g` with the same loop. All of them are called from a script loop at a threshold of one and stamped as call 1, calls 2 to 8, call 9 and calls 10 on. With L = 0 the function has no loop, so the four consumers are **declined** (`functions_declined_expected 1`): their "compiled" rows run in the interpreter, which is the point. (Since spec-template-compiled story 4g the print is no exit: the double is given to the interpreter's print of a float, so `print(a * 2.0)` runs compiled to its return, is not declined at L = 0, and its rows, kept under their names, are now the figures of that print; the harness's policy for them is no exit.)
 
 | Body (loop iterations before the exit) | JIT | call 1 | calls 2-8 (each) | call 9 | calls 10 on (each) |
 | --- | --- | --- | --- | --- | --- |

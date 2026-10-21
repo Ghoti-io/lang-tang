@@ -1,0 +1,17 @@
+# 229 the concatenation of a fused `+` is given the wrong operand for its string
+# defect: emit_add_fused's way for a string passes the concatenation the raw float's own position as the
+#   string's, so it reads the float's slot register (a stale value word) as the string
+# caught by: the prints, concatenations and casts of the special values (a parameter beside the float on either
+#   side), their text against the interpreter's (testJit_templates, JitTemplates.ARawFloatsPrintConcatenation*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -2117,7 +2117,7 @@
+   // The concatenation, then the rest on the string.
+   memcpy(c->sk, kinds, sizeof(kinds));
+   set_block(c, text);
+-  emit_concat_float(c, i, d, pos);
++  emit_concat_float(c, i, d, left_raw ? d - 2u : d - 1u);  /* planted: the float's position as the string's */
+   c->sk[d - 2u] = KIND_REF;
+   if (emit_fused_run(c, i, end)) {
+     branch_to(c, join);

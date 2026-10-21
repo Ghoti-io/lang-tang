@@ -515,6 +515,43 @@ std::vector<Case> value_cases() {
   return cases;
 }
 
+/// A raw float's text in compiled code (spec-template-compiled story 4g): a print, a `+` with a
+/// string on either side and a cast to string, given the double. The functions hold the floats raw
+/// (assigned before their loops, so that no merge turns them into exits) and poll with them live, so
+/// the frame differential reads them raw at those polls; the special values are there (NaN, the
+/// infinities, -0.0, the largest and a subnormal); a long string beside a float polls inside the
+/// concatenation's call, where the compiled frame stands at the `+`; and a template prints computed
+/// floats beside a constant, a variable and a map's attribute between pauses. (A scope that runs out
+/// inside a compiled concatenation of a float is testJit_templates', which sweeps the scope's fuel.)
+std::vector<Case> float_text_cases() {
+  std::vector<Case> cases;
+  auto add = [&](const std::string & name, const std::string & source, std::vector<Part> parts, uint64_t step) {
+    Case c;
+    c.name = "float text/" + name;
+    c.source = source;
+    c.parts = std::move(parts);
+    c.step = step;
+    cases.push_back(c);
+  };
+  const std::string values =
+      "big = \"1.7976931348623157e308\" as float; pinf = big * 10.0; nan = pinf - pinf; nz = -0.0; sub = \"1e-310\" as float;\n"
+      "vals = [1.5, nz, pinf, 0.0 - pinf, nan, big, sub, 3.0, 0.1];\n";
+  add("prints, concatenations and casts of the special values",
+      values +
+      "function f(a, t) { x = a * 1.0; y = x * 2.0; s = \"\"; i = 0; while (i < 3) { print(x); print(\"v=\" + y); s = x + \"\" + t; u = (y as string) + s; print(u); print(t + x); i = i + 1; } return s; }\n"
+      "k = 0; while (k < 9) { r = f(vals[k], \"t\"); print(r); k += 1; }\n", {}, 1000000);
+  add("a long string beside a raw float polls inside the compiled call",
+      "function cat(s, n) { x = n * 0.25; r = 0; i = 0; while (i < n) { a = (s as string) + x; b = x + (s as string); r = r + a.length + b.length; i = i + 1; } return r; }\n"
+      "s = \"0123456789\"; for (k = 0; k < 11; k += 1) { s = s + s; }\nfor (j = 0; j < 3; j += 1) { z = cat(s, 2); } print(z);", {}, 1000000);
+  add("a template prints computed floats beside a constant, a variable and an attribute between pauses",
+      "use row; for (i = 0; i < 12; i += 1) { print(row()); } x = 3; x;",
+      {{"row", "<% item = {name: \"n\"}; label = \"l=\"; k = 0; while (k < 3) { %><%= k * 0.5 %>|<%= \"c=\" + k * 1.5 %>|<%= label + k * 0.25 %>|"
+               "<%= item.name + k * 2.5 %>|<%= k * 0.75 + item.name %>|<%= (k * 0.125) as string %>;<% k += 1; } %>",
+           100000, GLTANG_SCOPE_EMPTY, tt::Mode::Template}},
+      997);
+  return cases;
+}
+
 /// Float programs (spec-runtime-float, CAP-5): +-0, +-inf, NaN, subnormals, the
 /// largest and smallest normal magnitudes, and integers mixed with floats,
 /// inside functions (which tier up) and at the top level. Their float slots and
@@ -783,6 +820,9 @@ std::vector<Case> all_cases() {
   for (Case & c : value_cases()) {
     cases.push_back(std::move(c));
   }
+  for (Case & c : float_text_cases()) {
+    cases.push_back(std::move(c));
+  }
   for (Case & c : float_carry_cases()) {
     cases.push_back(std::move(c));
   }
@@ -967,6 +1007,37 @@ TEST(Observer, ACompiledValueOperationThatPollsInsideShowsTheInterpretersFrameAt
     // casts and copies, and its three programs, make it 331).
     EXPECT_EQ(value_calls, 331u) << "the value operations ran in compiled code";
     EXPECT_GE(unwinds, 1u) << "a scope ran out inside a compiled value operation";
+  }
+}
+#endif
+
+#ifdef GLTANG_WITH_JIT
+TEST(Observer, ACompiledRawFloatsTextShowsTheInterpretersFramesAtEveryPollWithTheFloatRaw) {
+  // The float-text programs alone (spec-template-compiled story 4g), interpreter against compiled code
+  // (plain, under torture and verify, and with a moving stack): at every poll the frames the walk shows,
+  // a raw float's bits among them, and the output, result and errors. The run is not blind: the texts
+  // were made in compiled code from the double (135, 12 and 204, measured: a change to the programs or
+  // to what compiles changes them), and polls saw the floats raw.
+  GLTANG_EXPECT_JIT_BACKEND_ON_GATED_TARGET();
+  uint64_t texts = 0, raw_slots = 0;
+  for (const Case & c : float_text_cases()) {
+    Observed plain = observe(c, kPlain);
+    Observed jit = observe(c, kJit);
+    EXPECT_TRUE(same(c, plain, kPlain.label, jit, kJit.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitTorture), kJitTorture.label));
+    EXPECT_TRUE(same(c, plain, kPlain.label, observe(c, kJitMoving), kJitMoving.label));
+    texts += jit.jit.raw_float_texts;
+    for (const auto & poll : jit.trace.polls) {
+      for (const auto & f : poll.frames) {
+        for (const auto & sl : f.slots) {
+          raw_slots += sl.was_raw;
+        }
+      }
+    }
+  }
+  if (jit_backend_present()) {
+    EXPECT_EQ(texts, 351u) << "a raw float's texts were made in compiled code";
+    EXPECT_GT(raw_slots, 20u) << "polls inside compiled code saw floats held raw";
   }
 }
 #endif

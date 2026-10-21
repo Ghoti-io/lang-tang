@@ -344,18 +344,21 @@ TEST(JitTemplates, ARefusedDeliveryIsRolledBackAndThePrintsValueIsHostFunctionFa
   EXPECT_EQ(jit.stats.deopts, 0u);
 }
 
-TEST(JitTemplates, ARawFloatPrintedIsTheDesignedExitAndPrintsTheInterpretersText) {
+TEST(JitTemplates, ARawFloatPrintedRunsCompiledAndPrintsTheInterpretersText) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // Compiled code never boxes (AD-27): the print of a raw float is an exit that boxes it
-  // in the rebuild, and the interpreter prints it.
+  // Compiled code never boxes (AD-27). Until spec-template-compiled story 4g the print of a raw float
+  // was an exit that boxed it in the rebuild, and the interpreter printed it; now compiled code gives
+  // the double to the interpreter's print of a float (its fast path here: a short text into room).
   Scenario sc = scenario("function f(n) { x = 1.5 * 2.0; i = 0; while (i < n) { i = i + 1; } print(x); print(\";\"); return i; }\nf(3);\nf(4);\n");
   Outcome plain, jit;
   expect_same(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, "3.;3.;");
-  EXPECT_EQ(jit.stats.exits_expected, 2u) << "each call left at the print of the float, the designed exit";
-  EXPECT_EQ(jit.stats.output_calls, 0u) << "the float was never given to the helper raw";
-  EXPECT_GE(jit.stats.values_boxed, 2u);
+  EXPECT_EQ(jit.stats.exits_expected, 0u) << "no call left at the print of the float";
+  EXPECT_EQ(jit.stats.exits_counted, 0u);
+  EXPECT_EQ(jit.stats.output_calls, 4u) << "both prints of both calls, compiled";
+  EXPECT_EQ(jit.stats.raw_float_texts, 2u) << "the float was given to the print raw, once a call";
+  EXPECT_EQ(jit.stats.values_boxed, 0u) << "and never boxed";
   EXPECT_EQ(jit.stats.functions_discarded, 0u);
 }
 
@@ -1188,24 +1191,28 @@ TEST(JitTemplates, AHostDefinedOperandOfAValueOperationIsARealExitBeforeTheOpera
   }
 }
 
-TEST(JitTemplates, ARawFloatBesideAStringConstantIsTheDesignedBoxExitAndBesideAVariableAGuard) {
+TEST(JitTemplates, ARawFloatBesideAStringIsCompiledWhereTheStringIsEvidentAndAGuardWhereItIsNot) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  // `"x" + f` with f raw is a concatenation, which converts the float to text: the designed box
-  // exit, not counted, and the interpreter makes the text. A string from a variable beside a raw
-  // float is float arithmetic in compiled code, whose unbox of the string is a real guard exit.
-  // An index or a slice by a raw float is the designed box exit too. The loop keeps each function
-  // from the static decline.
+  // `"x" + f` with f raw is a concatenation, which converts the float to text. Until
+  // spec-template-compiled story 4g it was the designed box exit; now it is the interpreter's
+  // concatenation given the double, with no exit, and so is a string from a variable whose every
+  // store is a string constant. A string the compiler has no evidence of beside a raw float (a
+  // concatenation's value stored in a variable, here) is still float arithmetic in compiled code,
+  // whose unbox of the string is a real guard exit, unless the sum is printed at once (the tests of
+  // story 4g below). An index or a slice by a raw float is the designed box exit. The loop keeps
+  // each function from the static decline.
   struct Case {
     const char * name;
     const char * body;
     uint64_t expected, counted;
   };
   const Case cases[] = {
-      {"a string constant on the left", "x = 1.5 * 2.0; return \"x\" + x;", 2, 0},
-      {"a string constant on the right", "x = 1.5 * 2.0; return x + \"x\";", 2, 0},
-      {"a string from a variable", "t = \"x\"; x = 1.5 * 2.0; return t + x;", 0, 2},
-      // `label + f`, the label a concatenation: its producer is no `CONST`, so the `+` is float
-      // arithmetic and the unbox of the label is the counted guard exit (design.md, raw floats).
+      {"a string constant on the left", "x = 1.5 * 2.0; return \"x\" + x;", 0, 0},
+      {"a string constant on the right", "x = 1.5 * 2.0; return x + \"x\";", 0, 0},
+      {"a string from a variable", "t = \"x\"; x = 1.5 * 2.0; return t + x;", 0, 0},
+      // `label + f`, the label a concatenation stored in a variable: a store of no string constant,
+      // so no evidence, and the `+` is float arithmetic whose unbox of the label is the counted guard
+      // exit (design.md, raw floats).
       {"label + f", "label = \"n=\" + i; x = 1.5 * 2.0; return label + x;", 0, 2},
       {"an index by a raw float", "t = \"abc\"; x = 0.5 * 2.0; return t[x];", 2, 0},
       {"a slice by a raw float", "t = \"abc\"; x = 0.5 * 2.0; return t[x:];", 2, 0},
@@ -1681,11 +1688,11 @@ TEST(JitTemplates, ACastToIntOfAFloatConstantIsFoldedInsideTheRangeAndAnExitOuts
   }
 }
 
-TEST(JitTemplates, ARawFloatInALiteralOrCastToStringIsTheDesignedBoxExit) {
+TEST(JitTemplates, ARawFloatInALiteralOrCastToBoolIsTheDesignedBoxExit) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The helpers are given value words only: a raw float as an element, a map value, ADOPT's operand
-  // or the operand of a cast to string or to bool is boxed by the exit and the interpreter runs the
-  // operation (a raw-float to-string is planning/unboxed-float-output.md's). A fresh element (`a * 2.0`,
+  // or the operand of a cast to bool is boxed by the exit and the interpreter runs the operation (a
+  // cast to string was too until spec-template-compiled story 4g compiled it). A fresh element (`a * 2.0`,
   // with `a` a parameter) has no ADOPT in front of it, so the exit is the literal's own, before its
   // allocation (no ARRAY or MAP call is made); an element read from a local is not fresh, so its
   // exit is the ADOPT in front of it. The loop keeps each function from the static decline.
@@ -1701,7 +1708,6 @@ TEST(JitTemplates, ARawFloatInALiteralOrCastToStringIsTheDesignedBoxExit) {
       {"an array element from a local (ADOPT)", "x = a * 2.0; return [x];", 0},
       {"an array element from a local beside others (ADOPT)", "x = a * 2.0; return [1, x, \"s\"];", 0},
       {"a map value from a local (ADOPT)", "x = a * 1.5; return {k: x};", 1},
-      {"a cast to string", "x = a * 2.0; return x as string;", 0},
       {"a cast to bool", "x = a * 0.0; return x as bool;", 0},
   };
   for (const Case & c : cases) {
@@ -2120,6 +2126,337 @@ TEST(JitTemplates, AStringPrintedWhereItsTemporaryCannotBeHeldIsTheInterpretersA
     EXPECT_EQ(plain.polls, jit.polls) << "memory " << budget;
   }
   EXPECT_GE(kinds.size(), 3u) << "the sweep did not cross the allocations of the prints";
+}
+
+// ---------------------------------------------------------------------------
+// A raw float's text (story 4g): compiled code holds a float it computed raw and never boxes it
+// (AD-27); its print, its `+` with a string (on either side) and its cast to string are the
+// interpreter's functions of a float given the double (text.c, ops.c), so a float's text has one
+// implementation. Each test compares the tiers as everywhere else and says in numbers that the
+// float was given raw (`raw_float_texts`) and that nothing left compiled code to box it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Every special value, each a float object at the top level: zeros, infinities, NaN, the largest
+/// and smallest finite magnitudes, a subnormal, integers held as floats (2^53 + 1 is not one a
+/// double holds, so it is 2^53), and ordinary values. A function multiplies one by 1.0 to hold it raw.
+/// The top level leaves compiled code first (kTopLevelLeaves, its one exit, which counts), so that
+/// these are made by the interpreter, as float objects: compiled, a float the top level computes is
+/// raw, and its store to a variable the designed box exit.
+const std::string kFloatValues = std::string(kTopLevelLeaves) +
+    "big = \"1.7976931348623157e308\" as float; pinf = big * 10.0; ninf = 0.0 - pinf; nan = pinf - pinf; nz = -0.0;\n"
+    "least = \"5e-324\" as float; small = \"2.2250738585072014e-308\" as float; sub = \"1e-310\" as float;\n"
+    "vals = [0.0, nz, pinf, ninf, nan, big, 0.0 - big, least, small, sub, 3.0, -7.0, 1000000000000000.0, 9007199254740993 as float, 0.1, 2.5, -0.000001, 0.0000004, 123456.789];\n";
+constexpr uint64_t kFloatValueCount = 19;
+
+}  // namespace
+
+TEST(JitTemplates, ARawFloatsPrintConcatenationOnEitherSideAndCastToStringRunCompiledWithTheInterpretersText) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Per value: a print; a string constant on the left and on the right; a parameter (no evidence of a
+  // string, so the `+` and its print are emitted together, emit_add_fused) on either side; a map's
+  // attribute on either side; a chain whose left part concatenates a constant (`t + "a"`, evidence);
+  // a cast to string; two concatenations with a constant stored and joined; a local whose one store
+  // is a string constant beside the float. Thirteen of a raw float's texts a value, all made in
+  // compiled code (`x + "a"` is the one of the right-hand chain).
+  Scenario sc = scenario(kFloatValues +
+      "function f(a, t, m) { x = a * 1.0; i = 0; while (i < 1) { i = i + 1; }\n"
+      "  print(x); print(\"|\"); print(\"v=\" + x); print(\"|\"); print(x + \"=v\"); print(\"|\");\n"
+      "  print(t + x); print(\"|\"); print(x + t); print(\"|\"); print(m.name + x); print(\"|\"); print(x + m.name); print(\"|\");\n"
+      "  print(t + \"a\" + x); print(\"|\"); print(x + \"a\" + t); print(\"|\"); s = x as string; print(s); print(\"|\");\n"
+      "  y = \"w\" + x; z = x + \"w\"; print(y + z); print(\"|\"); l = \"k\"; u = l + x; print(u); print(\";\\n\"); return 0; }\n"
+      "m = {name: \"n\"}; k = 0; while (k < " + std::to_string(kFloatValueCount) + ") { f(vals[k], \"t\", m); k += 1; }\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  for (const char * text : {"|v=nan|nan=v|", "|v=-0.|", "|v=inf|", "|v=-inf|", "3.|v=3.|3.=v|", "|v=1000000000000000.|", "|v=9007199254740992.|",
+           "0.1|v=0.1|", "|v=-0.000001|", "|v=0.|", "|tnan|nant|nnan|nann|tanan|nanat|nan|wnannanw|knan;", "179769313486231570"}) {
+    EXPECT_NE(jit.raw.find(text), std::string::npos) << text << " in " << jit.raw;
+  }
+  EXPECT_EQ(jit.stats.exits_expected, 0u) << "no raw float was boxed for its consumer";
+  EXPECT_EQ(jit.stats.exits_counted, 1u) << "the top level's, and no guard failed: each string beside a float was taken for one";
+  EXPECT_EQ(jit.stats.values_boxed, 0u);
+  EXPECT_EQ(jit.stats.raw_float_texts, 13u * kFloatValueCount) << "every one of a raw float's texts was made in compiled code, given the double";
+  EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  EXPECT_EQ(plain.stats.raw_float_texts, 0u);
+}
+
+TEST(JitTemplates, ATemplateThatPrintsAndConcatenatesAComputedFloatIsCalledManyTimesWithNoExitAndIsNeverDiscarded) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `<%= %>` of a computed float, of a constant, a variable and an attribute beside it on either
+  // side, of two chains and of a cast: the template's function 0 runs from its entry to its HALT in
+  // compiled code at every call. Before story 4g its first print left at the designed box exit, and
+  // the variable's `+` was a counted exit that discarded it at the eighth call. (The float is written
+  // out each time: a template's variables are the template's globals, and a raw float stored in one
+  // is still the designed box exit.)
+  Scenario sc = scenario("use card; i = 0; while (i < 60) { print(card()); i = i + 1; }\n");
+  sc.parts.push_back(card(
+      "<% label = \"v=\"; item = {name: \"n\"}; k = 0; while (k < 3) { %>"
+      "<%= k * 0.5 - 0.25 %>,<%= \"c=\" + (k * 0.5 - 0.25) %>,<%= k * 0.5 - 0.25 + \"=c\" %>,<%= label + (k * 0.5 - 0.25) %>,"
+      "<%= k * 0.5 - 0.25 + label %>,<%= item.name + (k * 0.5 - 0.25) %>,<%= k * 0.5 - 0.25 + item.name %>,"
+      "<%= label + \"a\" + (k * 0.5 - 0.25) %>,<%= (k * 0.5 - 0.25) as string %>,<%= item.name + (k * 0.5 - 0.25) + \"!\" %>;<% k += 1; } %>\n"));
+  std::vector<CardState> seen;
+  sc.after = watch_card(&seen);
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  const std::string one = "-0.25,c=-0.25,-0.25=c,v=-0.25,-0.25v=,n-0.25,-0.25n,v=a-0.25,-0.25,n-0.25!;"
+                          "0.25,c=0.25,0.25=c,v=0.25,0.25v=,n0.25,0.25n,v=a0.25,0.25,n0.25!;"
+                          "0.75,c=0.75,0.75=c,v=0.75,0.75v=,n0.75,0.75n,v=a0.75,0.75,n0.75!;\n";
+  std::string expected;
+  for (int i = 0; i < 60; ++i) {
+    expected += one;
+  }
+  EXPECT_EQ(jit.raw, expected);
+  ASSERT_EQ(seen.size(), 2u);
+  EXPECT_EQ(seen[1].deopts, 0) << "no exit was charged to the template";
+  EXPECT_EQ(seen[1].compiled, 1) << "it was still compiled after sixty calls";
+  EXPECT_EQ(jit.stats.exits_expected, 0u);
+  EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  EXPECT_EQ(jit.stats.raw_float_texts, 60u * 3u * 10u) << "ten of a raw float's texts in each of three iterations of each call";
+}
+
+TEST(JitTemplates, APrintedSumOfARawFloatAndAValueWordIsFloatArithmeticOrAConcatenationAsTheValueIsAndAnythingElseExits) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // `print(v + x)` and `print(x + v)`, with v a parameter: the compiler cannot know which `+` it is,
+  // so both are emitted with the print (emit_add_fused). A small integer and a float object are
+  // float arithmetic, the sum printed raw; a string is the concatenation; anything else (a boxed
+  // integer, null, an array) is the guard exit before the `+`, a counted one, and the interpreter
+  // makes its value. Each of the three kinds is its own function, so that no call of one is let go
+  // for another's exits.
+  struct Case {
+    const char * name;
+    const char * values;
+    uint64_t counted;  ///< The calls that exit at the guard.
+  };
+  const Case cases[] = {
+      {"small integers", "[3, -4, 0, 576460752303423487]", 0},
+      {"float objects", "[1.25, -0.0, \"1e308\" as float, \"5e-324\" as float]", 0},
+      {"strings", "[\"s\", \"\", \"<b>\"]", 0},
+      {"a boxed integer, null and an array", "[576460752303423488, null, [1]]", 3},
+  };
+  for (const Case & c : cases) {
+    // The top level leaves first (kTopLevelLeaves, counted), so that its values are the interpreter's float objects.
+    Scenario sc = scenario(std::string(kTopLevelLeaves) +
+        "function f(v, a) { x = a * 1.0; i = 0; while (i < 1) { i = i + 1; } print(v + x); print(\"|\"); print(x + v); print(\";\"); return 0; }\n" +
+        "vals = " + c.values + "; k = 0; while (k < vals.size) { f(vals[k], 0.5); k += 1; }\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << c.name;
+    EXPECT_EQ(jit.stats.exits_counted, 1u + c.counted) << c.name << ": the top level's exit, and one at the guard for each value that is no number or string";
+    EXPECT_EQ(jit.stats.exits_expected, 0u) << c.name;
+    EXPECT_EQ(jit.stats.functions_discarded, 0u) << c.name;
+    EXPECT_GE(jit.stats.raw_float_texts, c.counted ? 0u : 2u) << c.name << ": the sums were printed in compiled code";
+  }
+}
+
+TEST(JitTemplates, AStringTheScanCannotSeeInAVariableIsNoEvidenceAndOneItTakesWronglyExitsWithTheInterpretersAnswer) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A variable is taken for a string when every store of it the compiler scans stores a string
+  // constant (build.c, scan_strings). A store that a jump lands on takes its value from more than
+  // the constant before it, so `t = c ? 2 : "s"` is no evidence: beside a raw float, not printed at
+  // once, `t + x` is float arithmetic, compiled for the integer with no exit. A store the scan does
+  // not see (another function's) can make the guess wrong: the global then holds a number and the
+  // concatenation's guard exits, counted, and the interpreter adds.
+  {
+    Scenario sc = scenario("function f(c, a) { x = a * 1.0; t = c ? 2 : \"s\"; i = 0; while (i < 1) { i = i + 1; } r = t + x; return r as int; }\n"
+                           "k = 0; while (k < 10) { print(f(true, k)); print(\",\"); k += 1; }\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.stats.exits_counted, 0u) << "an integer from the merge is float arithmetic, compiled";
+    EXPECT_EQ(jit.stats.functions_discarded, 0u);
+  }
+  {
+    Scenario sc = scenario("label = \"v=\";\nfunction set() { global label; label = 5; return 0; }\n"
+                           "function f(a) { global label; x = a * 1.0; i = 0; while (i < 1) { i = i + 1; } r = label + x; return r as string; }\n"
+                           "print(f(1)); print(\",\"); set(); k = 0; while (k < 3) { print(f(k)); print(\",\"); k += 1; }\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure());
+    EXPECT_EQ(jit.raw, "v=1.,5.,6.,7.,");
+    EXPECT_EQ(jit.stats.exits_counted, 3u) << "the three calls after the number was stored left at the guard";
+  }
+}
+
+TEST(JitTemplates, ARawFloatPrintedToTheHostsSinkIsTheSlowPathDeliveredAsTheInterpretersAndARefusalIsRolledBack) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // A print delivered to the sink is never the fast path (output_deliver): every print of a raw float
+  // goes through the native-table call, which is a GC point for that reason, among others (a refused
+  // delivery makes the print's error, a heap object). The sink refuses its fifth delivery: that
+  // print is rolled back, its value is the error, whose origin is the print's line, and the run goes on.
+  Scenario sc = scenario(kFloatValues +
+      "function f(n) { global vals;\n"
+      "  r = null;\n"
+      "  i = 0;\n"
+      "  while (i < n) {\n"
+      "    p = print(vals[i] * 1.0);\n"
+      "    if (i == 4) { r = p; }\n"
+      "    i = i + 1;\n"
+      "  }\n"
+      "  return r;\n"
+      "}\n"
+      "x = f(" + std::to_string(kFloatValueCount) + ");\nprint(x);\nx;\n");
+  for (int refuse = 0; refuse < 2; ++refuse) {
+    std::vector<Delivery> deliveries;
+    deliveries.reserve(2);
+    sc.before = [&](Context & context) {
+      deliveries.emplace_back();
+      deliveries.back().refuse_at = refuse ? 4 : -1;
+      ASSERT_EQ(gltang_execution_set_output_sink(context.execution, sink_fn, &deliveries.back()), GLTANG_OK);
+    };
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << refuse;
+    ASSERT_EQ(deliveries.size(), 2u);
+    EXPECT_EQ(deliveries[1].bytes, deliveries[0].bytes) << "compiled code's prints were delivered as the interpreter's";
+    EXPECT_EQ(deliveries[1].calls, deliveries[0].calls);
+    EXPECT_EQ(deliveries[0].bytes, jit.raw);
+    EXPECT_EQ(jit.stats.raw_float_texts, kFloatValueCount);
+    EXPECT_EQ(jit.stats.fast_prints, 0u) << "a delivered print is never the fast path";
+    EXPECT_EQ(jit.stats.exits_expected, 0u);
+    EXPECT_EQ(jit.stats.exits_counted, 1u) << "the top level's alone";
+    if (refuse) {
+      EXPECT_EQ(jit.raw.find("nan"), std::string::npos) << "the fifth print, of the NaN, was taken back: " << jit.raw;
+      EXPECT_NE(jit.result.find("Host function failed"), std::string::npos) << jit.result;
+      EXPECT_NE(jit.errors.find("page:8["), std::string::npos) << "the error's origin is the print's line: " << jit.errors;
+    }
+    else {
+      EXPECT_NE(jit.raw.find("nan"), std::string::npos) << jit.raw;
+    }
+  }
+}
+
+TEST(JitTemplates, ARawFloatPrintedIntoAnOutputAtItsLimitIsTheSlowPathWhereItWouldNotFitItsTerminator) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Prints of a three-byte float text into one output: the first print grows it to 64 bytes (and
+  // starts its segment), and each print whose bytes and terminator would pass the output's capacity
+  // grows it again, by the slow path; every other one is the fast path. The count is the requirement
+  // written out (texts_the_fast_path_takes), and ends on a print that fills the output to its last
+  // byte but the terminator's, so that a room test one byte short is a count one too many.
+  for (uint64_t n : {21u, 42u, 85u, 100u}) {
+    Scenario sc = scenario("function f(n) { x = 0.5 * 3.0; i = 0; while (i < n) { print(x); i = i + 1; } return i; }\nf(" + std::to_string(n) + ");\n");
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);  // not the heap objects: the interpreter boxes the float, compiled code does not
+    ASSERT_FALSE(HasFailure()) << n;
+    EXPECT_EQ(jit.raw, [&] { std::string s; for (uint64_t k = 0; k < n; ++k) { s += "1.5"; } return s; }()) << n;
+    EXPECT_EQ(jit.stats.raw_float_texts, n);
+    EXPECT_EQ(jit.stats.fast_prints, texts_the_fast_path_takes(std::vector<size_t>(n, 3))) << n;
+  }
+  EXPECT_EQ(texts_the_fast_path_takes(std::vector<size_t>(21, 3)), 20u) << "the 21st fills 63 bytes of 64, and fits";
+  EXPECT_EQ(texts_the_fast_path_takes(std::vector<size_t>(22, 3)), 20u) << "the 22nd would need 67";
+}
+
+TEST(JitTemplates, ALongStringConcatenatedWithARawFloatPollsAsOftenAtTheSameIdentitiesAndAScopeThatRunsOutInsideStopsThere) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // 40960 bytes beside a raw float, on either side (the parameter cast to string, which is evidence of
+  // one): the concatenation paces by its bytes and polls inside the call, at the `+`, standing as the
+  // interpreter's `+` of a string does. Every poll takes
+  // the slow path and is compared with its identity (expect_same), and a template whose fuel runs out
+  // inside such a `+` unwinds at the same poll on both tiers.
+  Scenario sc = scenario(
+      "function f(s, n) { x = n * 0.5; i = 0; r = 0; while (i < n) { a = (s as string) + x; b = x + (s as string); c = \"<\" + x + s; r = r + a.length + b.length + c.length; i = i + 1; } return r; }\n"
+      "s = \"0123456789\"; for (k = 0; k < 12; k += 1) { s = s + s; }\nfor (j = 0; j < 3; j += 1) { y = f(s, 2); } print(y);\n");
+  Outcome plain, jit;
+  expect_same(sc, &plain, &jit);
+  ASSERT_FALSE(HasFailure());
+  EXPECT_EQ(jit.raw, std::to_string(2 * (3 * 40960 + 6 + 1)));
+  EXPECT_EQ(jit.stats.exits_expected + jit.stats.exits_counted, 0u);
+  EXPECT_EQ(jit.stats.raw_float_texts, 3u * 2u * 3u);
+  EXPECT_GT(plain.polls, 3u * 2u * 3u * 10u) << "each `+` polled inside, about ten times";
+  // The template's fuel swept across its run: some budget runs out inside the `+` of the float, the
+  // compiled call having been made (its text counted) and the run unwound from inside it.
+  bool inside = false;
+  for (uint64_t fuel = 40; fuel <= 3000; fuel += 20) {
+    Scenario tpl = scenario("use big; print(\"[\"); r = big(); print(\"]\"); print(\"after\");");
+    Part big{"big", "<% s = \"0123456789\"; k = 0; while (k < 12) { s = s + s; k += 1; } %><%= (s + \"|\" + k * 0.5).length %>", fuel,
+        GLTANG_SCOPE_SEGMENTS, Mode::Template};
+    tpl.parts.push_back(big);
+    Outcome tp, tj;
+    expect_same(tpl, &tp, &tj);
+    ASSERT_FALSE(HasFailure()) << fuel;
+    inside = inside || (tj.stats.raw_float_texts == 1u && tj.stats.native_status_unwinds == 1u);
+  }
+  EXPECT_TRUE(inside) << "no budget ran out inside the compiled concatenation of the float";
+}
+
+TEST(JitTemplates, ARawFloatsTextWhoseAllocationTheMemoryBudgetRefusesFailsAsSomeInterpretedRunDoesAtEveryBudget) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // Tiers agree on fuel, not on memory (AD-27): the interpreter boxes every float it computes and
+  // compiled code boxes none, so at one budget the two refuse different allocations. What must hold
+  // is that every way compiled code's print, concatenation and cast of a raw float fail is a way the
+  // interpreter's fail: the same output, rolled back to the same byte, the same result and errors and
+  // fuel. So the sweep runs both tiers over budgets from below the run's need to above it, and every
+  // compiled outcome must be one some interpreted run had; and the sweep crossed the allocations of
+  // the three operations (several outcomes) on both tiers.
+  Scenario sc = scenario(
+      "function f(n) { s = \"\"; x = 0.0; i = 0; while (i < n) { x = i * 0.5 + 0.25; print(x); print(\";\"); s = s + \"\" + x; t = (x * 3.0) as string; s = t + s; i = i + 1; } return s.length; }\n"
+      "print(f(24));\n");
+  sc.memory_reserve = 0;
+  Outcome measured = run(sc, 0);
+  Outcome compiled = run(sc, 1);
+  ASSERT_TRUE(measured.finished);
+  ASSERT_TRUE(compiled.finished);
+  EXPECT_EQ(compiled.stats.raw_float_texts, 24u * 3u);
+  EXPECT_EQ(compiled.stats.exits_expected + compiled.stats.exits_counted, 0u);
+  // The peak is the context's making; what the run needs after it is far less. The sweep is from the
+  // least budget a run can start in to the least at which each tier's run is whole (found by halving,
+  // as a run's outcome only improves with memory), in steps of 64 bytes: the refusals fall in bands
+  // whose edges are the heap's and the output's growth, tens of KiB apart, and compiled code (which
+  // boxes nothing, but holds a pool of boxes for its rebuilds) needs a little less or a little more.
+  const uint64_t floor = sweep_floor(sc, std::min(measured.memory_peak, compiled.memory_peak) / 4);
+  auto least_whole = [&](long threshold, const std::string & whole) {
+    uint64_t lo = floor, hi = std::max(measured.memory_peak, compiled.memory_peak) + 64;
+    while (lo + 8 < hi) {
+      const uint64_t mid = lo + (hi - lo) / 2;
+      Scenario tight = sc;
+      tight.memory_bytes = mid;
+      (run(tight, threshold).key() == whole ? hi : lo) = mid;
+    }
+    return hi;
+  };
+  const uint64_t to = std::max(least_whole(0, measured.key()), least_whole(1, compiled.key())) + 64;
+  std::set<std::string> interpreted, jitted;
+  for (uint64_t budget = floor; budget <= to; budget += 64) {
+    Scenario tight = sc;
+    tight.memory_bytes = budget;
+    interpreted.insert(run(tight, 0).key());
+    jitted.insert(run(tight, 1).key());
+  }
+  for (const std::string & k : jitted) {
+    EXPECT_TRUE(interpreted.count(k)) << "a compiled outcome no interpreted run had: " << k.substr(0, 400);
+  }
+  // Three outcomes at least on each tier: the run whole, its last print refused, and the prints of the
+  // floats refused once the output must grow, each rolled back.
+  EXPECT_GE(interpreted.size(), 3u) << "the sweep did not cross the allocations of the operations";
+  EXPECT_GE(jitted.size(), 3u) << "nor on the compiled tier";
+}
+
+TEST(JitTemplates, WhereNativesCannotBeCalledARawFloatsPrintConcatenationAndCastStayExitsAsBeforeStory4g) {
+  GLTANG_REQUIRE_JIT_BACKEND();
+  // The three are calls of the table; with no table a print and a cast to string of a raw float are
+  // each the designed box exit, as before story 4g, and a concatenation with a string constant leaves
+  // at the constant, which with no table is not compiled either (an exit that counts).
+  struct Case {
+    const char * body;
+    uint64_t expected, counted;
+  };
+  const Case cases[] = {
+      {"print(x);", 2, 0},
+      {"y = \"v=\" + x; print(y);", 0, 2},
+      {"y = x as string; print(y);", 2, 0},
+  };
+  for (const Case & c : cases) {
+    Scenario sc = scenario(std::string("function f(n) { x = n * 0.5; i = 0; while (i < 1) { i = i + 1; } ") + c.body + " return 0; }\nf(3); f(5);\n");
+    sc.natives_off = true;
+    Outcome plain, jit;
+    expect_same(sc, &plain, &jit);
+    ASSERT_FALSE(HasFailure()) << c.body;
+    EXPECT_EQ(jit.stats.raw_float_texts, 0u) << c.body;
+    EXPECT_EQ(jit.stats.exits_expected, c.expected) << c.body;
+    EXPECT_EQ(jit.stats.exits_counted, c.counted) << c.body;
+  }
 }
 
 #else  // JIT=no

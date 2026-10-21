@@ -359,6 +359,9 @@ typedef struct GLTANG_JitStats {
   // call through the native table. Each is also counted in `output_calls` or `value_calls`.
   uint64_t fast_prints;         ///< `PRINT_CONST` and `PRINT` done by the fast path (a copy into the output that could not poll, allocate or deliver).
   uint64_t fast_attrs;          ///< `ATTR` of a map that held the key, done by the fast path.
+  // A raw float's text (spec-template-compiled story 4g): its print, its `+` with a string and its
+  // cast to string, made from compiled code given the double, with no exit to box it.
+  uint64_t raw_float_texts;     ///< Those operations made from compiled code (each also counted in `output_calls` or `value_calls`, and a print done by its fast path in `fast_prints`).
 } GLTANG_JitStats;
 
 /**

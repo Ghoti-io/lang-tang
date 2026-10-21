@@ -1,0 +1,18 @@
+# 226 the slow print of a raw float reads the float's bits as an integer
+# defect: thunk_print_float converts the 64 bits it is given to a double as a number, not as the bits of one,
+#   so the print the native-table call makes (every print delivered to a host's sink, every one that grows the
+#   output) prints a different number; the fast path, given the double, is right
+# caught by: the raw float printed to the host's sink, every print the slow path, its deliveries and output
+#   against the interpreter's (testJit_templates, JitTemplates.ARawFloatPrintedToTheHostsSink*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -384,7 +384,7 @@
+   ++exec->jit_stats.output_calls;
+   ++exec->jit_stats.raw_float_texts;
+   exec->standing = true;
+-  GLTANG_Value result = gltang_vm_print_float(exec, float_bits(bits));
++  GLTANG_Value result = gltang_vm_print_float(exec, (double)bits);  /* planted: the bits as a number */
+   exec->standing = false;
+   return finished(exec, result, false);
+ }

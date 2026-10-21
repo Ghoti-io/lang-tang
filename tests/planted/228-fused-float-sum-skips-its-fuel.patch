@@ -1,0 +1,17 @@
+# 228 the float arithmetic of a fused `+` charges no fuel
+# defect: emit_add_fused's way for a number (a small integer or a float object beside the raw float) adds the
+#   sum and does not add the `+`'s cost
+# caught by: the printed sum of a raw float and a value word, fuel against the interpreter's
+#   (testJit_templates, JitTemplates.APrintedSumOfARawFloat*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -2109,7 +2109,7 @@
+   set_block(c, arith);
+   B(grjit_builder_binary(c->b, GRJIT_OP_FADD, c->stack_f[d - 2u], left_raw ? V(c->stack_f[d - 2u]) : V(c->tmp_f[0]),
+       left_raw ? V(c->tmp_f[0]) : V(c->stack_f[d - 1u])));
+-  add_fuel(c, gltang_opcode_cost_table[GLTANG_OP_ADD]);
++  /* planted: no fuel */
+   c->sk[d - 2u] = KIND_F64;
+   if (emit_fused_run(c, i, end)) {
+     branch_to(c, join);

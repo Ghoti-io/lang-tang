@@ -5,12 +5,12 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -439,7 +439,7 @@
-     case TPL_STAYS:
-       /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
-       want.entries = compiled + top;
--      want.returns = compiled;
-+      want.returns = compiled + top;
-       want.counted = top;
-       break;
-     case TPL_BOX_EXIT:
+@@ -429,7 +429,7 @@
+   }
+   /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
+   want.entries = compiled + top;
+-  want.returns = compiled;
++  want.returns = compiled + top;
+   want.counted = top;
+ }
+ static void check_jit_expectation(const GLTANG_JitStats * st) {

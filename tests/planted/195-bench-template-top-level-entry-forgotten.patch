@@ -5,12 +5,12 @@
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -438,7 +438,7 @@
-   switch (p) {
-     case TPL_STAYS:
-       /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
--      want.entries = compiled + top;
-+      want.entries = compiled;
-       want.returns = compiled;
-       want.counted = top;
-       break;
+@@ -428,7 +428,7 @@
+     return;
+   }
+   /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
+-  want.entries = compiled + top;
++  want.entries = compiled;
+   want.returns = compiled;
+   want.counted = top;
+ }

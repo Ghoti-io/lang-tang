@@ -1,16 +1,18 @@
 # 192 the warm template leaves compiled code at every compiled call
-# defect: the program of the warm template row gains an exit that counts (a string variable beside a raw float, on a
-#   path the compile cannot rule out, so the template is not declined), and prints the same: its output and answer are unchanged
+# defect: the program of the warm template row gains an exit that counts (an array beside a raw float, which is float
+#   arithmetic whose unbox of the array fails, on a path the compile cannot rule out, so the template is not declined),
+#   and prints the same: its output and answer are unchanged. (Until spec-template-compiled story 4g the array was a
+#   string variable; story 4g compiles a string variable's concatenation with a raw float.)
 # caught by: bench --smoke --only steady-template-compiled-warm-call (the template policy: zero exits, never discarded)
 #
 --- a/bench/bench.c
 +++ b/bench/bench.c
-@@ -635,7 +635,7 @@
+@@ -619,7 +619,7 @@
  static GLTANG_Program * bench_template(void) {
    static GLTANG_Program * program;
    if (!program) {
 -    program = compile_source("print(\"<li>\"); print(\"item\"); print(\"</li>\");", GLTANG_PARSE_SCRIPT);
-+    program = compile_source("l = \"x\"; k = 1; if (k > 0) { z = l + 1.5; } print(\"<li>\"); print(\"item\"); print(\"</li>\");", GLTANG_PARSE_SCRIPT);
++    program = compile_source("l = [1]; k = 1; if (k > 0) { z = l + 1.5; } print(\"<li>\"); print(\"item\"); print(\"</li>\");", GLTANG_PARSE_SCRIPT);
    }
    return program;
  }

@@ -187,7 +187,7 @@ std::multiset<uint64_t> float_bits_in_frames(Context & context) {
 
 TEST(JitFloats, ACompiledLoopThatCarriesAFloatAllocatesNothingPerIterationAndBoxesOnlyAtTheExit) {
   GLTANG_REQUIRE_JIT_BACKEND();
-  const std::string program = "function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nprint(f(N));\n";
+  const std::string program = "function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print([x]); return i; }\nprint(f(N));\n";
   auto with = [&](const char * n) {
     Scenario sc;
     sc.source = program;
@@ -202,12 +202,13 @@ TEST(JitFloats, ACompiledLoopThatCarriesAFloatAllocatesNothingPerIterationAndBox
   EXPECT_EQ(jit_long.stats.slow_polls, 0u) << "nothing was pending: every poll was the fast path";
   EXPECT_EQ(jit_long.heap_allocations, jit_short.heap_allocations) << "the allocation count has slope zero in the loop length";
   EXPECT_EQ(plain_long.heap_allocations, plain_short.heap_allocations) << "and so does the interpreter's, on this loop (test_jit_arith.cpp re-runs it on arithmetic)";
-  // The one exit, at `print`, boxed what was live: the local and the operand, once each.
+  // The one exit, at the element's `ADOPT` (a print of a raw float is compiled since spec-template-compiled
+  // story 4g, so the element is what boxes it here), boxed what was live: the local and the operand, once each.
   EXPECT_EQ(jit_short.stats.values_boxed, 2u);
   EXPECT_EQ(jit_long.stats.values_boxed, 2u) << "the same however long the loop ran";
   EXPECT_EQ(jit_long.stats.conversion_errors, 0u);
   EXPECT_EQ(jit_long.stats.compile_failures, 0u);
-  EXPECT_EQ(jit_long.raw, "1.55000");
+  EXPECT_EQ(jit_long.raw, "[1.5]5000");
   std::printf("  float carry slope: compiled allocations %llu at 200 iterations and %llu at 5000; interpreted %llu and %llu\n",
       static_cast<unsigned long long>(jit_short.heap_allocations), static_cast<unsigned long long>(jit_long.heap_allocations),
       static_cast<unsigned long long>(plain_short.heap_allocations), static_cast<unsigned long long>(plain_long.heap_allocations));
@@ -220,7 +221,7 @@ TEST(JitFloats, TheSlopeIsStillZeroWithAHandlerPendingAtEveryPoll) {
   const char * lengths[2] = {"100", "2000"};
   for (int which = 0; which < 2; ++which) {
     Scenario sc;
-    sc.source = std::string("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nprint(f(") + lengths[which] + "));\n";
+    sc.source = std::string("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print([x]); return i; }\nprint(f(") + lengths[which] + "));\n";
     sc.script = true;  // a request stays pending, so every poll takes the slow path
     Outcome plain, jit;
     expect_same_compiled(sc, &plain, &jit);
@@ -232,7 +233,7 @@ TEST(JitFloats, TheSlopeIsStillZeroWithAHandlerPendingAtEveryPoll) {
   EXPECT_GT(slow[1], 1900u) << "every iteration's poll took the slow path";
   EXPECT_EQ(allocations[0], allocations[1]) << "a slow poll that continues converts and allocates nothing";
   EXPECT_EQ(boxed[0], 2u);
-  EXPECT_EQ(boxed[1], 2u) << "the exit at print boxed its two live values, and no poll boxed anything";
+  EXPECT_EQ(boxed[1], 2u) << "the exit at the element boxed its two live values, and no poll boxed anything";
 }
 
 TEST(JitFloats, TheSlopeIsStillZeroUnderTortureAndVerify) {
@@ -241,7 +242,7 @@ TEST(JitFloats, TheSlopeIsStillZeroUnderTortureAndVerify) {
   const char * lengths[2] = {"60", "360"};
   for (int which = 0; which < 2; ++which) {
     Scenario sc;
-    sc.source = std::string("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nprint(f(") + lengths[which] + "));\n";
+    sc.source = std::string("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print([x]); return i; }\nprint(f(") + lengths[which] + "));\n";
     sc.torture = 1;
     sc.verify = 1;
     sc.script = true;
@@ -498,13 +499,13 @@ TEST(JitFloats, AFuelScopeThatRunsOutInsideCompiledCodeWithFloatsLiveUnwindsLike
 TEST(JitFloats, EveryInstructionThatReadsARawOperandIsAnExitWithTheOperandInTheFrameStateAndTheInterpreterReExecutesIt) {
   GLTANG_REQUIRE_JIT_BACKEND();
   const char * consumers[] = {
-      "print(x);",
       // x + 1, 1 + x, -x, x < 2 and x == 1.5 were consumers here until story 7 compiled them: they are in
-      // test_jit_arith.cpp now. What stays an exit is what is not an operation: % (a float is "not
-      // supported"), the casts to string and to bool, truthiness.
+      // test_jit_arith.cpp now, and `print(x)` and `x as string` until spec-template-compiled story 4g did
+      // (test_jit_templates.cpp). What stays an exit is what is not an operation: % (a float is "not
+      // supported"), the cast to bool, truthiness, an element.
+      "print([x]);",
       "y = x % 2; print(y);",
       "y = 2 % x; print(y);",
-      "y = x as string; print(y);",
       "y = x as bool; print(y);",
       "if (x) { i = i + 1; } print(i);",
       "y = !x; print(y);",
@@ -541,7 +542,7 @@ TEST(JitFloats, ARawValueMovedThroughLocalsAndDupsReachesItsConsumerWithTheSameB
   GLTANG_REQUIRE_JIT_BACKEND();
   Scenario sc;
   sc.source =
-      "function f(n) { a = b = c = 0.1; d = a; e = 0.0; i = 0; while (i < n) { i = i + 1; e = d; } print(a); print(b); print(c); print(d); return i; }\n"
+      "function f(n) { a = b = c = 0.1; d = a; e = 0.0; i = 0; while (i < n) { i = i + 1; e = d; } print([a]); print([b]); print([c]); print([d]); return i; }\n"
       "print(f(30)); print(f(0));\n";
   sc.script = true;
   Outcome plain, jit;
@@ -1293,9 +1294,9 @@ TEST(JitFloats, AFailedRebuildLeavesNoRawWordInAGuestFrameWhereACollectionCanRea
   // collection would not: a guest frame paired with a compiled one is not scanned), and
   // none may hold a raw double in a value slot.
   // The first exit of the run is the top level's, at the declaration of f. The seam is
-  // switched on at f's third poll, so the exit it refuses is f's own, at the `print`,
-  // with the local x and the operand raw.
-  Driver d("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print(x); return i; }\nr = f(5);\n", 1, true, 1, 1);
+  // switched on at f's third poll, so the exit it refuses is f's own, at the element's
+  // `ADOPT` (a print of a raw float is compiled since story 4g), with the local x and the operand raw.
+  Driver d("function f(n) { x = 1.5; i = 0; while (i < n) { i = i + 1; } print([x]); return i; }\nr = f(5);\n", 1, true, 1, 1);
   ASSERT_TRUE(d.ok());
   int in_f = 0;
   d.script.on_poll = [&](Script &, GRCORE_Context * context, uint64_t) {
@@ -1533,10 +1534,11 @@ TEST(JitFloats, AnEntryExtensionIsNotTakenByThePopOfAFloatFreeCallAtTheSameDepth
 TEST(JitFloats, AFunctionDiscardedWhileItsRecordIsOpenStillTakesItsDesignedExitAsDesigned) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // The function is let go (as a nested run's eighth exit would) at a poll inside its loop, while the run that entered it
-  // is still open; its exit at the print is then taken from code whose function has no code any more. The exit is
+  // is still open; its exit at the element (`print([x])`: a print of a raw float is compiled since spec-template-compiled
+  // story 4g) is then taken from code whose function has no code any more. The exit is
   // classified from the code that ran: it is designed, and counts toward nothing.
   // The top level leaves at once (kTopLevelLeaves): that is its one counted exit, and f is entered by the interpreter.
-  const std::string source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print(x); return 0; }\n" + std::string(kTopLevelLeaves) + "f(3);\n";
+  const std::string source = "function f(n) { x = n * 0.5; i = 0; while (i < 60) { i = i + 1; } print([x]); return 0; }\n" + std::string(kTopLevelLeaves) + "f(3);\n";
   Scenario ref;
   ref.source = source;
   Outcome plain = run(ref, 0);
@@ -1554,7 +1556,7 @@ TEST(JitFloats, AFunctionDiscardedWhileItsRecordIsOpenStillTakesItsDesignedExitA
   EXPECT_EQ(discarded, 1) << "the function was discarded while its record was open";
   EXPECT_EQ(d.ctx->raw(), plain.raw);
   GLTANG_JitStats st = d.stats();
-  EXPECT_EQ(st.exits_expected, 1u) << "the exit at the print was found designed in the code that ran";
+  EXPECT_EQ(st.exits_expected, 1u) << "the exit at the element was found designed in the code that ran";
   EXPECT_EQ(st.exits_counted, 1u) << "and only the main program's own exit counted";
   EXPECT_EQ(st.rebuild_failures, 0u);
 }

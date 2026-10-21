@@ -392,32 +392,24 @@ static void want_set(int jit_on, Policy p, uint64_t calls) {
   }
 }
 /* The template rows (spec-template-compiled story 5). The steady-state script calls a template `t`
- * `calls` times from its top level; the template's function 0 is counted at its entry poll.
- *   TPL_STAYS     every compiled call runs from entry to HALT in compiled code: no exit of any kind, never
- *                 discarded, and every compiled entry returns (the HALT's return), so a warm call that exits
- *                 or a function that is discarded fails the row;
- *   TPL_BOX_EXIT  every compiled call leaves once at the designed exit that boxes a raw float for its consumer
- *                 (a print of one, spec-template-compiled story 1; a string constant beside one, story 3), which
- *                 counts nowhere: exits_expected is the compiled calls, none returns (the HALT runs in the interpreter),
- *                 never discarded;
- *   TPL_COUNTED   every compiled call leaves at an exit that counts (a string that is not a constant beside a
- *                 raw float): the eighth discards the function, and a discarded function is never compiled
- *                 again, so the compiled calls are eight at most.
- * The last two are the "before" of planning/unboxed-float-output.md: what they assert is today's behaviour, and
- * the optimization that removes those exits changes them on purpose.
+ * `calls` times from its top level; the template's function 0 is counted at its entry poll. The policy of
+ * every template row: every compiled call runs from entry to HALT in compiled code, with no exit of any kind,
+ * is never discarded, and every compiled entry returns (the HALT's return), so a warm call that exits or a
+ * function that is discarded fails the row. (Story 5 had two more, for the rows of a raw float's print and
+ * concatenation: a designed box exit at every call, and an exit that counts and discards at the eighth. They
+ * were the "before" of planning/unboxed-float-output.md, and went when story 4g removed those exits.)
  * Which calls are compiled depends on the threshold, `jit_mode` as steady_run_x takes it (0 the JIT off, 1 its
  * default threshold, 2 a threshold of one). At the default, the poll that reaches GLTANG_JIT_DEFAULT_THRESHOLD
  * compiles the function and the same call enters it, so the calls from that one on are compiled and the calls
- * before it run interpreted: `returns` (TPL_STAYS) is the compiled calls, not all of them. The top level, entered
+ * before it run interpreted: `returns` is the compiled calls, not all of them. The top level, entered
  * once, is never compiled there. At a threshold of one every call is compiled, and so is the top level at its
  * entry: it leaves at its first statement, `use t`
  * (compiled code loads a native or a library and leaves at the load of a template; a template call from
  * compiled code is an exit too, decided 2026-10-08, calls spec story 8), an exit that counts, and runs in
  * the interpreter after it, so it adds one entry and one counted exit and returns nothing. */
-typedef enum { TPL_STAYS, TPL_BOX_EXIT, TPL_COUNTED } TemplatePolicy;
 /* At the default threshold the top level (entered once) must not be compiled. */
 _Static_assert(GLTANG_JIT_DEFAULT_THRESHOLD >= 2, "want_template assumes the default threshold leaves the top level interpreted");
-static void want_template(int jit_mode, TemplatePolicy p, uint64_t calls) {
+static void want_template(int jit_mode, uint64_t calls) {
   const int jit_on = jit_mode != 0;
   const int threshold_one = jit_mode == 2;
   want_set(jit_on, POL_NORMAL, calls);
@@ -435,26 +427,10 @@ static void want_template(int jit_mode, TemplatePolicy p, uint64_t calls) {
     want.compiled = 0;
     return;
   }
-  switch (p) {
-    case TPL_STAYS:
-      /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
-      want.entries = compiled + top;
-      want.returns = compiled;
-      want.counted = top;
-      break;
-    case TPL_BOX_EXIT:
-      want.entries = compiled + top;
-      want.expected = compiled;
-      want.counted = top;
-      break;
-    case TPL_COUNTED: {
-      const int64_t entered = compiled < 8 ? compiled : 8;
-      want.entries = entered + top;
-      want.counted = entered + top;
-      want.discarded = compiled >= 8 ? 1 : 0;
-      break;
-    }
-  }
+  /* Every compiled call returns at its HALT; a threshold-one run's top level leaves once, counted. */
+  want.entries = compiled + top;
+  want.returns = compiled;
+  want.counted = top;
 }
 static void check_jit_expectation(const GLTANG_JitStats * st) {
 #if defined(BENCH_UNCHECKED)
@@ -1753,7 +1729,7 @@ static uint64_t steady_template(int jit_on, int which, uint64_t warm, uint64_t t
   char source[512];
   steady_template_script(source, sizeof(source), warm, timed);
   /* steady_run runs at the default threshold (jit_mode 1). */
-  want_template(jit_on ? 1 : 0, TPL_STAYS, 1u + warm + timed);
+  want_template(jit_on ? 1 : 0, 1u + warm + timed);
   uint64_t sink = steady_run(source, (int64_t)(13u * (1u + warm + timed)), 1, jit_on, which, timed, iterations, elapsed);
   want_none();
   return sink;
@@ -1811,7 +1787,7 @@ static uint64_t steady_template_rows(int jit_on, uint64_t iterations, double * e
   steady_tpl = compile_source(steady_row_template, GLTANG_PARSE_TEMPLATE);
   steady_with_rows = 1;
   steady_render_length = rendered;
-  want_template(jit_mode, TPL_STAYS, calls);
+  want_template(jit_mode, calls);
   have_expected_integer = 1;
   expected_integer = expected;
   uint64_t sink = steady_run_x(source, GLTANG_KIND_INTEGER, 1, jit_mode, 4, 2, (double)timed, iterations, elapsed);
@@ -1827,25 +1803,25 @@ static uint64_t steady_template_rows(int jit_on, uint64_t iterations, double * e
 static uint64_t steady_template_rows_interpreted(uint64_t it, double * el) { return steady_template_rows(0, it, el); }
 static uint64_t steady_template_rows_compiled(uint64_t it, double * el) { return steady_template_rows(1, it, el); }
 
-/* The "before" of planning/unboxed-float-output.md: a compiled template that prints, in a loop, a float it
- * computed (`i * 0.5`, held raw in compiled code), and two that concatenate a label and such a float, the
- * label a string constant (a designed box exit, as the print's) or a top-level variable (an exit that
- * counts: the eighth compiled call discards the template). Each asserts its exits and discard as they are
- * today (want_template); the optimization that prints and concatenates a raw float without leaving
- * compiled code is to change these rows' policy to TPL_STAYS and be judged by their figures. The loop
- * keeps the compile from declining the template (a loop-free function whose every path ends at a box exit
- * is never compiled). Output: 0. 0.5 1. 1.5, each followed by ';', with "v=" before each in the two
- * concatenations (a float's text: fixed notation, trailing zeros removed, the point kept). */
+/* planning/unboxed-float-output.md's rows: a compiled template that prints, in a loop, a float it computed
+ * (`i * 0.5`, held raw in compiled code), and two that concatenate a label and such a float, the label a
+ * string constant or a top-level variable. Until spec-template-compiled story 4g they were the "before": the
+ * print and the constant's concatenation were a designed box exit at every call, and the variable's a counted
+ * exit that discarded the template at the eighth call. Story 4g gives each the double (the interpreter's print,
+ * concatenation and text of a float), so each stays compiled for the whole call (the template policy,
+ * want_template), and is judged by its figures against story 4e's. The loop kept the compile from declining the
+ * template while every path ended at a box exit (a loop-free function whose every path does is never compiled).
+ * Output: 0. 0.5 1. 1.5, each followed by ';', with "v=" before each in the two concatenations (a float's text:
+ * fixed notation, trailing zeros removed, the point kept). */
 typedef struct {
   const char * source;
-  TemplatePolicy policy;
   int64_t length;
 } FloatTemplate;
 
 static const FloatTemplate float_templates[] = {
-  {"<% i = 0; while (i < 4) { %><%= i * 0.5 %>;<% i += 1; } %>", TPL_BOX_EXIT, 14},
-  {"<% i = 0; while (i < 4) { %><%= \"v=\" + i * 0.5 %>;<% i += 1; } %>", TPL_BOX_EXIT, 22},
-  {"<% label = \"v=\"; i = 0; while (i < 4) { %><%= label + i * 0.5 %>;<% i += 1; } %>", TPL_COUNTED, 22},
+  {"<% i = 0; while (i < 4) { %><%= i * 0.5 %>;<% i += 1; } %>", 14},
+  {"<% i = 0; while (i < 4) { %><%= \"v=\" + i * 0.5 %>;<% i += 1; } %>", 22},
+  {"<% label = \"v=\"; i = 0; while (i < 4) { %><%= label + i * 0.5 %>;<% i += 1; } %>", 22},
 };
 
 static uint64_t steady_template_float(int idx, int jit_on, uint64_t iterations, double * elapsed) {
@@ -1857,7 +1833,7 @@ static uint64_t steady_template_float(int idx, int jit_on, uint64_t iterations, 
   steady_template_script(source, sizeof(source), warm, timed);
   const int jit_mode = jit_on ? 2 : 0;
   steady_tpl = compile_source(f->source, GLTANG_PARSE_TEMPLATE);
-  want_template(jit_mode, f->policy, calls);
+  want_template(jit_mode, calls);
   have_expected_integer = 1;
   expected_integer = f->length * (int64_t)calls;
   uint64_t sink = steady_run_x(source, GLTANG_KIND_INTEGER, 1, jit_mode, 4, 2, (double)timed, iterations, elapsed);
@@ -2111,7 +2087,8 @@ PROGRAM_FUNCTIONS(p_cast_float, 11)
 
 typedef enum {
   FK_RET,       /* a = 1.5; loop L times; return a * 2.0;               ends in a float return (an exit) */
-  FK_PRINT,     /* ...; print(a * 2.0); return 0;                       ends in a print of a raw float (an exit) */
+  FK_PRINT,     /* ...; print(a * 2.0); return 0;                       a print of a raw float: an exit until spec-template-compiled
+                 * story 4g compiled it (the double given to the interpreter's print), so now no exit and no decline */
   FK_CAST,      /* ...; return (a * 2.0) as int;                        the same float work, no float exit */
   FK_INT,       /* a = 1; loop L times; return a * 2;                   integer only: no pool */
   FK_GLOBAL,    /* ...; gv = a * 2.0; return 0;                          a store of a raw float to a global (an exit) */
@@ -2172,7 +2149,7 @@ static int family_has_argument(FamilyKind k) { return k >= FK_E_DIV0 && k != FK_
 /* Which rule a family function follows (see Policy). */
 static Policy family_policy(FamilyKind k, unsigned loop) {
   switch (k) {
-    case FK_RET: case FK_PRINT: case FK_GLOBAL: case FK_ARG: return loop == 0u ? POL_DECLINED : POL_EXPECTED;
+    case FK_RET: case FK_GLOBAL: case FK_ARG: return loop == 0u ? POL_DECLINED : POL_EXPECTED;
     case FK_E_DIV0: case FK_E_MOD: return POL_DECLINED; /* a loop-free function that ends at the exit that boxes a raw operand */
     /* A NaN float object cast to int was a counted guard exit at every call until spec-template-compiled
      * story 4: it is now the interpreter's cast called from compiled code, so it makes the error with no exit. */

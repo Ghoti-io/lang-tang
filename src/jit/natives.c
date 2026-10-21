@@ -42,6 +42,9 @@
  *   that is not a library (`gltang_vm_op_index`, `gltang_vm_op_slice`,
  *   `gltang_vm_op_attr`), so each is the interpreter's one implementation (a map's `ATTR`
  *   is first tried by its fast path, story 4d, and this thunk is its slow path).
+ * - The operations of a raw float (story 4g): its print, its `+` with a string and its cast to
+ *   string, given the float's bits (`gltang_vm_print_float`, `gltang_vm_concat_float`,
+ *   `gltang_vm_float_to_string`), the interpreter's functions of a float object of that value.
  * - The value-building operations of story 4: a `CAST` (`gltang_vm_op_cast`), the
  *   allocation of an `ARRAY` or a `MAP` literal (`gltang_vm_array_new`,
  *   `gltang_vm_map_new`; its elements are stored after it, by the no-GC fill helpers of
@@ -361,6 +364,56 @@ static GRJIT_NativeResult thunk_adopt(void * context, uint64_t execution, uint64
   return finished(exec, result, false);
 }
 
+// The operations of a raw float (spec-template-compiled story 4g). Compiled code holds a float it
+// computed as a raw double and never boxes it (AD-27); these are given its 64 bits (a native's
+// arguments are integer words), and each is the interpreter's function of a float object of that
+// value, through the same formatting and the same output path or string builder (text.c, ops.c):
+// its fuel, its stand, its counters, its value, as the thunks above for a value word. The float is
+// in the call's frame state, raw, where the interpreter's frame holds its box, so a poll inside or
+// an unwind after sees it there, and a rebuild boxes it from the pool.
+
+static double float_bits(uint64_t bits) {
+  double d;
+  memcpy(&d, &bits, sizeof(d));
+  return d;
+}
+
+static GRJIT_NativeResult thunk_print_float(void * context, uint64_t execution, uint64_t bits) {
+  GLTANG_Execution * exec = execution_from(context, execution);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_PRINT];
+  ++exec->jit_stats.output_calls;
+  ++exec->jit_stats.raw_float_texts;
+  exec->standing = true;
+  GLTANG_Value result = gltang_vm_print_float(exec, float_bits(bits));
+  exec->standing = false;
+  return finished(exec, result, false);
+}
+
+static GRJIT_NativeResult thunk_concat_float(void * context, uint64_t execution, uint64_t s, uint64_t bits, uint64_t float_first) {
+  GLTANG_Execution * exec = execution_from(context, execution);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADD];
+  ++exec->jit_stats.value_calls;
+  ++exec->jit_stats.raw_float_texts;
+  // A string beside: the interpreter's `+` stands (gltang_vm_binary_may_pace), and a long string's
+  // copy polls inside, at the `+`.
+  exec->standing = true;
+  GLTANG_Value result = gltang_vm_concat_float(exec, s, float_bits(bits), float_first != 0);
+  exec->standing = false;
+  return finished(exec, result, false);
+}
+
+static GRJIT_NativeResult thunk_float_string(void * context, uint64_t execution, uint64_t bits) {
+  GLTANG_Execution * exec = execution_from(context, execution);
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CAST];
+  ++exec->jit_stats.value_calls;
+  ++exec->jit_stats.raw_float_texts;
+  // A cast to string stands, as thunk_cast's does.
+  exec->standing = true;
+  GLTANG_Value result = gltang_vm_float_to_string(exec, float_bits(bits));
+  exec->standing = false;
+  return finished(exec, result, false);
+}
+
 /** Registers one native that takes `count` parameters of `params` and has a status: its id must be `expected`. */
 static GRJIT_Result add_native(GRJIT_NativeTable * table, uint64_t address, const GRJIT_Type * params, size_t count, uint32_t expected) {
   // The execution first (execution_from), then the operation's own parameters.
@@ -490,6 +543,17 @@ GRJIT_Result gltang_jit_natives_create(GLTANG_Execution * exec, GRJIT_NativeTabl
   if (r == GRJIT_OK) {
     const GRJIT_Type adopt_params[1] = {GRJIT_TYPE_REF};
     r = add_native(table, (uint64_t)(uintptr_t)thunk_adopt, adopt_params, 1, GLTANG_JIT_NATIVE_ADOPT);
+  }
+  if (r == GRJIT_OK) {
+    const GRJIT_Type bits_params[1] = {GRJIT_TYPE_I64};
+    r = add_native(table, (uint64_t)(uintptr_t)thunk_print_float, bits_params, 1, GLTANG_JIT_NATIVE_PRINT_FLOAT);
+    if (r == GRJIT_OK) {
+      const GRJIT_Type concat_params[3] = {GRJIT_TYPE_REF, GRJIT_TYPE_I64, GRJIT_TYPE_I64};
+      r = add_native(table, (uint64_t)(uintptr_t)thunk_concat_float, concat_params, 3, GLTANG_JIT_NATIVE_CONCAT_FLOAT);
+    }
+    if (r == GRJIT_OK) {
+      r = add_native(table, (uint64_t)(uintptr_t)thunk_float_string, bits_params, 1, GLTANG_JIT_NATIVE_FLOAT_STRING);
+    }
   }
   if (r != GRJIT_OK) {
     grjit_native_table_free(table);

@@ -7,8 +7,8 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1561,7 +1561,7 @@
-   fill_state(c, c->state2, i + 1u, after_depth);
+@@ -1706,7 +1706,7 @@
+   }
    GRJIT_FrameState before = {identity_at(c, i), c->slots, c->state};
    GRJIT_FrameState after = {identity_at(c, i), c->slots, c->state2};
 -  if (id >= GLTANG_JIT_NATIVE_USE) {

@@ -1,0 +1,16 @@
+# 230 a raw float's cast to string charges no fuel
+# defect: thunk_float_string makes the string and counts it, and does not add the cast's cost
+# caught by: the prints, concatenations and casts of the special values, fuel against the interpreter's
+#   (testJit_templates, JitTemplates.ARawFloatsPrintConcatenation*)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -404,7 +404,7 @@
+ 
+ static GRJIT_NativeResult thunk_float_string(void * context, uint64_t execution, uint64_t bits) {
+   GLTANG_Execution * exec = execution_from(context, execution);
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CAST];
++  /* planted: no fuel */
+   ++exec->jit_stats.value_calls;
+   ++exec->jit_stats.raw_float_texts;
+   // A cast to string stands, as thunk_cast's does.

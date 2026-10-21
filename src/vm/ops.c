@@ -276,6 +276,47 @@ static GLTANG_Value array_repeat(GLTANG_Execution * exec, GLTANG_Value a, int64_
 // The binary operators
 // ---------------------------------------------------------------------------
 
+/**
+ * `+` of a string and a value that is not one, once the string rule has taken it: the other side
+ * converted as printing it would (4.2.1), then the two joined. With `raw` NULL the other side is
+ * the operand that is not `a_string`'s and is converted by gltang_vm_to_string; otherwise it is a
+ * float compiled code holds raw (gltang_vm_concat_float), whose operand word here is null, and is
+ * converted by gltang_vm_float_to_string, the same text. Both ways hold the same temporaries, so
+ * that their storage grows (an allocation the memory budget sees) at the same `+`.
+ */
+GLTANG_VM_SHARED GLTANG_Value concat_converted(GLTANG_Execution * exec, GLTANG_Value a, GLTANG_Value b, bool a_string, const double * raw) {
+  // Converting the other side is a GC point, and the operands are held
+  // only by this function's parameters: hold both, and take them from
+  // the temporaries afterwards.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
+    gltang_vm_temp_release(exec, mark);
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value text = raw ? gltang_vm_float_to_string(exec, *raw) : gltang_vm_to_string(exec, a_string ? b : a);
+  if (!gltang_v_is_kind(text, GLTANG_OBJ_STRING)) {
+    gltang_vm_temp_release(exec, mark);
+    return text;
+  }
+  a = gltang_vm_temp_at(exec, mark);
+  b = gltang_vm_temp_at(exec, mark + 1u);
+  // The converted text is held too, so that it outlives the collection
+  // the concatenation's own allocation may make.
+  if (!gltang_vm_temp_push(exec, text)) {
+    gltang_vm_temp_release(exec, mark);
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  GLTANG_Value r = a_string ? gltang_vm_string_concat(exec, a, text) : gltang_vm_string_concat(exec, text, b);
+  gltang_vm_temp_release(exec, mark);
+  return r;
+}
+
+GLTANG_Value gltang_vm_concat_float(GLTANG_Execution * exec, GLTANG_Value s, double d, bool float_first) {
+  // The checks before concat_converted in gltang_vm_op_binary are of the side that is not a string:
+  // a float is no host-defined value, no error and none of the kinds that are `Not supported`.
+  return float_first ? concat_converted(exec, GLTANG_V_NULL, s, false, &d) : concat_converted(exec, s, GLTANG_V_NULL, true, &d);
+}
+
 // A custom operand (type.h) goes to its type wherever the built-in rules have
 // no answer for it. Every built-in rule declines a custom operand, so the test
 // is made only on the paths that would otherwise end in `Not supported` or
@@ -322,30 +363,7 @@ GLTANG_Value gltang_vm_op_binary(GLTANG_Execution * exec, GLTANG_Opcode op, GLTA
         if (a_string && b_string) {
           return gltang_vm_string_concat(exec, a, b);
         }
-        // Converting the other side is a GC point, and the operands are held
-        // only by this function's parameters: hold both, and take them from
-        // the temporaries afterwards.
-        size_t mark = gltang_vm_temp_mark(exec);
-        if (!gltang_vm_temp_push(exec, a) || !gltang_vm_temp_push(exec, b)) {
-          gltang_vm_temp_release(exec, mark);
-          return exec->roots[GLTANG_ROOT_OOM];
-        }
-        GLTANG_Value text = gltang_vm_to_string(exec, other);
-        if (!gltang_v_is_kind(text, GLTANG_OBJ_STRING)) {
-          gltang_vm_temp_release(exec, mark);
-          return text;
-        }
-        a = gltang_vm_temp_at(exec, mark);
-        b = gltang_vm_temp_at(exec, mark + 1u);
-        // The converted text is held too, so that it outlives the collection
-        // the concatenation's own allocation may make.
-        if (!gltang_vm_temp_push(exec, text)) {
-          gltang_vm_temp_release(exec, mark);
-          return exec->roots[GLTANG_ROOT_OOM];
-        }
-        GLTANG_Value r = a_string ? gltang_vm_string_concat(exec, a, text) : gltang_vm_string_concat(exec, text, b);
-        gltang_vm_temp_release(exec, mark);
-        return r;
+        return concat_converted(exec, a, b, a_string, NULL);
       }
       if (gltang_vm_is_number(a) && gltang_vm_is_number(b)) {
         return arithmetic(exec, op, a, b);

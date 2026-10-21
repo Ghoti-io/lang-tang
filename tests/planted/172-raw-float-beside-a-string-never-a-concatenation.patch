@@ -1,0 +1,19 @@
+# 172 a raw float beside a string-evident operand is never its concatenation
+# defect: `add_concat` answers no, so compiled code takes `"x" + f` and `t + f` (t a variable that holds a
+#   string constant), with f raw and not printed at once, for float arithmetic, whose unbox of the string is a
+#   guard exit that counts. (Until spec-template-compiled story 4g this was `reads_raw` no longer taking
+#   `"x" + f` for the designed box exit; story 4g compiled that concatenation, and the defect moved with it.)
+# caught by: the raw float beside a string, its expected and counted exits
+#   (testJit_templates, JitTemplates.ARawFloatBeside*)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -306,7 +306,7 @@
+  * concatenation is a call of the table). Its value is then a value word, not a raw double.
+  */
+ static bool add_concat(const Ctx * c, uint32_t i, int32_t d) {
+-  if (!c->natives_on || !c->str_side || d < 2) {
++  if (!c->natives_on || !c->str_side || d < 2 || true) {  /* planted: never a concatenation */
+     return false;
+   }
+   const bool left_raw = c->sk[d - 2] == KIND_F64;
