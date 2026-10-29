@@ -44,6 +44,7 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <string.h>
+#include "../library/continuations.h"
 #include "vm_internal.h"
 
 #define SCOPE_LIMIT_MAX ((size_t)1 << 20)
@@ -638,8 +639,12 @@ GLTANG_Result gltang_handle_make_library(GLTANG_NativeCall * call, GLTANG_Librar
   return made(call, gltang_vm_make_library_value(exec, library), out);
 }
 
-GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call, GLTANG_NativeFn function, void * user, GLTANG_Handle bound, GLTANG_Handle * out) {
+/** The native a run-time record stands for, with the table of a resumable one (copied into the execution's allocator). */
+static GLTANG_Result make_native(GLTANG_NativeCall * call, GLTANG_NativeFn function, void * user, const GLTANG_Continuation * table, size_t table_count, GLTANG_Handle bound, GLTANG_Handle * out) {
   if (!call || !function || !out) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (table && !gltang_continuations_valid(table, table_count)) {
     return GLTANG_ERR_INVALID;
   }
   GLTANG_Execution * exec = call->exec;
@@ -659,7 +664,15 @@ GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call, GLTANG_NativeF
     b = gltang_vm_temp_at(exec, mark);
   }
   GLTANG_LibraryMember * member = gcu_allocator_calloc(exec->allocator, 1, sizeof(GLTANG_LibraryMember));
-  if (!member || !keep_member(exec, member)) {
+  GLTANG_Continuation * copy = NULL;
+  if (member && table) {
+    copy = gcu_allocator_calloc(exec->allocator, 1, gltang_continuations_bytes(table, table_count));
+    if (copy) {
+      gltang_continuations_copy(copy, table, table_count);
+    }
+  }
+  if (!member || (table && !copy) || !keep_member(exec, member)) {
+    gcu_allocator_free(exec->allocator, copy);
     gcu_allocator_free(exec->allocator, member);
     gltang_vm_temp_release(exec, mark);
     call->scope_oom = true;
@@ -668,11 +681,24 @@ GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call, GLTANG_NativeF
   member->kind = GLTANG_MEMBER_NATIVE;
   member->native = function;
   member->user = user;
+  if (copy) {
+    member->continuations = copy;
+    member->continuation_count = table_count;
+    member->native_flags |= GLTANG_NATIVE_FLAG_RESUMABLE;
+  }
   // The bound value waits on the temporaries across the allocation, which the
   // constructor of the native object takes care of itself.
   GLTANG_Value native = gltang_vm_make_native_value(exec, member, b);
   gltang_vm_temp_release(exec, mark);
   return made(call, native, out);
+}
+
+GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call, GLTANG_NativeFn function, void * user, GLTANG_Handle bound, GLTANG_Handle * out) {
+  return make_native(call, function, user, NULL, 0, bound, out);
+}
+
+GLTANG_Result gltang_handle_make_resumable_native(GLTANG_NativeCall * call, GLTANG_NativeFn function, void * user, const GLTANG_Continuation * continuations, size_t continuation_count, GLTANG_Handle bound, GLTANG_Handle * out) {
+  return continuations ? make_native(call, function, user, continuations, continuation_count, bound, out) : GLTANG_ERR_INVALID;
 }
 
 // ---------------------------------------------------------------------------
@@ -992,6 +1018,7 @@ void gltang_vm_handles_destroy(GLTANG_Execution * exec) {
   }
   gcu_allocator_free(exec->allocator, hs->held_libraries);
   for (size_t i = 0; i < hs->owned_member_count; ++i) {
+    gcu_allocator_free(exec->allocator, hs->owned_members[i]->continuations);
     gcu_allocator_free(exec->allocator, hs->owned_members[i]);
   }
   gcu_allocator_free(exec->allocator, hs->owned_members);

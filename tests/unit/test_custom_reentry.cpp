@@ -678,9 +678,29 @@ GLTANG_OpStatus sort_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle state,
 
 const GLTANG_Continuation kSortTable[] = {{"sort_cont", sort_cont}};
 
-/// pause_here(): nothing, but a native call is a place the harness's counters can tell apart.
-bool misuse_without_request(GLTANG_NativeCall *, void *) {
-  return true;
+// A host attribute of a built-in kind (`s.apply(f)`) is never resumable itself; it answers a bound resumable native.
+bool apply_native(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle f, bound;
+  if (gltang_call_arg(call, 0, &f) != GLTANG_OK || gltang_call_bound(call, &bound) != GLTANG_OK) {
+    return false;
+  }
+  return gltang_call_guest(call, f, &bound, 1, 0, GLTANG_Handle{0, 0}) == GLTANG_OK;
+}
+
+GLTANG_OpStatus apply_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle result) {
+  gltang_call_return_handle(call, result);
+  return GLTANG_OP_OK;
+}
+
+const GLTANG_Continuation kApplyTable[] = {{"apply_cont", apply_cont}};
+
+GLTANG_OpStatus attr_apply(GLTANG_NativeCall * call, void *, GLTANG_Handle self) {
+  GLTANG_Handle h;
+  if (gltang_handle_make_resumable_native(call, apply_native, nullptr, kApplyTable, 1, self, &h) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_handle(call, h);
+  return GLTANG_OP_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +776,8 @@ struct Types {
     d.continuations = kViewTable;
     d.continuation_count = 1;
     EXPECT_EQ(gltang_type_registry_add(registry, &d, &view), GLTANG_OK);
+
+    EXPECT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_STRING, "apply", attr_apply, nullptr), GLTANG_OK);
 
     d = GLTANG_TYPE_DESCRIPTOR_INIT;
     d.name = "emb";
@@ -1073,6 +1095,22 @@ TEST(Reentry, TheCalleeKindsAnyCallAccepts) {
   };
   Result r = go(sc, 0);
   EXPECT_EQ(r.out.raw.substr(0, 2), "1|") << r.out.raw;
+}
+
+TEST(Reentry, AHostAttributeOfAStringAnswersABoundResumableNativeThatCallsGuestCode) {
+  Scenario sc = scenario("function f(x) { return x + \"!\"; } s = \"hi\"; r = s.apply(f); print(r); print(\"|\"); print(\"yo\".apply(f)); r;\n");
+  Result r = go(sc, 0);
+  EXPECT_EQ(r.out.raw, "hi!|yo!");
+  EXPECT_EQ(r.out.result, "hi!");
+  EXPECT_EQ(r.suspended, 2u);
+  EXPECT_EQ(r.pending_depth, 0u);
+  Result j = go(sc, 1);
+  EXPECT_EQ(j.out.raw, r.out.raw);
+  Scenario t = sc;
+  t.torture = 1;
+  t.verify = 1;
+  t.moving = 1;
+  EXPECT_EQ(go(t, 0).out.raw, r.out.raw);
 }
 
 TEST(Reentry, ACallableObjectRunsATemplateAndAnswersItsOutput) {

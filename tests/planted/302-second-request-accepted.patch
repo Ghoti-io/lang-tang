@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -828,7 +828,7 @@
+@@ -854,7 +854,7 @@
    GLTANG_HandleState * hs = call->exec->handles;
    GLTANG_GuestRequest request;
    memset(&request, 0, sizeof(request));

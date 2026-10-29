@@ -101,6 +101,9 @@ typedef struct GLTANG_Library GLTANG_Library;
 /** @brief A host-defined value type, held by its registry (type.h). Opaque. */
 typedef struct GLTANG_Type GLTANG_Type;
 
+/** @brief One entry of a table of continuations (type.h): a name and the function a guest call is continued with. */
+typedef struct GLTANG_Continuation GLTANG_Continuation;
+
 /**
  * @brief What a native function or a factory is given: its arguments, the
  *   handles it makes, and where it puts its answer. Opaque; valid for the
@@ -511,6 +514,27 @@ GLTANG_API GLTANG_Result gltang_handle_make_library(GLTANG_NativeCall * call,
 GLTANG_API GLTANG_Result gltang_handle_make_native(GLTANG_NativeCall * call,
     GLTANG_NativeFn function, void * user, GLTANG_Handle bound,
     GLTANG_Handle * out);
+
+/**
+ * @brief ::gltang_handle_make_native for a *resumable* native: one that may ask
+ *   the engine to call guest code (::gltang_call_guest) and is called again
+ *   through an entry of `continuations` (a table the execution copies).
+ *
+ * This is how an attribute function of a built-in kind answers a method that
+ * calls guest code (`s.each(fn)`): the attribute function itself is never
+ * resumable, but the native it answers may be. The continuation is given the
+ * `user` of this call, and reads the bound value with ::gltang_call_bound.
+ * The native is called as a library native marked with
+ * ::gltang_library_mark_resumable is, and a snapshot of an execution holding
+ * one is refused.
+ *
+ * @may_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument or a table
+ *   ::gltang_library_mark_resumable would refuse.
+ */
+GLTANG_API GLTANG_Result gltang_handle_make_resumable_native(GLTANG_NativeCall * call,
+    GLTANG_NativeFn function, void * user, const GLTANG_Continuation * continuations,
+    size_t continuation_count, GLTANG_Handle bound, GLTANG_Handle * out);
 
 /** @} */
 

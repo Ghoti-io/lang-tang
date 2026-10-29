@@ -25,6 +25,12 @@ bool run_hook(GLTANG_NativeCall * call, void * user) {
   return (*static_cast<Hook *>(user))(call);
 }
 
+GLTANG_OpStatus probe_continuation(GLTANG_NativeCall *, void *, GLTANG_Handle, GLTANG_Handle) {
+  return GLTANG_OP_OK;
+}
+
+const GLTANG_Continuation probe_table[] = {{"probe", probe_continuation}};
+
 // ---------------------------------------------------------------------------
 // The labels
 // ---------------------------------------------------------------------------
@@ -150,6 +156,7 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   CASE(gltang_handle_map_set, true, (void)gltang_handle_map_set(call, m, "new", 3, GLTANG_UNICODE_STRING_TYPE_TRUSTED, s));
   CASE(gltang_handle_make_library, true, (void)gltang_handle_make_library(call, library, &out));
   CASE(gltang_handle_make_native, true, (void)gltang_handle_make_native(call, run_hook, nullptr, a, &out));
+  CASE(gltang_handle_make_resumable_native, true, (void)gltang_handle_make_resumable_native(call, run_hook, nullptr, probe_table, 1, a, &out));
   CASE(gltang_handle_promote, false, (void)gltang_handle_promote(call, s, &persistent));
   CASE(gltang_persistent_get, false, (void)gltang_persistent_get(call, persistent, &out));
   CASE(gltang_persistent_release, false, (void)gltang_persistent_release(call, persistent));

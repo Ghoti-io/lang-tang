@@ -527,6 +527,7 @@
 #define gltang_snapshot_refused_type GHOTIIO_LANG_TANG(gltang_snapshot_refused_type)
 #define gltang_call_poll GHOTIIO_LANG_TANG(gltang_call_poll)
 #define gltang_call_guest GHOTIIO_LANG_TANG(gltang_call_guest)
+#define gltang_handle_make_resumable_native GHOTIIO_LANG_TANG(gltang_handle_make_resumable_native)
 #define gltang_call_resume_step GHOTIIO_LANG_TANG(gltang_call_resume_step)
 #define gltang_handle_make_custom GHOTIIO_LANG_TANG(gltang_handle_make_custom)
 #define gltang_handle_custom_type GHOTIIO_LANG_TANG(gltang_handle_custom_type)
