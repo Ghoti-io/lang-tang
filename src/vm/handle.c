@@ -854,7 +854,16 @@ GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call, GLTANG_Handle callee, 
   GLTANG_HandleState * hs = call->exec->handles;
   GLTANG_GuestRequest request;
   memset(&request, 0, sizeof(request));
-  bool ok = hs && call->can_request && !hs->request.made && continuation < call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
+  // May this callback ask, and of how many entries? A resumable native (`member`), or an operation of a type that
+  // lists it in `resumable_ops`; anything else is opaque.
+  size_t entries = 0;
+  if (call->owner_kind == 2u) {
+    entries = ((const GLTANG_LibraryMember *)call->owner)->continuation_count;
+  }
+  else if (call->owner && ((((const GLTANG_Type *)call->owner)->resumable >> call->op) & 1u)) {
+    entries = ((const GLTANG_Type *)call->owner)->continuation_count;
+  }
+  bool ok = hs && entries != 0 && !hs->request.made && continuation < entries && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
   if (ok) {
     request.callee = gltang_vm_handle_value(call, callee, &ok);
     ok = ok && callable_value(request.callee);
@@ -877,6 +886,7 @@ GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call, GLTANG_Handle callee, 
   request.continuation = continuation;
   request.argc = (uint32_t)argc;
   hs->request = request;
+  call->requested = true;
   return GLTANG_OK;
 }
 

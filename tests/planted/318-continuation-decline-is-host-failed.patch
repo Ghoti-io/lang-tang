@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -507,7 +507,7 @@
-     }
+@@ -534,7 +534,7 @@
+     settle = false;
    }
    else if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {
 -    if (status == GLTANG_OP_DECLINE) {
-+    if (status == GLTANG_OP_DECLINE && !stage->continuing) {
++    if (status == GLTANG_OP_DECLINE && !continuing) {
        // A decline: whatever the callback set is dropped, and no value is made.
        gltang_vm_call_abandon(&call);
        *declined = true;

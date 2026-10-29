@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -792,9 +792,7 @@
+@@ -1023,9 +1023,7 @@
    gcu_allocator_free(exec->allocator, hs->persistent);
    gcu_allocator_free(exec->allocator, hs->persistent_generation);
    gcu_allocator_free(exec->allocator, hs->persistent_next);
@@ -14,4 +14,4 @@
 +  /* planted: the libraries are not released */
    gcu_allocator_free(exec->allocator, hs->held_libraries);
    for (size_t i = 0; i < hs->owned_member_count; ++i) {
-     gcu_allocator_free(exec->allocator, hs->owned_members[i]);
+     gcu_allocator_free(exec->allocator, hs->owned_members[i]->continuations);

@@ -4,12 +4,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1153,7 +1153,7 @@
-   exec->request_made = false;
-   RELOAD();
+@@ -276,7 +276,7 @@
+   GRCORE_Stack * stack = grcore_context_stack(context);
+   uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
    S[GLTANG_F_PC] = exec->current_offset;
 -  S[GLTANG_F_SP] = sp;
 +  S[GLTANG_F_SP] = sp - 1u;
-   // The request is charged as the CALL of its callee is.
-   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
-   grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});
+   return pending_step(exec, context, GLTANG_V_NULL, false);
+ }
+ 

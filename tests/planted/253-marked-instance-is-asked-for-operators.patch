@@ -4,16 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -504,10 +504,10 @@
+@@ -793,7 +793,7 @@
      // An error operand is the value, and the type is not asked, as a string's
      // `+` gives its error operand (a custom value is never an error, so at
      // most one side is). Equality keeps its rule: it is asked of any pair.
--    if (gltang_vm_stands_for_error(a)) {
-+    if (gltang_vm_is_error(a)) { /* planted: engine errors only */
-       return a;
-     }
--    if (gltang_vm_stands_for_error(b)) {
-+    if (gltang_vm_is_error(b)) {
-       return b;
-     }
-   }
+-    if (gltang_vm_stands_for_error(a) || gltang_vm_stands_for_error(b)) {
++    if (gltang_vm_is_error(a) || gltang_vm_is_error(b)) { /* planted: engine errors only */
+       if (exec->resume_active) {
+         // Run again to continue from a pending record, and the guest call marked an operand as an error
+         // in between: the rule answers before any callback, so the record has nothing to continue.

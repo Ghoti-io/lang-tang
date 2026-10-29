@@ -7,7 +7,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -571,13 +571,7 @@
+@@ -799,13 +799,7 @@
        case GLTANG_OP_CAST: {
          GLTANG_Value v = S[sp - 1u];
          SYNC();
@@ -19,6 +19,6 @@
 -          STAND_AT_OP();
 -        }
 +        /* planted: the interpreter does not stand at a cast to string */
-         GLTANG_Value r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
-         STOOD();
-         if (r == GLTANG_V_UNWIND) {
+         GLTANG_Value r;
+         if (gltang_v_is_custom(v)) {
+           exec->suspend_mode = 1;

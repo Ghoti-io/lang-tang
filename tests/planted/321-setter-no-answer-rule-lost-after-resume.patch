@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -527,7 +527,7 @@
+@@ -551,7 +551,7 @@
    }
    if (settle) {
      if (status == GLTANG_OP_OK) {
 -      if (call.set == GLTANG_CALL_NONE && (oc->op == GLTANG_TYPE_OP_ATTRIBUTE_SET || oc->op == GLTANG_TYPE_OP_INDEX_SET)) {
-+      if (!stage->continuing && call.set == GLTANG_CALL_NONE && (oc->op == GLTANG_TYPE_OP_ATTRIBUTE_SET || oc->op == GLTANG_TYPE_OP_INDEX_SET)) {
++      if (!continuing && call.set == GLTANG_CALL_NONE && (oc->op == GLTANG_TYPE_OP_ATTRIBUTE_SET || oc->op == GLTANG_TYPE_OP_INDEX_SET)) {
          // An assignment with no answer of its own is worth the value assigned.
          call.set = GLTANG_CALL_VALUE;
          call.value = held[2];

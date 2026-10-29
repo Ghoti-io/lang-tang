@@ -6,7 +6,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -883,9 +883,7 @@
+@@ -1174,9 +1174,7 @@
        case GLTANG_OP_PRINT: {
          // A long print polls inside (its pacing): the frame there stands at the print,
          // the state and identity compiled code's call of the same function carries.
@@ -14,10 +14,10 @@
 -        SAVE_AT_OP();
 -        STAND_AT_OP();
 +        SYNC();  /* planted: the frame is not stood at the print */
-         GLTANG_Value r = gltang_vm_op_print(exec, S[sp - 1u]);
-         STOOD();
-         if (r == GLTANG_V_UNWIND) {
-@@ -897,9 +895,7 @@
+         GLTANG_Value r;
+         if (gltang_v_is_custom(S[sp - 1u])) {
+           exec->suspend_mode = 1;
+@@ -1196,9 +1194,7 @@
        }
  
        case GLTANG_OP_PRINT_CONST: {

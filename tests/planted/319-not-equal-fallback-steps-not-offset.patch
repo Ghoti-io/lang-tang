@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -759,7 +759,7 @@
+@@ -822,7 +822,7 @@
    }
    if (declined && op == GLTANG_TYPE_OP_NOT_EQUAL) {
      // A `!=` nobody answered asks `==` the same way, and is its opposite (steps 2 and 3).

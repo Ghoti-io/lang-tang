@@ -4,10 +4,10 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -450,9 +450,7 @@
+@@ -739,9 +739,7 @@
        OpCall oc = OPCALL(type, op, 2, true, is_assignment);
        GLTANG_Value args[2] = {a, gltang_vm_temp_at(exec, mark + 1u)};
-       GLTANG_Value r = invoke(exec, &oc, args, declined);
+       GLTANG_Value r = invoke(exec, &oc, args, declined, base_step);
 -      if (!*declined) {
 -        return r;
 -      }

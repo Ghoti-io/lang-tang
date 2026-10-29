@@ -4,12 +4,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -273,7 +273,7 @@
-                 // frame included: the interpreter's `HALT` does not ask).
+@@ -468,7 +468,7 @@
                  goto halted;
                }
--              deliver_to_record = frame.offset == exec->deliver_frame;
-+              deliver_to_record = false;
-               grcore_stack_pop(stack);
-               if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
-                 // The entry frame of a nested run (AD-23) returned: the native that
+               {
+-                const bool delivers = frame.offset == exec->deliver_frame;
++                const bool delivers = false;
+                 grcore_stack_pop(stack);
+                 if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
+                   // The entry frame of a nested run (AD-23) returned: the native that

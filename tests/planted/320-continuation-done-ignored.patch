@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -514,7 +514,7 @@
+@@ -541,7 +541,7 @@
        result = GLTANG_V_NULL;
        settle = false;
      }
 -    else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done) {
-+    else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done && !stage->continuing) {
++    else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done && !continuing) {
        // An iterator has no more items: a status like a decline, and nothing is made.
        gltang_vm_call_abandon(&call);
        *oc->extra->done = true;

@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -410,7 +410,7 @@
-   memset(&call, 0, sizeof(call));
+@@ -502,7 +502,7 @@
+   memset(&call, 0, GLTANG_CALL_ZEROED);
    call.exec = exec;
    call.args = held;
 -  call.argc = oc->argc;
-+  call.argc = stage->continuing ? 0u : oc->argc;
-   if (oc->op != GLTANG_TYPE_OP_COUNT) {
-     // Only an operation the type listed may ask for a guest call (the attribute of a built-in kind never).
-     call.can_request = gltang_type_resumable(oc->type, oc->op);
++  call.argc = continuing ? 0u : oc->argc;
+   // What decides whether this callback may ask for a guest call (gltang_call_guest): the type's list. The attribute
+   // of a built-in kind has no type, and never may.
+   call.owner = oc->type;

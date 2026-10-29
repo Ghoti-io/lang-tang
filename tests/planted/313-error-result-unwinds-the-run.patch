@@ -4,12 +4,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1302,7 +1302,7 @@
-     goto unwound;
-   }
- pending_value:
--  if (pending_r == GLTANG_V_UNWIND) {
-+  if (pending_r == GLTANG_V_UNWIND || gltang_vm_is_error(pending_r)) {
-     gltang_vm_pending_pop(exec);
-     goto unwound;
-   }
+@@ -224,7 +224,7 @@
+       else {
+         value = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+       }
+-      if (value == GLTANG_V_UNWIND) {
++      if (value == GLTANG_V_UNWIND || gltang_vm_is_error(value)) {
+         if (exec->request_made) {
+           continue;  // the call asked for another: its record is the innermost, and chains to this one
+         }

@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -584,7 +584,7 @@
-   stage.nested = false;
-   if (exec->resume_active) {
-     const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
--    if (step < record->step) {
-+    if (step < record->step && false) {
-       // An earlier step of the operation: it declined, or the operation would not be here.
-       *declined = true;
-       return GLTANG_V_NULL;
+@@ -657,7 +657,7 @@
+  */
+ static bool __attribute__((noinline)) invoke_resume(GLTANG_Execution * exec, const OpCall * oc, uint32_t step, Stage * stage, bool * declined, GLTANG_Value * early) {
+   const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+-  if (step < record->step) {
++  if (step < record->step && false) {
+     // An earlier step of the operation: it declined, or the operation would not be here.
+     *declined = true;
+     *early = GLTANG_V_NULL;

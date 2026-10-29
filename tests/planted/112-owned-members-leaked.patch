@@ -4,11 +4,12 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -921,9 +921,7 @@
+@@ -1027,10 +1027,7 @@
      gltang_library_release(hs->held_libraries[i]);
    }
    gcu_allocator_free(exec->allocator, hs->held_libraries);
 -  for (size_t i = 0; i < hs->owned_member_count; ++i) {
+-    gcu_allocator_free(exec->allocator, hs->owned_members[i]->continuations);
 -    gcu_allocator_free(exec->allocator, hs->owned_members[i]);
 -  }
 +  /* planted: the native records are not freed */

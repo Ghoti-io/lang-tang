@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1420,7 +1420,6 @@
+@@ -1395,7 +1395,6 @@
    // the run that called it.
    const bool nested = exec->run_base_frames != 0;
    // The guest calls host callbacks asked for that this run opened go with its frames.

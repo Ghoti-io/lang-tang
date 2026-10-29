@@ -4,17 +4,17 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -460,7 +460,6 @@
-       values[2u + i] = request->args[i];
-     }
-     request->made = false;
--    gltang_vm_call_abandon(&call);
-     settle = false;
-     *declined = false;
-     const size_t request_base = gltang_vm_temp_mark(exec);
+@@ -342,7 +342,6 @@
+     values[2u + i] = request->args[i];
+   }
+   request->made = false;
+-  gltang_vm_call_abandon(call);
+   *declined = false;
+   const size_t request_base = gltang_vm_temp_mark(exec);
+   bool held_request = true;
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -774,7 +774,6 @@
+@@ -741,7 +741,6 @@
      const uint32_t request_argc = request->argc;
      const uint32_t request_index = request->continuation;
      hs->request.made = false;

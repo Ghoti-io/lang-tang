@@ -4,10 +4,10 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -686,7 +686,7 @@
+@@ -988,7 +988,7 @@
    OpCall oc = OPCALL(type, GLTANG_TYPE_OP_CALL, argc + 1u, true, false);
    bool declined;
-   GLTANG_Value r = invoke(exec, &oc, callee_and_args, &declined);
+   GLTANG_Value r = invoke(exec, &oc, callee_and_args, &declined, 0);
 -  return declined ? MAKE_ERROR(GLTANG_ERROR_INVALID_FUNCTION_CALL) : r;
 +  return declined ? GLTANG_V_NULL : r; /* planted: a decline is null */
  }

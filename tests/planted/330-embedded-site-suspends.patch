@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -474,7 +474,7 @@
-         *oc->extra->errored = true;
-       }
+@@ -355,7 +355,7 @@
+       *oc->extra->errored = true;
      }
--    else if (exec->suspend_mode != 0) {
-+    else if (true) {
-       GLTANG_PendingSpec spec = {
-         .type = oc->type, .member = NULL, .op = oc->op, .step = step, .continuation = request_index,
-         .chained = exec->suspend_mode == 2u, .temp_base = request_base, .in_temps = true, .argc = request_argc,
+   }
+-  else if (exec->suspend_mode != 0) {
++  else if (true) {
+     GLTANG_PendingSpec spec = {
+       .type = oc->type, .member = NULL, .op = oc->op, .step = step, .continuation = request_index,
+       .chained = exec->suspend_mode == 2u, .temp_base = request_base, .in_temps = true, .argc = request_argc,

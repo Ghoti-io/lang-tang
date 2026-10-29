@@ -4,12 +4,12 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -854,7 +854,7 @@
-   GLTANG_HandleState * hs = call->exec->handles;
-   GLTANG_GuestRequest request;
-   memset(&request, 0, sizeof(request));
--  bool ok = hs && call->can_request && !hs->request.made && continuation < call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
-+  bool ok = hs && !hs->request.made && continuation < call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
-   if (ok) {
-     request.callee = gltang_vm_handle_value(call, callee, &ok);
-     ok = ok && callable_value(request.callee);
+@@ -860,7 +860,7 @@
+   if (call->owner_kind == 2u) {
+     entries = ((const GLTANG_LibraryMember *)call->owner)->continuation_count;
+   }
+-  else if (call->owner && ((((const GLTANG_Type *)call->owner)->resumable >> call->op) & 1u)) {
++  else if (call->owner) {
+     entries = ((const GLTANG_Type *)call->owner)->continuation_count;
+   }
+   bool ok = hs && entries != 0 && !hs->request.made && continuation < entries && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);

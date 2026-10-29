@@ -278,7 +278,6 @@ static GLTANG_OpStatus run_callback(GLTANG_NativeCall * call, const OpCall * oc,
  * (the callee, its arguments, the continuation and the state it names).
  */
 typedef struct Stage {
-  bool continuing;              ///< In: call the continuation `index` with `state` and `result`, not the callback.
   bool pop;                     ///< In: the values came from the innermost pending record, which is let go once they are held.
   uint32_t index;
   GLTANG_Value state;
@@ -300,14 +299,106 @@ static GLTANG_OpStatus run_continuation(GLTANG_NativeCall * call, const OpCall *
  * own, until it returns. A GC point.
  *
  * A callback that asked for a guest call and returned GLTANG_OP_PENDING ends here all the same:
- * its scope is closed, and what it asked for is copied out of the handles into the words the
- * record covers. At an instruction site (`suspend_mode`) the request becomes a pending record, the
- * record of this bracket is left, and GLTANG_V_UNWIND is returned with `request_made` set: the
- * interpreter starts the callee from its own loop, with nothing of this call on the C stack. At
- * any other site `stage->nested` is set and the caller runs the call.
+ * its scope is closed, and what it asked for is taken out of the handles (bracket_request). At an
+ * instruction site (`suspend_mode`) the request becomes a pending record, the record of this
+ * bracket is left, and GLTANG_V_UNWIND is returned with `request_made` set: the interpreter starts
+ * the callee from its own loop, with nothing of this call on the C stack. At any other site
+ * `stage->nested` is set and the caller runs the call. A callback that asks for nothing pays for
+ * one load and one test.
  */
-static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step, Stage * stage) {
-  stage->nested = false;
+
+static GLTANG_Value invoke_nested(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step, Stage * stage);
+
+/**
+ * The cold half of a bracket: the callback returned with a request recorded (`hs->request.made`). A request
+ * is accepted only from a callback that returned GLTANG_OP_PENDING and whose handles were all good; any other
+ * status after a request is `Host function failed` (the call's error is set and `*status` becomes ERROR).
+ * When it is accepted the callback is closed (its scope), the request is held in the temporaries and made
+ * into a pending record (or, at a site that cannot suspend, handed to the caller in `stage`), `*result` is
+ * the operation's value, and true is returned: nothing is left to settle. Otherwise false.
+ */
+static bool __attribute__((noinline)) bracket_request(GLTANG_Execution * exec, const OpCall * oc, GLTANG_NativeCall * call, GLTANG_OpStatus * status, const GLTANG_Value * held, const GLTANG_Value * args,
+    uint32_t step, bool * declined, Stage * stage, GLTANG_Value * result) {
+  GLTANG_HandleState * const hs = exec->handles;
+  if (*status != GLTANG_OP_PENDING) {
+    hs->request.made = false;
+    gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+    *status = GLTANG_OP_ERROR;
+    return false;
+  }
+  if (call->scope_unwind || call->scope_oom || call->set == GLTANG_CALL_ERROR) {
+    hs->request.made = false;
+    return false;
+  }
+  // Close the callback, keeping what it asked for in the temporaries (the collector updates them) until the
+  // pending record, or the nested call, has it.
+  GLTANG_GuestRequest * request = &hs->request;
+  const uint32_t request_argc = request->argc;
+  const uint32_t request_index = request->continuation;
+  GLTANG_Value values[2u + GLTANG_GUEST_CALL_ARGS_MAX];
+  values[0] = request->state;
+  values[1] = request->callee;
+  for (uint32_t i = 0; i < request_argc; ++i) {
+    values[2u + i] = request->args[i];
+  }
+  request->made = false;
+  gltang_vm_call_abandon(call);
+  *declined = false;
+  const size_t request_base = gltang_vm_temp_mark(exec);
+  bool held_request = true;
+  for (uint32_t i = 0; i < 2u + request_argc && held_request; ++i) {
+    held_request = gltang_vm_temp_push(exec, values[i]);
+  }
+  if (!held_request) {
+    *result = exec->roots[GLTANG_ROOT_OOM];
+    if (oc->extra && oc->extra->errored) {
+      *oc->extra->errored = true;
+    }
+  }
+  else if (exec->suspend_mode != 0) {
+    GLTANG_PendingSpec spec = {
+      .type = oc->type, .member = NULL, .op = oc->op, .step = step, .continuation = request_index,
+      .chained = exec->suspend_mode == 2u, .temp_base = request_base, .in_temps = true, .argc = request_argc,
+      .operands = exec->suspend_mode == 2u ? held : NULL, .operand_count = exec->suspend_mode == 2u ? oc->argc : 0u,
+    };
+    *result = gltang_vm_pending_push(exec, &spec);
+    if (*result == GLTANG_V_UNWIND || *result == exec->roots[GLTANG_ROOT_OOM]) {
+      if (oc->extra && oc->extra->errored) {
+        *oc->extra->errored = true;
+      }
+    }
+    else {
+      // The record is the innermost; the callee is started from the interpreter's own loop.
+      ++hs->suspensions;
+      exec->request_made = true;
+      *result = GLTANG_V_UNWIND;
+    }
+  }
+  else {
+    // A site inside a C loop has no instruction to run again: the call is made nested (AD-23). A first entry
+    // makes it here, and the continuation's brackets hand a further request back to the loop (`stage`).
+    Stage local;
+    Stage * nested = stage ? stage : &local;
+    nested->nested = true;
+    nested->state = gltang_vm_temp_at(exec, request_base);
+    nested->callee = gltang_vm_temp_at(exec, request_base + 1u);
+    nested->argc = request_argc;
+    for (uint32_t i = 0; i < request_argc; ++i) {
+      nested->args[i] = gltang_vm_temp_at(exec, request_base + 2u + i);
+    }
+    nested->index = request_index;
+    if (!stage) {
+      *result = invoke_nested(exec, oc, args, declined, step, &local);
+    }
+  }
+  gltang_vm_temp_release(exec, request_base);
+  return true;
+}
+
+static inline __attribute__((always_inline)) GLTANG_Value bracket_impl(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step, Stage * stage, const bool continuing) {
+  if (stage) {
+    stage->nested = false;
+  }
   // The operands are copied into this frame first; the record gives exactly the
   // copies as its conservative segment, so the objects they name are pinned and
   // the callback reads the copies (as gltang_vm_call_native does). More than a
@@ -316,9 +407,6 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
   GLTANG_Handle h_small[OPERANDS_MAX];
   GLTANG_Value * held = held_small;
   GLTANG_Handle * h = h_small;
-  // Everything this bracket holds in the temporaries (a continuation's state and result, then the values of a
-  // request) is above this mark and let go at the end.
-  const size_t temp_mark = gltang_vm_temp_mark(exec);
   if (oc->argc > OPERANDS_MAX) {
     held = gcu_calloc(oc->argc, sizeof(GLTANG_Value));
     h = gcu_calloc(oc->argc, sizeof(GLTANG_Handle));
@@ -350,16 +438,18 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
       }
       break;
   }
-  if (stage->continuing) {
-    // The continuation's state and result wait in the temporaries (which the collector updates) until the
-    // handles are made; the record they came from has done its work.
+  // A continuation's state and result wait in the temporaries (which the collector updates) from here until the
+  // handles are made; the record they came from has done its work.
+  size_t hold = 0;
+  if (continuing) {
+    hold = gltang_vm_temp_mark(exec);
     const bool held_both = gltang_vm_temp_push(exec, stage->state) && gltang_vm_temp_push(exec, stage->result);
     if (stage->pop) {
       gltang_vm_pending_pop(exec);
       exec->resume_active = false;
     }
     if (!held_both) {
-      gltang_vm_temp_release(exec, temp_mark);
+      gltang_vm_temp_release(exec, hold);
       if (held != held_small) {
         gcu_free(held);
         gcu_free(h);
@@ -386,7 +476,9 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
   GRCORE_ActivationRef record;
   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
   if (entered != GRCORE_OK) {
-    gltang_vm_temp_release(exec, temp_mark);
+    if (continuing) {
+      gltang_vm_temp_release(exec, hold);
+    }
     if (held != held_small) {
       gcu_free(held);
       gcu_free(h);
@@ -407,25 +499,24 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
     (void)grheap_collect(exec->heap);
   }
   GLTANG_NativeCall call;
-  memset(&call, 0, sizeof(call));
+  memset(&call, 0, GLTANG_CALL_ZEROED);
   call.exec = exec;
   call.args = held;
   call.argc = oc->argc;
-  if (oc->op != GLTANG_TYPE_OP_COUNT) {
-    // Only an operation the type listed may ask for a guest call (the attribute of a built-in kind never).
-    call.can_request = gltang_type_resumable(oc->type, oc->op);
-    call.continuation_count = (uint32_t)oc->type->continuation_count;
-  }
-  call.resume_step = stage->continuing ? step : 0u;
+  // What decides whether this callback may ask for a guest call (gltang_call_guest): the type's list. The attribute
+  // of a built-in kind has no type, and never may.
+  call.owner = oc->type;
+  call.op = (uint8_t)oc->op;
   bool made = true;
   for (size_t i = 0; i < oc->argc && made; ++i) {
     made = gltang_call_arg(&call, i, &h[i]) == GLTANG_OK;
   }
   GLTANG_Handle h_state = {0};
   GLTANG_Handle h_result = {0};
-  if (made && stage->continuing) {
+  if (continuing) {
+    call.resume_step = step;
     // Read from the temporaries, which the collector kept up to date through the seam above.
-    made = gltang_vm_handle_push(&call, gltang_vm_temp_at(exec, temp_mark), &h_state) == GLTANG_OK && gltang_vm_handle_push(&call, gltang_vm_temp_at(exec, temp_mark + 1u), &h_result) == GLTANG_OK;
+    made = made && gltang_vm_handle_push(&call, gltang_vm_temp_at(exec, hold), &h_state) == GLTANG_OK && gltang_vm_handle_push(&call, gltang_vm_temp_at(exec, hold + 1u), &h_result) == GLTANG_OK;
   }
   GLTANG_OpStatus status = GLTANG_OP_ERROR;
   if (made) {
@@ -433,78 +524,14 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
     // execution (the setters refuse), as in a native.
     const bool outer_in_host = exec->in_host;
     exec->in_host = true;
-    status = stage->continuing ? run_continuation(&call, oc, stage->index, h_state, h_result) : run_callback(&call, oc, h);
+    status = continuing ? run_continuation(&call, oc, stage->index, h_state, h_result) : run_callback(&call, oc, h);
     exec->in_host = outer_in_host;
-  }
-  // A request is accepted only from a callback that returned GLTANG_OP_PENDING and whose handles were all
-  // good; any other status after a request, or a PENDING with none, is `Host function failed`.
-  GLTANG_HandleState * const hs = exec->handles;  // made by the first handle, if there is one
-  const bool requested = hs && hs->request.made;
-  if (requested && status != GLTANG_OP_PENDING) {
-    hs->request.made = false;
-    gltang_call_return_error(&call, GLTANG_ERROR_HOST_FAILED);
-    status = GLTANG_OP_ERROR;
   }
   GLTANG_Value result = GLTANG_V_NULL;
   bool settle = true;
-  if (status == GLTANG_OP_PENDING && requested && !call.scope_unwind && !call.scope_oom && call.set != GLTANG_CALL_ERROR) {
-    // Close the callback, keeping what it asked for in the temporaries (the collector updates them) until the
-    // pending record, or the nested call, has it.
-    GLTANG_GuestRequest * request = &hs->request;
-    const uint32_t request_argc = request->argc;
-    const uint32_t request_index = request->continuation;
-    GLTANG_Value values[2u + GLTANG_GUEST_CALL_ARGS_MAX];
-    values[0] = request->state;
-    values[1] = request->callee;
-    for (uint32_t i = 0; i < request_argc; ++i) {
-      values[2u + i] = request->args[i];
-    }
-    request->made = false;
-    gltang_vm_call_abandon(&call);
+  // A callback that asked for a guest call (gltang_call_guest): the cold half takes it from here.
+  if (__builtin_expect(call.requested, 0) && bracket_request(exec, oc, &call, &status, held, args, step, declined, stage, &result)) {
     settle = false;
-    *declined = false;
-    const size_t request_base = gltang_vm_temp_mark(exec);
-    bool held_request = true;
-    for (uint32_t i = 0; i < 2u + request_argc && held_request; ++i) {
-      held_request = gltang_vm_temp_push(exec, values[i]);
-    }
-    if (!held_request) {
-      result = exec->roots[GLTANG_ROOT_OOM];
-      if (oc->extra && oc->extra->errored) {
-        *oc->extra->errored = true;
-      }
-    }
-    else if (exec->suspend_mode != 0) {
-      GLTANG_PendingSpec spec = {
-        .type = oc->type, .member = NULL, .op = oc->op, .step = step, .continuation = request_index,
-        .chained = exec->suspend_mode == 2u, .temp_base = request_base, .in_temps = true, .argc = request_argc,
-        .operands = exec->suspend_mode == 2u ? held : NULL, .operand_count = exec->suspend_mode == 2u ? oc->argc : 0u,
-      };
-      result = gltang_vm_pending_push(exec, &spec);
-      if (result == GLTANG_V_UNWIND || result == exec->roots[GLTANG_ROOT_OOM]) {
-        if (oc->extra && oc->extra->errored) {
-          *oc->extra->errored = true;
-        }
-      }
-      else {
-        // The record is the innermost; the callee is started from the interpreter's own loop.
-        ++hs->suspensions;
-        exec->request_made = true;
-        result = GLTANG_V_UNWIND;
-      }
-    }
-    else {
-      // A site inside a C loop has no instruction to run again: the call is made nested, by the caller
-      // of this bracket, once the record of this one has been left.
-      stage->nested = true;
-      stage->state = gltang_vm_temp_at(exec, request_base);
-      stage->callee = gltang_vm_temp_at(exec, request_base + 1u);
-      stage->argc = request_argc;
-      for (uint32_t i = 0; i < request_argc; ++i) {
-        stage->args[i] = gltang_vm_temp_at(exec, request_base + 2u + i);
-      }
-      stage->index = request_index;
-    }
   }
   else if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {
     if (status == GLTANG_OP_DECLINE) {
@@ -521,9 +548,6 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
       result = GLTANG_V_NULL;
       settle = false;
     }
-  }
-  if (requested) {
-    hs->request.made = false;
   }
   if (settle) {
     if (status == GLTANG_OP_OK) {
@@ -561,8 +585,96 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
     gcu_free(held);
     gcu_free(h);
   }
-  gltang_vm_temp_release(exec, temp_mark);
+  if (continuing) {
+    gltang_vm_temp_release(exec, hold);
+  }
   return result;
+}
+
+/** The bracket of a first entry: the continuation's parts are compiled out, and a request made at a site that cannot suspend is run nested inside it. */
+static inline __attribute__((always_inline)) GLTANG_Value bracket_entry(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step) {
+  return bracket_impl(exec, oc, args, declined, step, NULL, false);
+}
+
+/** The bracket of a continuation, out of line: the common entry does not carry it. */
+static GLTANG_Value __attribute__((noinline)) bracket_continue(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step, Stage * stage) {
+  return bracket_impl(exec, oc, args, declined, step, stage, true);
+}
+
+/**
+ * The cold half of `invoke` at a site that cannot suspend: the callback (or a continuation) asked for a guest call
+ * and the call is made here, as a nested activation (AD-23), which is how an opaque host function would re-enter.
+ * Only a Tang function is accepted, and only while the program runs; a pause inside is an unwind that stops at
+ * the nested record. The state is held across it, and the answer until the next bracket has copied it. `r` is the
+ * bracket's result, which the request left unused; a continuation that asks again is made the same way.
+ */
+static GLTANG_Value __attribute__((noinline)) invoke_nested(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step, Stage * stage) {
+  size_t mark = SIZE_MAX;
+  for (;;) {
+    ++exec->handles->nested_requests;
+    if (exec->state != GLTANG_EXECUTION_RUNNING || !gltang_v_is_function(stage->callee)) {
+      // Only a Tang function, and only while the program runs: a host rendering the result of a finished or
+      // paused run has no frames to nest one on.
+      if (mark != SIZE_MAX) {
+        gltang_vm_temp_release(exec, mark);
+      }
+      return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
+    }
+    if (mark == SIZE_MAX) {
+      mark = gltang_vm_temp_mark(exec);
+    }
+    else {
+      gltang_vm_temp_release(exec, mark);
+    }
+    if (!gltang_vm_temp_push(exec, stage->state)) {
+      gltang_vm_temp_release(exec, mark);
+      return exec->roots[GLTANG_ROOT_OOM];
+    }
+    GLTANG_Value answer = gltang_vm_call_guest(exec, stage->callee, stage->argc, stage->args);
+    if (answer == GLTANG_V_UNWIND || !gltang_vm_temp_push(exec, answer)) {
+      GLTANG_Value failed = answer == GLTANG_V_UNWIND ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
+      gltang_vm_temp_release(exec, mark);
+      return failed;
+    }
+    stage->pop = false;
+    stage->nested = false;
+    stage->state = gltang_vm_temp_at(exec, mark);
+    stage->result = gltang_vm_temp_at(exec, mark + 1u);
+    GLTANG_Value r = bracket_continue(exec, oc, args, declined, step, stage);
+    if (!stage->nested) {
+      gltang_vm_temp_release(exec, mark);
+      return r;
+    }
+    // The continuation asked again: the loop makes that call too.
+  }
+}
+
+/**
+ * The cold half of `invoke` when an instruction is run again to continue from a pending record: the steps before
+ * the record's were declines and are not called again, the record's step calls its continuation, and a later step
+ * (or a record that is not this operation's) is not reached by a correct replay. Returns true when `*early` is
+ * the operation's answer (or, with `*declined`, a decline), false when the bracket is to run with `stage` set up.
+ */
+static bool __attribute__((noinline)) invoke_resume(GLTANG_Execution * exec, const OpCall * oc, uint32_t step, Stage * stage, bool * declined, GLTANG_Value * early) {
+  const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+  if (step < record->step) {
+    // An earlier step of the operation: it declined, or the operation would not be here.
+    *declined = true;
+    *early = GLTANG_V_NULL;
+    return true;
+  }
+  if (step > record->step || record->type != oc->type || record->op != (uint8_t)oc->op) {
+    // Not reached by a correct replay. The operation's value is the failure; nothing runs.
+    gltang_vm_pending_pop(exec);
+    exec->resume_active = false;
+    *early = MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
+    return true;
+  }
+  stage->pop = true;
+  stage->index = record->continuation;
+  stage->state = record->slots[GLTANG_PENDING_STATE];
+  stage->result = record->slots[GLTANG_PENDING_RESULT];
+  return false;
 }
 
 /**
@@ -578,65 +690,16 @@ static GLTANG_Value bracket(GLTANG_Execution * exec, const OpCall * oc, const GL
  */
 static GLTANG_Value invoke(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined, uint32_t step) {
   *declined = false;
-  Stage stage;
-  stage.continuing = false;
-  stage.pop = false;
-  stage.nested = false;
-  if (exec->resume_active) {
-    const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
-    if (step < record->step) {
-      // An earlier step of the operation: it declined, or the operation would not be here.
-      *declined = true;
-      return GLTANG_V_NULL;
+  if (__builtin_expect(exec->resume_active, 0)) {
+    Stage stage;
+    GLTANG_Value early;
+    if (invoke_resume(exec, oc, step, &stage, declined, &early)) {
+      return early;
     }
-    if (step > record->step || record->type != oc->type || record->op != (uint8_t)oc->op) {
-      // Not reached by a correct replay. The operation's value is the failure; nothing runs.
-      gltang_vm_pending_pop(exec);
-      exec->resume_active = false;
-      return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
-    }
-    stage.continuing = true;
-    stage.pop = true;
-    stage.index = record->continuation;
-    stage.state = record->slots[GLTANG_PENDING_STATE];
-    stage.result = record->slots[GLTANG_PENDING_RESULT];
+    GLTANG_Value r = bracket_continue(exec, oc, args, declined, step, &stage);
+    return stage.nested ? invoke_nested(exec, oc, args, declined, step, &stage) : r;
   }
-  size_t mark = SIZE_MAX;
-  for (;;) {
-    GLTANG_Value r = bracket(exec, oc, args, declined, step, &stage);
-    if (mark != SIZE_MAX) {
-      gltang_vm_temp_release(exec, mark);
-      mark = SIZE_MAX;
-    }
-    if (!stage.nested) {
-      return r;
-    }
-    // The nested route (AD-23): an opaque host function is run this way, a pause inside is an unwind
-    // that stops at the record, and only a Tang function is accepted. The state is held across it,
-    // and the answer is held until the next bracket has copied it.
-    ++exec->handles->nested_requests;
-    if (exec->state != GLTANG_EXECUTION_RUNNING || !gltang_v_is_function(stage.callee)) {
-      // Only a Tang function, and only while the program runs: a host rendering the result of a finished or
-      // paused run has no frames to nest one on.
-      return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
-    }
-    mark = gltang_vm_temp_mark(exec);
-    if (!gltang_vm_temp_push(exec, stage.state)) {
-      gltang_vm_temp_release(exec, mark);
-      return exec->roots[GLTANG_ROOT_OOM];
-    }
-    GLTANG_Value answer = gltang_vm_call_guest(exec, stage.callee, stage.argc, stage.args);
-    if (answer == GLTANG_V_UNWIND || !gltang_vm_temp_push(exec, answer)) {
-      GLTANG_Value failed = answer == GLTANG_V_UNWIND ? GLTANG_V_UNWIND : exec->roots[GLTANG_ROOT_OOM];
-      gltang_vm_temp_release(exec, mark);
-      return failed;
-    }
-    stage.continuing = true;
-    stage.pop = false;
-    stage.nested = false;
-    stage.state = gltang_vm_temp_at(exec, mark);
-    stage.result = gltang_vm_temp_at(exec, mark + 1u);
-  }
+  return bracket_entry(exec, oc, args, declined, step);
 }
 
 // ---------------------------------------------------------------------------

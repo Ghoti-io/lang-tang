@@ -4,7 +4,7 @@
 #
 --- a/src/vm/execution.c
 +++ b/src/vm/execution.c
-@@ -402,7 +402,11 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
+@@ -431,7 +431,11 @@
      visitor->slot(visitor->user, &exec->roots[i]);
    }
    for (size_t i = 0; i < exec->temp_count; ++i) {
@@ -15,5 +15,5 @@
 +    GLTANG_Value planted_copy = exec->temps[i];
 +    visitor->slot(visitor->user, &planted_copy);
    }
- #ifdef GLTANG_WITH_JIT
-   // The float boxes made ahead of time for the rebuild's conversions.
+   // The innermost pending record (a guest call a host callback asked for), which holds the rest.
+   visitor->slot(visitor->user, &exec->pending_top);

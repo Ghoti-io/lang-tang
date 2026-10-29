@@ -4,12 +4,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1154,8 +1154,6 @@
-   RELOAD();
-   S[GLTANG_F_PC] = exec->current_offset;
-   S[GLTANG_F_SP] = sp;
--  // The request is charged as the CALL of its callee is.
--  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
-   grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});
-   GLTANG_Value pending_r = GLTANG_V_NULL;
-   {
+@@ -113,8 +113,6 @@
+     const GLTANG_Program * program = exec->programs[GLTANG_FN_PROGRAM(fword)].program;
+     if (!have_value) {
+       exec->request_made = false;
+-      // The request is charged as the CALL of its callee is.
+-      exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
+       grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});
+       const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+       const GLTANG_Value callee = record->slots[GLTANG_PENDING_CALLEE];

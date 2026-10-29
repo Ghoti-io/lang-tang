@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -440,7 +440,7 @@
-   // good; any other status after a request, or a PENDING with none, is `Host function failed`.
-   GLTANG_HandleState * const hs = exec->handles;  // made by the first handle, if there is one
-   const bool requested = hs && hs->request.made;
--  if (requested && status != GLTANG_OP_PENDING) {
-+  if (requested && status != GLTANG_OP_PENDING && false) {
+@@ -320,7 +320,7 @@
+ static bool __attribute__((noinline)) bracket_request(GLTANG_Execution * exec, const OpCall * oc, GLTANG_NativeCall * call, GLTANG_OpStatus * status, const GLTANG_Value * held, const GLTANG_Value * args,
+     uint32_t step, bool * declined, Stage * stage, GLTANG_Value * result) {
+   GLTANG_HandleState * const hs = exec->handles;
+-  if (*status != GLTANG_OP_PENDING) {
++  if (*status != GLTANG_OP_PENDING && false) {
      hs->request.made = false;
-     gltang_call_return_error(&call, GLTANG_ERROR_HOST_FAILED);
-     status = GLTANG_OP_ERROR;
+     gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+     *status = GLTANG_OP_ERROR;

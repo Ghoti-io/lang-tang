@@ -4,10 +4,10 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -360,7 +360,7 @@
-   GLTANG_Value result;
-   bool settle = true;
-   if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {
+@@ -534,7 +534,7 @@
+     settle = false;
+   }
+   else if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {
 -    if (status == GLTANG_OP_DECLINE) {
 +    if (status == GLTANG_OP_DECLINE || (status == GLTANG_OP_DONE && !(oc->extra && oc->extra->done))) { /* planted: done is a decline */
        // A decline: whatever the callback set is dropped, and no value is made.

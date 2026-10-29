@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -461,7 +461,7 @@
+@@ -750,7 +750,7 @@
      const GLTANG_Type * type = gltang_vm_custom(b)->type;
      if (gltang_type_has(type, op)) {
        OpCall oc = OPCALL(type, op, 2, false, is_assignment);
 -      GLTANG_Value args[2] = {b, gltang_vm_temp_at(exec, mark)};
 +      GLTANG_Value args[2] = {gltang_vm_temp_at(exec, mark), b}; /* planted: not swapped */
-       return invoke(exec, &oc, args, declined);
+       return invoke(exec, &oc, args, declined, base_step + 1u);
      }
    }

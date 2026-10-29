@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -353,7 +353,7 @@
+@@ -523,7 +523,7 @@
      // Host code from here to its return: it cannot destroy or reconfigure the
      // execution (the setters refuse), as in a native.
      const bool outer_in_host = exec->in_host;
 -    exec->in_host = true;
 +    exec->in_host = oc->op == GLTANG_TYPE_OP_TRUTHY ? false : true; /* planted: truthy is not host code */
-     status = run_callback(&call, oc, h);
+     status = continuing ? run_continuation(&call, oc, stage->index, h_state, h_result) : run_callback(&call, oc, h);
      exec->in_host = outer_in_host;
    }

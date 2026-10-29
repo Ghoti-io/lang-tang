@@ -4,10 +4,10 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -702,7 +702,7 @@
+@@ -1004,7 +1004,7 @@
    GLTANG_Value args[1] = {v};
    bool declined;
-   GLTANG_Value r = invoke(exec, &oc, args, &declined);
+   GLTANG_Value r = invoke(exec, &oc, args, &declined, 0);
 -  return declined ? GLTANG_V_TRUE : r;
 +  return declined ? GLTANG_V_FALSE : r; /* planted: a decline is false */
  }

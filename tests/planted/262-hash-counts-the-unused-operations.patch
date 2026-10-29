@@ -4,11 +4,11 @@
 #
 --- a/src/library/types.c
 +++ b/src/library/types.c
-@@ -152,6 +152,7 @@
+@@ -154,6 +154,7 @@
    h = fnv_u64(h, t->descriptor.byte_count);
    h = fnv_u64(h, t->descriptor.thread_safe ? 1u : 0u);
    h = fnv_u64(h, t->operations);
 +  h = fnv_u64(h, GLTANG_TYPE_OP_COUNT); /* planted */
-   return h;
- }
- 
+   if (t->resumable || t->continuation_count) {
+     // Only a type that declares guest calls folds them in: one that does not hashes as it always did.
+     h = fnv_u64(h, t->resumable);

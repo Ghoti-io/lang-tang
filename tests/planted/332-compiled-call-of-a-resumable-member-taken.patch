@@ -1,5 +1,5 @@
 # 332 compiled code calls a resumable native
-# defect: the exit at a resumable member is lost, so the native is entered from compiled code with no instruction to suspend at
+# defect: the exit at a resumable member is lost (at the member and at the callee guard), so the native is entered from compiled code with no instruction to suspend at
 # caught by: the resumable-native-is-an-exit test (testNative_calls)
 #
 --- a/src/jit/build.c
@@ -13,3 +13,14 @@
  }
  
  /** Marks the instructions a jump lands on. The one two-word instruction is skipped over. */
+--- a/src/jit/helpers.c
++++ b/src/jit/helpers.c
+@@ -167,7 +167,7 @@
+     return 0;
+   }
+   const GLTANG_NativeObject * native = gltang_object(callee);
+-  return native->member == (const GLTANG_LibraryMember *)(uintptr_t)member && native->builtin == (uint32_t)GLTANG_BUILTIN_NONE;
++  return native->member == (const GLTANG_LibraryMember *)(uintptr_t)member && (native->builtin & ~GLTANG_NATIVE_RESUMABLE_BIT) == (uint32_t)GLTANG_BUILTIN_NONE;
+ }
+ 
+ uint32_t gltang_jit_poll(void * ctx, uint64_t fword, uint64_t index) {

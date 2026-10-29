@@ -472,6 +472,9 @@ bool make_state(GLTANG_NativeCall * call, const std::vector<int64_t> & values, G
 
 bool read_state(GLTANG_NativeCall * call, GLTANG_Handle state, std::vector<int64_t> * values) {
   const size_t n = gltang_handle_array_length(call, state);
+  if (gltang_handle_kind(call, state) != GLTANG_KIND_ARRAY || n > 4096u) {
+    return false;  // not the array this native made: a state the collector freed reads as nonsense, and fails fast
+  }
   values->clear();
   for (size_t i = 0; i < n; ++i) {
     GLTANG_Handle x;

@@ -6,9 +6,9 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -761,7 +761,7 @@
+@@ -1140,7 +1140,7 @@
          if (r == GLTANG_V_UNWIND) {
-           goto unwound;
+           goto unwound_or_request;
          }
 -        RELOAD();
 +        /* planted: no RELOAD() after a call that may have moved the stack */

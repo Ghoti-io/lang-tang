@@ -250,9 +250,12 @@ typedef struct GLTANG_LibraryObject {
  * @brief A native function as a value: a host function (`member`), or one of the
  *   engine's own (`builtin`), possibly bound to a value (a generator's method).
  */
+/** @brief GLTANG_NativeObject::builtin: the native is marked resumable (its member says so): a call takes the resumable entry (libvalue.c). */
+#define GLTANG_NATIVE_RESUMABLE_BIT 0x80000000u
+
 typedef struct GLTANG_NativeObject {
   uint32_t kind;
-  uint32_t builtin;                     ///< GLTANG_BuiltinId, or 0 for a host function.
+  uint32_t builtin;                     ///< GLTANG_BuiltinId, or 0 for a host function; with GLTANG_NATIVE_RESUMABLE_BIT set for a resumable one.
   const GLTANG_LibraryMember * member;  ///< The host function's member.
   GLTANG_Value bound;                   ///< Traced; the receiver of a method.
 } GLTANG_NativeObject;
@@ -360,9 +363,14 @@ typedef struct GLTANG_HostScope {
 
 /** @brief What a host function is given; see library.h. */
 struct GLTANG_NativeCall {
-  GLTANG_Execution * exec;
-  const GLTANG_Value * args;    ///< Into the operand stack; valid for the call (a host function cannot reach a GC point).
-  size_t argc;
+  // The first sixty-four bytes are what a call zeroes before it runs (GLTANG_CALL_ZEROED): everything that is read
+  // whether or not it was set. The rest is set before it is read (each answer field by `set`, the handle frame
+  // by `scope`), so the common calls (a native, an operation of a type) do not clear it.
+  GLTANG_ValueDescription * built;   ///< The description the native built during the call (gltang_call_description); the call owns it and frees it when it ends.
+  GLTANG_ValueDescription * answer;  ///< The description answered: `built`, or one the host keeps and the call has retained.
+  char * text;                  ///< STRING: a copy, cutil's allocator.
+  GLTANG_Value resume_state;    ///< The value a native is bound to (gltang_call_bound); 0 for an unbound one.
+  const void * owner;           ///< The GLTANG_Type whose operation this is (custom.c), or, with `owner_kind` 2, the resumable GLTANG_LibraryMember (libvalue.c): what decides whether the callback may ask for a guest call.
   enum {
     GLTANG_CALL_NONE = 0, GLTANG_CALL_NULL, GLTANG_CALL_BOOL, GLTANG_CALL_INTEGER,
     GLTANG_CALL_FLOAT, GLTANG_CALL_STRING, GLTANG_CALL_ERROR,
@@ -370,28 +378,33 @@ struct GLTANG_NativeCall {
     GLTANG_CALL_DESCRIPTION,  ///< `answer`: a description, made into a value when the call returns.
     GLTANG_CALL_HANDLE  ///< `answer_handle`: the value a handle names, read when the call returns.
   } set;
+  uint32_t scope;               ///< The serial of the handle scope this call opened; 0 if it has used no handle.
+  uint32_t test_status;         ///< Test natives only: what the native asks of compiled code (a GLTANG_NATIVE_STATUS_*); the interpreter ignores it.
+  uint32_t resume_step;         ///< The dispatch step a continuation continues; 0 on a first entry.
+  bool failed_to_copy;
+  bool scope_oom;               ///< A handle or a value could not be made: the call's value is Out of memory.
+  bool scope_unwind;            ///< A constructor's poll ordered the run to stop.
+  bool requested;               ///< gltang_call_guest accepted a request (the callback has to return PENDING or true).
+  uint8_t owner_kind;           ///< 0: `owner` is a type or NULL; 2: it is a resumable native's member.
+  uint8_t op;                   ///< With a type: the GLTANG_TypeOp.
+  // Set by the call, not zeroed:
+  GLTANG_Execution * exec;
+  const GLTANG_Value * args;    ///< Into the operand stack; valid for the call (a host function cannot reach a GC point).
+  size_t argc;
   GLTANG_Value value;
   bool boolean;
   int64_t integer;
   double number;
-  char * text;                  ///< STRING: a copy, cutil's allocator.
   size_t length;
   GLTANG_String_Type encoding;
   GLTANG_ErrorKind error;
-  bool failed_to_copy;
-  GLTANG_Value resume_state;    ///< The value a native is bound to (gltang_call_bound); 0 for an unbound one.
-  bool can_request;             ///< The callback may ask for a guest call (gltang_call_guest): resumable, and not a continuation of an opaque one.
-  uint32_t continuation_count;  ///< The entries of the table a request names an index of.
-  uint32_t resume_step;         ///< The dispatch step a continuation continues; 0 on a first entry.
-  GLTANG_ValueDescription * built;   ///< The description the native built during the call (gltang_call_description); the call owns it and frees it when it ends.
-  GLTANG_ValueDescription * answer;  ///< The description answered: `built`, or one the host keeps and the call has retained.
-  uint32_t scope;               ///< The serial of the handle scope this call opened; 0 if it has used no handle.
   size_t frame_floor;           ///< Index in GLTANG_Execution::frames of this call's first (outermost) frame.
-  bool scope_oom;               ///< A handle or a value could not be made: the call's value is Out of memory.
-  bool scope_unwind;            ///< A constructor's poll ordered the run to stop.
   GLTANG_Handle answer_handle;  ///< GLTANG_CALL_HANDLE.
-  uint32_t test_status;         ///< Test natives only: what the native asks of compiled code (a GLTANG_NATIVE_STATUS_*); the interpreter ignores it.
 };
+
+/** @brief How much of a GLTANG_NativeCall a call zeroes before it runs: its first fields (see the struct). */
+#define GLTANG_CALL_ZEROED offsetof(GLTANG_NativeCall, exec)
+_Static_assert(offsetof(GLTANG_NativeCall, exec) <= 64u, "the part of a call that is zeroed must stay small: it is cleared on every native call and every operation of a type");
 
 /**
  * What a native asks of the compiled code that called it, once it has run:

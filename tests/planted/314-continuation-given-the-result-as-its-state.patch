@@ -4,14 +4,14 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -598,8 +598,8 @@
-     stage.continuing = true;
-     stage.pop = true;
-     stage.index = record->continuation;
--    stage.state = record->slots[GLTANG_PENDING_STATE];
--    stage.result = record->slots[GLTANG_PENDING_RESULT];
-+    stage.state = record->slots[GLTANG_PENDING_RESULT];
-+    stage.result = record->slots[GLTANG_PENDING_STATE];
+@@ -672,8 +672,8 @@
    }
-   size_t mark = SIZE_MAX;
-   for (;;) {
+   stage->pop = true;
+   stage->index = record->continuation;
+-  stage->state = record->slots[GLTANG_PENDING_STATE];
+-  stage->result = record->slots[GLTANG_PENDING_RESULT];
++  stage->state = record->slots[GLTANG_PENDING_RESULT];
++  stage->result = record->slots[GLTANG_PENDING_STATE];
+   return false;
+ }
+ 

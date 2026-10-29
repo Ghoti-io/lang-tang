@@ -8,7 +8,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -543,9 +543,7 @@
+@@ -869,9 +869,7 @@
        case GLTANG_OP_SLICE: {
          size_t parts = (a & 1u) + ((a >> 1) & 1u) + ((a >> 2) & 1u);
          SYNC();
@@ -16,6 +16,6 @@
 -        SAVE_AT_OP();
 -        STAND_AT_OP();
 +        /* planted: the frame does not stand at the slice */
+         exec->suspend_mode = 1;
          GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
-         STOOD();
-         if (r == GLTANG_V_UNWIND) {
+         exec->suspend_mode = 0;

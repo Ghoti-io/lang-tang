@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -596,7 +596,7 @@
-       return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
-     }
-     stage.continuing = true;
--    stage.pop = true;
-+    stage.pop = false;
-     stage.index = record->continuation;
-     stage.state = record->slots[GLTANG_PENDING_STATE];
-     stage.result = record->slots[GLTANG_PENDING_RESULT];
+@@ -670,7 +670,7 @@
+     *early = MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
+     return true;
+   }
+-  stage->pop = true;
++  stage->pop = false;
+   stage->index = record->continuation;
+   stage->state = record->slots[GLTANG_PENDING_STATE];
+   stage->result = record->slots[GLTANG_PENDING_RESULT];

@@ -1,0 +1,15 @@
+# 326 an instruction run again to continue from a record is charged its fuel a second time
+# defect: the fuel taken back before the loop adds it again is not taken back
+# caught by: the golden fuel totals test and the pause sweep's equal totals (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -266,7 +266,7 @@
+       continue;  // the value goes on to the record below
+     }
+     const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(program->functions[GLTANG_FN_INDEX(fword)].code[pc]);
+-    exec->pending_fuel -= gltang_opcode_cost_table[op];
++    (void)op;
+     return true;
+   }
+ }

@@ -4,8 +4,8 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -444,7 +444,7 @@
- static GLTANG_Value reflect(GLTANG_Execution * exec, size_t mark, GLTANG_TypeOp op, bool is_assignment, bool * declined) {
+@@ -733,7 +733,7 @@
+ static GLTANG_Value reflect(GLTANG_Execution * exec, size_t mark, GLTANG_TypeOp op, bool is_assignment, uint32_t base_step, bool * declined) {
    *declined = true;
    GLTANG_Value a = gltang_vm_temp_at(exec, mark);
 -  if (gltang_v_is_custom(a)) {

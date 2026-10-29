@@ -93,7 +93,7 @@ static GLTANG_Value native_value(GLTANG_Execution * exec, const GLTANG_LibraryMe
   }
   GLTANG_NativeObject * value = object;
   value->kind = GLTANG_OBJ_NATIVE;
-  value->builtin = (uint32_t)builtin;
+  value->builtin = (uint32_t)builtin | (member && (member->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE) ? GLTANG_NATIVE_RESUMABLE_BIT : 0u);
   value->member = member;
   (void)grheap_store_word(exec->heap, value, &value->bound, bound);
   return gltang_value_of(value);
@@ -655,45 +655,14 @@ static bool integer_argument(GLTANG_Value v) {
 #define N_EXTRA (N_NEXT_STATE + 1u)
 
 /**
- * The value of a native itself, once its activation record is open: the
- * engine's own builtins, then a host function (opaque, AD-23: it cannot reach the
- * heap, pause or call guest code, unless it is marked resumable, in which case it may
- * ask the interpreter to, through gltang_call_guest). Test natives
- * (src/vm/testnatives.c) are host functions that reach the engine's internals.
- *
- * `extra` is the native's frame past its arguments when it is resumable, else NULL. A request
- * made at an instruction (or by the call a pending record waits for) becomes a pending record and
- * the result is GLTANG_V_UNWIND with `request_made` set; made anywhere else it is run nested here.
+ * The value of a resumable native, once its activation record is open (AD-23): a host function that may ask the
+ * interpreter to call guest code, through gltang_call_guest, and to be called again with the result. `extra` is its
+ * frame past the arguments. A request made at an instruction (or by the call a pending record waits for) becomes a
+ * pending record and the result is GLTANG_V_UNWIND with `request_made` set; made anywhere else it is run nested
+ * here. This is the cold twin of run_native, which every other native takes and which knows none of it.
  */
-static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, GLTANG_Value * extra) {
+static GLTANG_Value run_resumable_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, GLTANG_Value * extra) {
   const GLTANG_NativeObject * native = gltang_object(callee);
-  switch ((GLTANG_BuiltinId)native->builtin) {
-    case GLTANG_BUILTIN_RANDOM_SEEDED:
-      if (argc != 1) {
-        return gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
-      }
-      if (!integer_argument(args[0])) {
-        return gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
-      }
-      return rng_new(exec, (uint64_t)gltang_vm_int(args[0]), false);
-    case GLTANG_BUILTIN_RNG_SET_SEED: {
-      if (argc != 1) {
-        return gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
-      }
-      if (!integer_argument(args[0])) {
-        return gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
-      }
-      GLTANG_RngObject * rng = rng_of(native->bound);
-      if (rng->is_global) {
-        return gltang_vm_make_error(exec, GLTANG_ERROR_GLOBAL_SEED);
-      }
-      rng->seed = (uint64_t)gltang_vm_int(args[0]);
-      gcu_random_mt64_init(&rng->state, rng->seed);
-      return native->bound;
-    }
-    default:
-      break;
-  }
   const GLTANG_LibraryMember * member = native->member;
   bool continuing = false;
   uint32_t continuation_index = 0;
@@ -716,16 +685,14 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
   }
   for (;;) {
     GLTANG_NativeCall call;
-    memset(&call, 0, sizeof(call));
+    memset(&call, 0, GLTANG_CALL_ZEROED);
     call.exec = exec;
     call.args = args;
     call.argc = argc;
     // The value the native is bound to (gltang_call_bound).
     call.resume_state = native->bound;
-    if (extra) {
-      call.can_request = true;
-      call.continuation_count = (uint32_t)member->continuation_count;
-    }
+    call.owner = member;
+    call.owner_kind = 2;
     // A native that re-entered guest code may have called another native: the outer
     // one is still running when the inner returns, so the flag goes back as it was.
     const bool outer_in_host = exec->in_host;
@@ -815,6 +782,63 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
   }
 }
 
+
+/**
+ * The value of a native itself, once its activation record is open: the
+ * engine's own builtins, then a host function (opaque, AD-23: it cannot reach the
+ * heap, pause or call guest code through the library's API; one marked resumable is
+ * run_resumable_native's). Test natives (src/vm/testnatives.c) are host functions
+ * that reach the engine's internals.
+ */
+static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args) {
+  const GLTANG_NativeObject * native = gltang_object(callee);
+  switch ((GLTANG_BuiltinId)native->builtin) {
+    case GLTANG_BUILTIN_RANDOM_SEEDED:
+      if (argc != 1) {
+        return gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+      }
+      if (!integer_argument(args[0])) {
+        return gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+      }
+      return rng_new(exec, (uint64_t)gltang_vm_int(args[0]), false);
+    case GLTANG_BUILTIN_RNG_SET_SEED: {
+      if (argc != 1) {
+        return gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+      }
+      if (!integer_argument(args[0])) {
+        return gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+      }
+      GLTANG_RngObject * rng = rng_of(native->bound);
+      if (rng->is_global) {
+        return gltang_vm_make_error(exec, GLTANG_ERROR_GLOBAL_SEED);
+      }
+      rng->seed = (uint64_t)gltang_vm_int(args[0]);
+      gcu_random_mt64_init(&rng->state, rng->seed);
+      return native->bound;
+    }
+    default:
+      break;
+  }
+  const GLTANG_LibraryMember * member = native->member;
+  GLTANG_NativeCall call;
+  memset(&call, 0, GLTANG_CALL_ZEROED);
+  call.exec = exec;
+  call.args = args;
+  call.argc = argc;
+  // The value the native is bound to (gltang_call_bound).
+  call.resume_state = native->bound;
+  // A native that re-entered guest code may have called another native: the outer
+  // one is still running when the inner returns, so the flag goes back as it was.
+  const bool outer_in_host = exec->in_host;
+  exec->in_host = true;
+  bool worked = member->native(&call, member->user);
+  exec->in_host = outer_in_host;
+  GLTANG_Value result = call_result(exec, &call, worked);
+  // Last, so that a nested call the native made does not leave its own status here.
+  exec->native_status = call.test_status;
+  return result;
+}
+
 #define NATIVE_COPY_MAX 16u
 
 /** The refusal of a native's record, as the call's value (the same in both tiers). */
@@ -833,7 +857,64 @@ GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Resu
   return exec->roots[GLTANG_ROOT_OOM];
 }
 
+/**
+ * gltang_vm_call_native for a native that is marked resumable (its object says so in one bit, which the common
+ * entry tests): the same wrapper, with the words of a request after the arguments in the record's segment (heap
+ * memory, zeroed, so they are defined and pinned), and the mark that tells run_resumable_native whether a request
+ * becomes a pending record. A resumable native the interpreter calls (not one compiled code calls, nor the call a
+ * record waits for, which is already marked) is called at an instruction.
+ */
+static GLTANG_Value __attribute__((noinline)) call_resumable_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled) {
+  const size_t held_count = 1u + argc + N_EXTRA;
+  GLTANG_Value * held = gcu_calloc(held_count, sizeof(GLTANG_Value));
+  if (!held) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  held[0] = callee;
+  if (argc) {
+    memcpy(&held[1], args, argc * sizeof(GLTANG_Value));
+  }
+  ++exec->natives_called;
+  exec->native_status = GLTANG_NATIVE_STATUS_OK;
+#ifdef GLTANG_WITH_JIT
+  size_t lent = compiled ? gltang_jit_lend_depth(exec) : 0;
+#else
+  (void)compiled;
+#endif
+  GRCORE_Stack * stack = grcore_context_stack(exec->context);
+  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + held_count * sizeof(GLTANG_Value)};
+  GRCORE_ActivationRef record;
+  GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
+  GLTANG_Value result;
+  if (entered != GRCORE_OK) {
+#ifdef GLTANG_WITH_JIT
+    exec->jit_stats.native_enters_refused += compiled;
+#endif
+    result = gltang_vm_native_refused_value(exec, entered);
+  }
+  else {
+    if (exec->native_gc_seam) {
+      (void)grheap_collect(exec->heap);
+    }
+    const uint8_t outer_mode = exec->suspend_mode;
+    if (!compiled && outer_mode == 0) {
+      exec->suspend_mode = 1;
+    }
+    result = run_resumable_native(exec, held[0], argc, &held[1], &held[1u + argc]);
+    exec->suspend_mode = outer_mode;
+    (void)grcore_activation_leave(stack, record);
+  }
+#ifdef GLTANG_WITH_JIT
+  gltang_jit_return_depth(exec, lent);
+#endif
+  gcu_free(held);
+  return result;
+}
+
 GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, bool compiled) {
+  if (__builtin_expect(((const GLTANG_NativeObject *)gltang_object(callee))->builtin & GLTANG_NATIVE_RESUMABLE_BIT, 0)) {
+    return call_resumable_native(exec, callee, argc, args, compiled);
+  }
   // The callee and the arguments are copied into this frame before anything that
   // can reach a collection: the record below gives exactly the copies as its
   // conservative segment, so what they name is pinned, and the native reads the copy
@@ -842,14 +923,11 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   GLTANG_Value held_small[1u + NATIVE_COPY_MAX] = {0};
   GLTANG_Value * held = held_small;
   size_t held_count = 1u + NATIVE_COPY_MAX;
-  // A resumable native keeps the words of a request after its arguments, in the same segment.
-  const GLTANG_NativeObject * object = gltang_object(callee);
-  const bool resumable = object->member && (object->member->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE);
-  if (argc > NATIVE_COPY_MAX || resumable) {
+  if (argc > NATIVE_COPY_MAX) {
     // More arguments than the frame holds: the copy is made on the heap, zeroed,
     // and is the record's segment all the same, so every argument count is pinned
     // and read from a copy the operand stack's moves cannot reach.
-    held_count = 1u + argc + (resumable ? N_EXTRA : 0u);
+    held_count = 1u + argc;
     held = gcu_calloc(held_count, sizeof(GLTANG_Value));
     if (!held) {
       return exec->roots[GLTANG_ROOT_OOM];
@@ -885,14 +963,7 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
       // this one. The native then finds its arguments where they were copied.
       (void)grheap_collect(exec->heap);
     }
-    // A resumable native the interpreter calls (not one compiled code calls, nor the call a record waits for, which
-    // is already marked) is called at an instruction: a request it makes becomes a pending record.
-    const uint8_t outer_mode = exec->suspend_mode;
-    if (resumable && !compiled && outer_mode == 0) {
-      exec->suspend_mode = 1;
-    }
-    result = run_native(exec, held[0], argc, given, resumable ? &held[1u + argc] : NULL);
-    exec->suspend_mode = outer_mode;
+    result = run_native(exec, held[0], argc, given);
     (void)grcore_activation_leave(stack, record);
   }
 #ifdef GLTANG_WITH_JIT

@@ -6,7 +6,7 @@
 #
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -557,7 +557,7 @@
+@@ -963,7 +963,7 @@
        (void)grheap_collect(exec->heap);
      }
      result = run_native(exec, held[0], argc, given);

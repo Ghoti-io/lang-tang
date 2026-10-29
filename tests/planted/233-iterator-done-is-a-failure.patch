@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -654,7 +654,7 @@
+@@ -956,7 +956,7 @@
    bool errored = false;
    if (!declined) {
      OpCall oc = OPCALL(type, GLTANG_TYPE_OP_ITERATOR_NEXT, 1, true, false);
@@ -12,4 +12,4 @@
 +    OpExtra extra = {GLTANG_CAST_TARGET_INT, NULL, NULL, &errored}; /* planted: done is not reported */
      oc.extra = &extra;
      GLTANG_Value args[1] = {it};
-     r = invoke(exec, &oc, args, &declined);
+     r = invoke(exec, &oc, args, &declined, 0);

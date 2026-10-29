@@ -8,12 +8,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -510,7 +510,7 @@
-         SAVE_AT_OP();
-         STAND_AT_OP();
+@@ -834,7 +834,7 @@
+         exec->suspend_mode = 1;
          GLTANG_Value r = gltang_vm_op_index(exec, c, i);
+         exec->suspend_mode = 0;
 -        STOOD();
 +        /* planted: the index still stands after its call */
          if (r == GLTANG_V_UNWIND) {
-           goto unwound;
+           goto unwound_or_request;
          }
