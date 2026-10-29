@@ -1,0 +1,14 @@
+# 239 a declined cast with no default
+# defect: a cast that declines is `Not supported` for every target, so `as bool` is not the truthiness and `as string` is not the type's `to_string`
+# caught by: the declined-cast tests (testCustom_ops)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -524,6 +524,7 @@
+   if (!declined) {
+     return r;
+   }
++  return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED); /* planted: no defaults */
+   switch (type) {
+     case GLTANG_CAST_TYPE_BOOLEAN:
+       // True or false, or the error its `truthy` answered (the cast's value).

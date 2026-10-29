@@ -536,6 +536,32 @@ GLTANG_API GLTANG_Result gltang_handle_custom_write_bytes(
     GLTANG_NativeCall * call, GLTANG_Handle handle, size_t offset,
     const void * bytes, size_t length);
 
+/**
+ * @brief Marks a custom value as standing for an error, or clears the mark.
+ *
+ * The mark is per instance, in the object's header, and read by a pure test.
+ * A marked instance is falsy (its type's `truthy` is not asked), and it
+ * contaminates where an engine error value does: as an operand of an
+ * operator, as a function's result, as a statement's value. It is not an
+ * engine error: it is never listed in the error list, fires no error-created
+ * hook and has no error kind.
+ *
+ * @no_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not a custom
+ *   value.
+ */
+GLTANG_API GLTANG_Result gltang_handle_custom_set_error(
+    GLTANG_NativeCall * call, GLTANG_Handle handle, bool is_error);
+
+/**
+ * @brief Whether a custom value is marked as standing for an error
+ *   (::gltang_handle_custom_set_error). False for any other handle.
+ *
+ * @no_gc
+ */
+GLTANG_API bool gltang_handle_custom_is_error(
+    const GLTANG_NativeCall * call, GLTANG_Handle handle);
+
 /** @} */
 
 /**

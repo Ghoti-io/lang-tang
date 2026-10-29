@@ -1207,7 +1207,6 @@ TEST(Custom, AnOperationATypeLacksOrDeclinesIsTheLanguagesError) {
     {"plain() as int;", GLTANG_ERROR_NOT_SUPPORTED},
     {"plain() as string;", GLTANG_ERROR_NOT_SUPPORTED},
     {"plain() as float;", GLTANG_ERROR_NOT_SUPPORTED},
-    {"plain() as bool;", GLTANG_ERROR_NOT_SUPPORTED},
     {"plain()();", GLTANG_ERROR_INVALID_FUNCTION_CALL},
     {"x = 0; for (i : plain()) { x = 1; }", GLTANG_ERROR_NOT_SUPPORTED},
   };
@@ -1229,6 +1228,9 @@ TEST(Custom, TheOperationsOfLaterStoriesBehaveAsForAFunction) {
   EXPECT_FALSE(o.boolean);
   o = run(PRELUDE "[plain()];", types);
   EXPECT_EQ(o.described, "[Custom: plain]") << "an element shows its type's name";
+  // Story 6: the default of `as bool` is the truthiness (it was `Not supported` in story 5).
+  o = run(PRELUDE "plain() as bool;", types);
+  EXPECT_TRUE(o.boolean);
 }
 
 // ---------------------------------------------------------------------------

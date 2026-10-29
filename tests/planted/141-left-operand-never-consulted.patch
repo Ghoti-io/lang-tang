@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -308,7 +308,7 @@
+@@ -439,7 +439,7 @@
  static GLTANG_Value reflect(GLTANG_Execution * exec, size_t mark, GLTANG_TypeOp op, bool is_assignment, bool * declined) {
    *declined = true;
    GLTANG_Value a = gltang_vm_temp_at(exec, mark);
@@ -12,4 +12,4 @@
 +  if (false && gltang_v_is_custom(a)) { /* planted: the left is never asked */
      const GLTANG_Type * type = gltang_vm_custom(a)->type;
      if (gltang_type_has(type, op)) {
-       OpCall oc = {type, op, 2, true, is_assignment};
+       OpCall oc = OPCALL(type, op, 2, true, is_assignment);

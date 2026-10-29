@@ -470,7 +470,7 @@ static EqResult equal_rec(GLTANG_Value a, GLTANG_Value b, int depth, Pacer * pac
     if (r == GLTANG_V_TRUE || r == GLTANG_V_FALSE) {
       return r == GLTANG_V_TRUE ? EQ_TRUE : EQ_FALSE;
     }
-    if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_is_error(r)) {
+    if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_stands_for_error(r)) {
       // Nothing between here and the comparison's return can collect.
       *error = r;
       return EQ_ERROR;

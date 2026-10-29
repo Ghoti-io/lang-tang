@@ -1,0 +1,14 @@
+# 268 a lookup in a sealed registry that writes it
+# defect: the lookup of a host attribute stores to the registry, so two executions on two threads reading one sealed registry race (no lock is taken, and none may be needed)
+# caught by: the shared-registry test under ThreadSanitizer (testCustom_ops; `make check-planted-tsan`)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -241,6 +241,7 @@
+ }
+ 
+ const GLTANG_HostAttribute * gltang_type_registry_find_attribute(const GLTANG_TypeRegistry * registry, GLTANG_ValueKind kind, const char * name, size_t length) {
++  *(volatile size_t *)(uintptr_t)&registry->attribute_capacity = registry->attribute_capacity; /* planted: a read that writes */
+   for (size_t i = 0; i < registry->attribute_count; ++i) {
+     const GLTANG_HostAttribute * a = &registry->attributes[i];
+     if (a->kind == kind && a->name_length == length && !memcmp(a->name, name, length)) {

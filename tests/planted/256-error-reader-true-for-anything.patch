@@ -1,0 +1,15 @@
+# 256 the error mark read as set on a value that is not an instance
+# defect: `gltang_handle_custom_is_error` answers true for a handle that is not a custom value
+# caught by: the flag-is-refused-on-anything-but-a-custom-value test (testCustom_ops)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -779,7 +779,7 @@
+ 
+ bool gltang_handle_custom_is_error(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
+   const GLTANG_CustomObject * custom = custom_of(call, handle);
+-  return custom && (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) != 0;
++  return !custom || (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) != 0; /* planted */
+ }
+ 
+ /* For the tests only; declared in vm/test_hooks.h. */

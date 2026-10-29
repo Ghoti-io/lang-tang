@@ -150,6 +150,13 @@ static GLTANG_RngObject * rng_of(GLTANG_Value v) {
   return gltang_object(v);
 }
 
+bool gltang_vm_rng_has_member(const char * name, size_t length) {
+  // The names gltang_vm_rng_attr answers: one list, written twice for speed (a draw is a hot read).
+  return (length == 8 && (!memcmp(name, "next_int", 8) || !memcmp(name, "set_seed", 8))) ||
+         (length == 10 && !memcmp(name, "next_float", 10)) ||
+         (length == 9 && !memcmp(name, "next_bool", 9));
+}
+
 GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length) {
   GLTANG_RngObject * state = rng_of(rng);
   if (length == 8 && !memcmp(name, "next_int", 8)) {

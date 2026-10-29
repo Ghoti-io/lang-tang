@@ -1,0 +1,14 @@
+# 258 an attribute registered for a map
+# defect: a map is accepted as the kind of a host attribute, so a registered name would hide the program's own key
+# caught by: the maps-and-libraries test (testCustom_ops)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -265,6 +265,7 @@
+     case GLTANG_KIND_ARRAY:
+     case GLTANG_KIND_FUNCTION:
+     case GLTANG_KIND_RNG:
++    case GLTANG_KIND_MAP: /* planted: a map's names are its keys */
+       break;
+     default:
+       return GLTANG_ERR_INVALID;

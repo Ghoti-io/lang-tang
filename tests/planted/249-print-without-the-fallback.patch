@@ -1,0 +1,15 @@
+# 249 a print with no fallback to to_string
+# defect: a type with a `print` that declines prints nothing, where the type's `to_string` is the fallback
+# caught by: the print-falls-back test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -735,7 +735,7 @@
+       return text_answer(exec, r, errored);
+     }
+   }
+-  if (gltang_type_has(type, GLTANG_TYPE_OP_TO_STRING)) {
++  if (!for_print && gltang_type_has(type, GLTANG_TYPE_OP_TO_STRING)) { /* planted: print has no fallback */
+     bool errored = false;
+     OpCall oc = OPCALL(type, GLTANG_TYPE_OP_TO_STRING, 1, true, false);
+     OpExtra extra = {GLTANG_CAST_TARGET_INT, NULL, NULL, &errored};

@@ -1,0 +1,15 @@
+# 234 a begin that answers anything is an iterator
+# defect: `iterator_begin` answering a value that is neither an array nor an instance with `iterator_next` is accepted, so the loop's value is that value and no error
+# caught by: the begin-answers-something-else test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -638,7 +638,7 @@
+   if (gltang_v_is_custom(r) && gltang_type_has(gltang_vm_custom(r)->type, GLTANG_TYPE_OP_ITERATOR_NEXT)) {
+     return r;
+   }
+-  return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
++  return r; /* planted: anything is an iterator */
+ }
+ 
+ GLTANG_IterStep gltang_vm_custom_iterator_next(GLTANG_Execution * exec, GLTANG_Value it, GLTANG_Value * out) {

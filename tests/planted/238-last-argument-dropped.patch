@@ -1,0 +1,15 @@
+# 238 the last argument of a call dropped
+# defect: a call of an instance hands its type one argument fewer than the program gave when there are two or more
+# caught by: the callable-object test: the argument count (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -242,7 +242,7 @@
+     case GLTANG_TYPE_OP_SLICE: return d->slice(call, user, h[0], h[1], h[2], h[3]);
+     case GLTANG_TYPE_OP_ITERATOR_BEGIN: return d->iterator_begin(call, user, h[0]);
+     case GLTANG_TYPE_OP_ITERATOR_NEXT: return d->iterator_next(call, user, h[0]);
+-    case GLTANG_TYPE_OP_CALL: return d->call(call, user, h[0], h + 1, oc->argc - 1u);
++    case GLTANG_TYPE_OP_CALL: return d->call(call, user, h[0], h + 1, oc->argc - 1u - (oc->argc > 2u ? 1u : 0u)); /* planted: the last argument is lost */
+     case GLTANG_TYPE_OP_CAST: return d->cast(call, user, h[0], oc->extra->target);
+     case GLTANG_TYPE_OP_TRUTHY: {
+       bool truthy = true;

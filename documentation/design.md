@@ -1042,9 +1042,10 @@ asked, as a string's `+` gives its error operand: `money + (1 / 0)` is `Divide
 by zero`, not money's decline turned into `Not supported` (decided by Corey at
 the story's done checkpoint, 2026-10-20). Equality keeps its rule and asks the
 type of any pair. Every built-in rule
-declines a custom operand in this version (a string's `+` would need the type's
-to-string, story 6), so `"x" + money` is `money`'s reflected add, never an empty
-string. `!=` that both sides decline asks `equal` the same way and answers its
+declines a custom operand (a string's `+` does not use a type's to-string for an
+instance, though a container holding one does: the string rule would otherwise
+pre-empt the type's `add`), so `"x" + money` is `money`'s reflected add, never an
+empty string. `!=` that both sides decline asks `equal` the same way and answers its
 opposite (ctang's types implemented `not_equal` as the negation of `equal`; a
 type that implements only `equal` would otherwise have a `!=` that disagrees
 with it), and equality nobody answers is identity: two custom values are equal
@@ -1085,16 +1086,101 @@ operation reads it, and the JIT never looks at the operand of an arithmetic
 instruction. ctang passed
 false in every call (its parser desugars the same way), so this is new.
 
-**What is not here** (story 6 and later): a custom value is truthy, `print`
-appends nothing for it, an element of a container shows `Custom: <name>`, `as`
-and string conversion are `Not supported`, calling one is `Invalid function
-call`, and `for` over one is `Not supported`. A snapshot of an execution whose
+**What is not here** (story 7 and later): a snapshot of an execution whose
 heap holds a live instance is refused: the heap type's snapshot hook refuses the
 image and records the type, and `gltang_snapshot_take` answers
 `GLTANG_ERR_UNSUPPORTED` with `gltang_snapshot_refused_type` naming it. Compiled
-code exits to the interpreter on a custom operand, as on any operand that fails
-its guard (story 10 compiles the dispatch). Finalizers, weak slots, pins and
-in-place byte access are story 7; module identity is stories 11 and 12.
+code exits to the interpreter on a custom operand of an operator, a truth test, an
+index, a slice or an attribute, as on any operand that fails its guard (the
+dispatch compiled is a later story's). Finalizers, weak slots, pins and in-place
+byte access are a later story's; module identity is later still.
+
+**The remaining operations** (iteration, calls, casts, truthiness, print and
+to-string, an instance that stands for an error, attributes on built-in kinds).
+Seven members are appended to the descriptor, in this order: `iterator_begin`,
+`iterator_next`, `call`, `cast`, `truthy`, `print`, `to_string`. The minimum size
+did not move, so a descriptor built against the earlier header works with the
+new members empty, and a type that implements none of them has the operation bits,
+and so the table hash, it had before (the operations are bits 17 to 23 of the
+set). `GLTANG_OP_DONE` is appended to the status: valid only from an iterator's
+`iterator_next`, and `Host function failed` from any other operation. Every one
+runs through the same `invoke` as the old operations (the operand copies as the
+conservative segment, one unit of native depth, the handle scope, `in_host`, fuel
+as a native call plus a unit per 64 bytes answered), now with any number of
+operands (a call's arguments are copied to the heap past seventeen, as a native's
+are), and with the native-depth units of any open compiled-code record handed
+back for the callback, as `gltang_vm_call_native` does, so that a callback that a
+compiled helper reaches (a cast, a print, a host attribute of a string) is
+refused at the same depth in both tiers. A decline is the same status as before:
+nothing is made, and the default is what a type with no entry gets.
+
+*Iteration.* `ITER_INIT` of a custom value calls `iterator_begin`; its answer is
+an array (iterated as arrays are) or an instance whose type has `iterator_next`
+(a new instance, or the value itself), kept in the loop's frame slot, so the
+collector sees it. The loop tells the two apart by the second hidden slot: the
+array's position is an inline integer, and a custom iterator leaves it null, so
+`ITER_NEXT` pays one tag test for it and an array loop does nothing else new.
+`iterator_next` yields (`OK`, the item or null), ends (`DONE`), or fails; a
+failure and a begin that errors end the loop with the error as its value, as
+`ITER_INIT`'s error does (13.12), and since the `CLEAR_RESULT` that follows a loop
+at the top level would clear it, `ITER_NEXT` steps over that one instruction on
+the error path. Compiled code never runs the `ITER_*` instructions (a function
+that has them is interpreted).
+
+*Calls.* `CALL` of a custom value is a third callee kind beside a native and a
+template, with the arguments where they are on the operand stack. An instance is
+a value: `gltang_v_is_function` is false for it, so nothing that accepts only a
+function accepts it.
+
+*Casts and truthiness.* `gltang_vm_op_cast` asks `cast` first, for all four
+targets; a decline falls to the defaults, which is why a type with no `cast`
+gives `as bool` its truthiness (it was `Not supported` in story 5, whose
+matrix said so; story 6's text says the default of `bool` is the truthiness).
+The five truth sites (`NOT`, `JMP_FALSE`, `JMP_TRUE`, `AND`, `OR`) test for a
+custom operand before the pure `gltang_vm_truthy`, and take the slow path
+(`gltang_vm_custom_truth`, a GC point, with the operand left on the stack during
+the call) only for one. An error the type answers is falsy and the expression's
+value for `!`, `&&` and `as bool`; `||` takes the other side, and a jump on it
+takes the false arm. Compiled code's truth tests guard on a boolean and exit
+on anything else, so a custom operand is the interpreter's.
+
+*Print and to-string.* `gltang_vm_render` of a custom value asks the type unless
+the sink is an inspector's buffer (a debugger asks a paused program what a value
+is, and must not run a host): `print` when the render is a print, then
+`to_string`; an element inside an array or map, and `as string`, use `to_string`
+only. The answer is held in a temporary while the sink copies it segment by
+segment, so an output sink keeps each segment's tag and the output is escaped per
+segment as a string's is. A failure (a non-string answer, an error, an unwind) is
+a new render status, `GLTANG_ST_ERROR`, with the error value kept for the one
+caller that reads it at once (`print_finish`, `to_string_finish`); the output is
+rolled back as for any failed print, so nothing partial is appended. The renderer
+already reads its container again after each element, and the new calls are GC
+points like the others.
+
+*An instance that stands for an error.* A flag in the object's header (the slot
+count is 16 bits, the maximum 65,535, so the 32-bit field became two 16-bit ones
+and the object did not grow), set through `gltang_handle_custom_set_error`. The
+test is pure and is `gltang_vm_stands_for_error`; every caller of
+`gltang_vm_is_error` was audited, and the record of which uses which predicate
+and why is the comment above `gltang_vm_is_error` in `value.c`. In short: the
+places that read an error's kind, message, flags or origin, log it or swallow a
+discarded value keep the engine-only test (so a marked instance is never
+listed, never reaches the error-created hook and has no kind, and the
+interpreter's and compiled code's discards agree); the places that propagate a
+value as the operation's own (an operand of an operator, an `equal` that answers
+one, in a comparison of containers too) use the new one.
+
+*Attributes on built-in kinds.* `gltang_type_registry_add_attribute` (get only)
+adds `kind`/`name`/function to a registry; attaching a registry refuses a kind and
+name an attached registry holds, as it refuses a clashing type. The lookup is
+reached only where a kind's own attribute rule has already missed
+(`missing_attr` in `ops.c`: the string and array arms, the arm for an integer, a
+float, a boolean, a function, and a generator whose own names are listed by
+`gltang_vm_rng_has_member` so that a miss makes no error object before the
+registries are asked), so a built-in name always wins and a built-in attribute
+read costs what it cost. A map and a library take none: a map's names are its
+keys and a library's its members. Compiled code reaches the same function (it
+already calls the generic attribute operation for anything but a map).
 
 **Measured.** On the x86-64 build box an add that a type answers costs 118 ns where the interpreter's integer add costs 29 (4.1 times: a native activation record, a handle scope with two handles, the callback and a new instance, and the bracket is the larger part); an attribute read that a type answers costs 84 ns where a map's costs 48 (1.75 times); a constructor that makes an instance costs a native call and a 24-byte allocation (93 ns against 60). Paths that existed before are level: every existing case is within 1% of the commit before this story in instructions (the largest rise +0.21%) and the ten-run wall-clock A/B against it puts none past its spread + 2%. The first cut was not level (three cases over 1%: `gltang_vm_kind` no longer inlined, a kind switch's dispatch changed by an eleventh arm, and the execution struct past a malloc size class), which is why `custom` sits in the `default` arm of those switches and the struct keeps its size.
 
@@ -1934,12 +2020,12 @@ breaks nothing as not caught. Observed:
 
 152 to 158 are the output operations compiled of `spec-template-compiled` story 1: four in the thunks and the emission, 156 in the interpreter (seen only by the JIT arm, which compares a poll inside a print with compiled code's) and 157 its compiled twin, seen through the frame header rather than the walk. 159 to 167 are the end of a statement and of a template compiled, story 2; 164 and 167 are seen through the position a run ends with, since an error-list entry carries the error's own origin and not the position `DISCARD` or `HALT`'s body records. 168 to 177 are the value operations compiled, story 3: 168 is run by the relocation arm (it is invisible without relocation), and 173 is in the interpreter and seen only by the JIT arm, as 156 (178, also story 3's, is retired by story 4b). 179 to 191 are the value-building operations compiled, story 4; 183, 185 and 191 are in the interpreter (191 in the fill both tiers share) and seen only by the JIT arm. 192 to 197 are the harness's template policy, story 5 (`want_template` in `bench/bench.c`): 192 and 193 plant an exit in a template row's program with its output unchanged, one that counts and one designed box exit; 194 and 195 a mistake in the policy that only its checks of entries and of returns can see; 196 and 197 were a mistake in the box-exit and in the counted-exit policy until story 4g removed those two policies with the exits they described, and are now a defect in the compiler and in a thunk that only the float rows' policy sees. 198 to 204 are story 4b's position written only at a poll and its cheaper entry: 198 (the identity not written at a poll inside a standing operation) and 204 (a poll that writes it and leaves the stand set) are in the runtime poll both tiers share, 199 and 202 are a thunk's stand left set, 203 the interpreter's, and 200 and 201 are in the entry. No comparison of the tiers sees 198, so its test reads each tier on its own and its interpreter half runs in the JIT=no arm too; 203 and 204 are seen only by the JIT arm. 205 to 218 are story 4d's fast paths: 205, 214 and 215 in the JIT's helpers, 217 in the emitter and the rest in the vm's fast functions, which are compiled into a JIT=no build too but called only by compiled code, so only the JIT arm runs their tests. 219 to 224 are story 4e's: 219 in the interpreter's integer path of the binary operators (both builds run it), 220 in the table of natives the first compile makes, 221 in the entry, 222 in the output both tiers share (seen by a test of the JIT arm), 223 and 224 in the emitter; 176 was rewritten there for the one test of both operands of `+`'s slow path, its defect unchanged. 225 to 231 are story 4g's, a raw float's print, concatenation and cast to string compiled: 225 in the JIT's helpers, 226, 197 and 230 in thunks, 196, 227 to 229, 231 and 172 (retargeted from the box exit it was) in the emitter and its analysis.
 
-137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
+232 to 268 are the remaining operations of host-defined types of story 6 (all in `testCustom_ops`, run plain: iteration 232 to 236, calls 237 and 238, casts 239 and 240, truthiness 241 to 247, print and to-string 248 to 252, the error mark 253 to 256, attributes of built-in kinds 257 to 260 and 265, the descriptor 261 and 262, the new status 263, the bracket 264, 266 and 267; 266 is seen only by the JIT arm, and 268, a lookup in a sealed registry that writes it, only by ThreadSanitizer). 137, 138, 139, 141, 150 and 151 were regenerated by that story because it moved their context. 137 to 151 are the custom kind, its descriptor and its registry of story 5 (all in `testCustom`, run plain: the tests that need the collector force torture and verify on themselves; 143 is caught by the verify arm aborting). 118 to 136 are the host context, the language layer, the output sink and the string helpers of story 4 (all in `testHost_context`; 133, the layer's slot read without its lock, is seen only by ThreadSanitizer, so it is not in the quick set: `make check-planted-tsan` applies it to a copy and requires the TSan run to report the race); 104 to 117 are the handles of story 3 (117 is run by the relocation arm); 84 to 103 are the host-described values of `spec-tang-host-extensibility` story 2, all in the library and none in the JIT. 84 and 85 are the two that only a collector finds (the plain run of the same test passes: the torture and verify arm is forced inside the tests that carry them, so `make test` runs them in every arm); each of the others is a rule of the builder (91 to 94, 96, 97, 100 and 103) or of the materializer's second look at it (90, 98, 99, 101 and 102), stated by a test from the outside. 84 and 85 are caught by the process dying, not by an assertion: a store into a collected object, or a number read as a pointer.
 
-`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 231 (`check-planted-quick`, about two minutes with the
+`make test` runs the quick set, 03 to 09, 11, 12, 16, 17, 19, 21 to 26 and 28 to 45 and 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 267 (`check-planted-quick`, about two minutes with the
 first build of the copy); 01 and 02 are part of `make test-torture`
 (`check-planted-slow`, 6 seconds once the copy is built). `make check-planted`
-runs the two hundred and nineteen that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 is `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
+runs the two hundred and fifty-five that need neither a relocation heap nor ThreadSanitizer (01, 02 and the quick set; 10, 18 and 178 are retired, 133 and 268 are `make check-planted-tsan`'s). 13, 14, 15, 20, 27, 46, 117 and 168 are run by `make check-planted-relocate`, which the
 relocation arm (below) calls: they need a runtime-heap that moves objects, and
 the script also runs each caught case with torture and without relocation,
 where it must pass, which is what shows relocation to be the instrument.
@@ -2070,8 +2156,9 @@ whether it still needs to be the oracle is a later decision (AD-16 retirement).
 `capability-removed`: one row for each host-visible capability that ctang
 offered and lang-tang lacks, found by comparing the two engines' host surfaces. They are `open` until
 `spec-tang-host-extensibility` restores each one, and a row becomes `fixed` when
-its test passes: D-032 to D-038 (story 5) and D-048 to D-056 (stories 2 to 4)
-are, and D-039 to D-047 are open. Because ctang retires only when the ledger is closed
+its test passes: D-032 to D-038 (story 5), D-039 to D-042 and D-045 to D-047
+(story 6) and D-048 to D-056 (stories 2 to 4) are, and D-043 and D-044 (copy
+semantics and finalizers, story 7) are open. Because ctang retires only when the ledger is closed
 (AD-3), ctang stays while a capability it offered is missing. The milestone-1
 claim above that the ledger was closed was true of the divergences it
 compared; it did not compare what a host could do, which is how these were lost
@@ -4420,14 +4507,16 @@ No library other than `math` and `random`, and in those no `next_int_range`,
 `next_float_range`, `next_gaussian`, `shuffle`, `sample` or `choose`: they stay
 `Not implemented`, as in ctang. A host can inject arrays and maps (a description: "Host-described values") and
 have a native take and return any value ("Handles"), and define its own types
-with arithmetic, comparison, attribute, index and slice ("Host-defined value
-types"), but not yet iteration, calls, casts, printing or snapshots of them:
+with arithmetic, comparison, attribute, index, slice, iteration, calls, casts,
+truthiness, printing and conversion to a string ("Host-defined value
+types"), and a host can add attributes to the built-in kinds, but not yet
+snapshots of them:
 ctang could, the rewrite dropped it without a decision, and
 `spec-tang-host-extensibility` restores it (ledger D-032 to D-056; D-032 to
-D-038 and D-048 to D-056 are fixed). No template arguments, no
+D-042, D-045 to D-047 and D-048 to D-056 are fixed). No template arguments, no
 `include`, no `try` or `catch` (no new syntax or semantics at all). The execution
 differential against ctang is described under "Verification". The ledger is
-not closed while D-039 to D-047 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame
+not closed while D-043 and D-044 are open (see "The ledger, final"). No debugger in the library: the engine registers the frame
 protocol (the frame walk, scopes and variables read from a paused context, which
 name the right program for every frame) and polls at statements when a host asks
 ("Statement polls"); `runtime-debug` is the debugger and `tang --dap` and the

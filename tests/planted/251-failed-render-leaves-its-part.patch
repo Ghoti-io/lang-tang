@@ -1,0 +1,17 @@
+# 251 a failed render that keeps what it appended
+# defect: the output is not rolled back when a custom value's text fails in the middle of an array, so the part before it stays
+# caught by: the not-a-string tests: nothing partial is appended (testCustom_ops)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -748,7 +748,9 @@
+ /** What a print does once its value's text is appended (`st`, `too_deep`): the rollback and the error of a failure, or the delivery and the commit. */
+ GLTANG_VM_SHARED GLTANG_Value print_finish(GLTANG_Execution * exec, GLTANG_Status st, bool too_deep) {
+   if (st != GLTANG_ST_OK || too_deep) {
+-    output_rollback(exec->out);
++    if (st != GLTANG_ST_ERROR) {
++      output_rollback(exec->out); /* planted: not for a failing text */
++    }
+     if (st == GLTANG_ST_ERROR) {
+       // A custom value's text failed: the error is the print's value, and nothing is appended.
+       return exec->handles->render_failure;

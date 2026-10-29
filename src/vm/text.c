@@ -527,6 +527,44 @@ static void unhold(const Held * h) {
   }
 }
 
+/**
+ * Appends the text a custom value's type gives: `print` when printing, then `to_string` (type.h).
+ * The callbacks are GC points; the answer is a string (or the failure) that nothing else holds, so
+ * it is held in a temporary while the sink copies it, and the sink appends it segment by segment
+ * (an output sink keeps each segment's own tag). `*rendered` says the type answered; it stays
+ * false, with GLTANG_ST_OK, when the type has no entry or declined, and the caller falls
+ * to the default text. A failing answer is GLTANG_ST_ERROR with the error in
+ * `handles->render_failure`, and nothing partial is appended by this value.
+ */
+static GLTANG_Status render_custom(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, bool * rendered) {
+  GLTANG_Execution * exec = sink->exec;
+  bool declined;
+  GLTANG_Value r = gltang_vm_custom_text(exec, v, mode == GLTANG_RENDER_PRINT, &declined);
+  if (declined) {
+    return GLTANG_ST_OK;
+  }
+  *rendered = true;
+  if (r == GLTANG_V_UNWIND) {
+    return GLTANG_ST_UNWIND;
+  }
+  if (r == exec->roots[GLTANG_ROOT_OOM]) {
+    return GLTANG_ST_OOM;
+  }
+  if (!gltang_v_is_kind(r, GLTANG_OBJ_STRING)) {
+    // An error value (the type's, or the engine's for a non-string answer).
+    exec->handles->render_failure = r;
+    return GLTANG_ST_ERROR;
+  }
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, r)) {
+    gltang_vm_temp_release(exec, mark);
+    return GLTANG_ST_OOM;
+  }
+  GLTANG_Status st = gltang_sink_string(sink, gltang_vm_temp_at(exec, mark));
+  gltang_vm_temp_release(exec, mark);
+  return st;
+}
+
 GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, int depth, bool * too_deep) {
   switch (gltang_vm_kind(v)) {
     case GLTANG_KIND_NULL:
@@ -621,8 +659,16 @@ GLTANG_Status gltang_vm_render(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_Render
     case GLTANG_KIND_RNG:
       return mode == GLTANG_RENDER_PRINT ? GLTANG_ST_OK : text(sink, "RNG");
     case GLTANG_KIND_CUSTOM: {
-      // As a function, until a type can print itself (story 6): `print`
-      // appends nothing, and an element shows the type's name.
+      // The type's own text, where a callback may run: a print or a to-string, not an inspector's
+      // buffer (a debugger asks a paused program what a value is and must not run a host).
+      if (sink->exec && sink->mode != GLTANG_SINK_BUFFER) {
+        bool rendered = false;
+        GLTANG_Status st = render_custom(sink, v, mode, &rendered);
+        if (st != GLTANG_ST_OK || rendered) {
+          return st;
+        }
+      }
+      // No entry (or every one declined): `print` appends nothing, and an element shows the type's name.
       if (mode == GLTANG_RENDER_PRINT) {
         return GLTANG_ST_OK;
       }
@@ -703,6 +749,10 @@ static bool output_deliver(GLTANG_Execution * exec) {
 GLTANG_VM_SHARED GLTANG_Value print_finish(GLTANG_Execution * exec, GLTANG_Status st, bool too_deep) {
   if (st != GLTANG_ST_OK || too_deep) {
     output_rollback(exec->out);
+    if (st == GLTANG_ST_ERROR) {
+      // A custom value's text failed: the error is the print's value, and nothing is appended.
+      return exec->handles->render_failure;
+    }
     return st != GLTANG_ST_OK ? gltang_vm_failure_value(exec, st) : gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
   }
   if (!output_deliver(exec)) {
@@ -854,7 +904,10 @@ GLTANG_Value gltang_vm_output_string(GLTANG_Execution * exec, const GLTANG_OutBu
 /** The string a to-string sink built (`st`, `too_deep` as its render left them), or the failure; the sink is freed. */
 GLTANG_VM_SHARED GLTANG_Value to_string_finish(GLTANG_Execution * exec, GLTANG_Sink * sink, GLTANG_Status st, bool too_deep) {
   GLTANG_Value result;
-  if (st != GLTANG_ST_OK) {
+  if (st == GLTANG_ST_ERROR) {
+    result = exec->handles->render_failure;
+  }
+  else if (st != GLTANG_ST_OK) {
     result = gltang_vm_failure_value(exec, st);
   }
   else if (too_deep) {
@@ -872,8 +925,10 @@ GLTANG_Value gltang_vm_to_string(GLTANG_Execution * exec, GLTANG_Value v) {
     return v;
   }
   if (gltang_v_is_custom(v)) {
-    // A type has no to-string yet (story 6): never an empty string.
-    return gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED);
+    // The type's text, or `Not supported` without one: never an empty string.
+    bool declined;
+    GLTANG_Value r = gltang_vm_custom_text(exec, v, false, &declined);
+    return declined ? gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED) : r;
   }
   GLTANG_Sink sink;
   gltang_sink_init(&sink, GLTANG_SINK_STRING, exec);

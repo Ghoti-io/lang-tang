@@ -1,0 +1,16 @@
+# 248 a print whose segments lose their tags
+# defect: the string a `print` answers is appended as trusted text, so every segment is escaped (or not) as the first would be
+# caught by: the print-keeps-its-tag test (testCustom_ops)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -560,7 +560,8 @@
+     gltang_vm_temp_release(exec, mark);
+     return GLTANG_ST_OOM;
+   }
+-  GLTANG_Status st = gltang_sink_string(sink, gltang_vm_temp_at(exec, mark));
++  const GLTANG_StringBlock * answer = gltang_vm_string(gltang_vm_temp_at(exec, mark));
++  GLTANG_Status st = gltang_sink_text(sink, gltang_string_bytes(answer), (size_t)answer->byte_length, GLTANG_UNICODE_STRING_TYPE_TRUSTED); /* planted: the tags are lost */
+   gltang_vm_temp_release(exec, mark);
+   return st;
+ }

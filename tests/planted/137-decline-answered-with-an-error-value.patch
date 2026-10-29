@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -254,7 +254,7 @@
-     // A decline: whatever the callback set is dropped, and no value is made.
-     gltang_vm_call_abandon(&call);
-     *declined = true;
--    result = GLTANG_V_NULL;
-+    result = gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED); /* planted: a decline made into a value */
-   }
-   else {
-     if (status == GLTANG_OP_OK && call.set == GLTANG_CALL_NONE &&
+@@ -362,7 +362,7 @@
+       // A decline: whatever the callback set is dropped, and no value is made.
+       gltang_vm_call_abandon(&call);
+       *declined = true;
+-      result = GLTANG_V_NULL;
++      result = gltang_vm_make_error(exec, GLTANG_ERROR_NOT_SUPPORTED); /* planted: a decline made into a value */
+       settle = false;
+     }
+     else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done) {

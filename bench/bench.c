@@ -1342,6 +1342,211 @@ static uint64_t custom_make_run(uint64_t iterations, double * elapsed) {
   return sink;
 }
 
+/*
+ * The cases of spec-tang-host-extensibility story 6. The first four run on any
+ * lang-tang (a build with GLTANG_BENCH_NO_STORY6 leaves out the rest): the
+ * truth tests, an array's `for`, and a string's and an array's own attribute,
+ * which are the paths the story's hooks sit beside and must leave level. The
+ * others use the story's operations: a host collection's `for`, a callable
+ * instance, a truthy instance, a cast, a host attribute of a string.
+ */
+static uint64_t builtin_truth_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 2998;
+  uint64_t sink = run_source_with("n = 0; b = true; for (i = 0; i < 1000; i += 1) { if (i) { n += 1; } if (!b) { n += 5; } if (i && n) { n += 1; } if (b || i) { n += 1; } } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t array_for_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 1998000;
+  uint64_t sink = run_source_with("a = []; for (i = 0; i < 1000; i += 1) { a[i] = i; } n = 0; for (r = 0; r < 4; r += 1) { for (x : a) { n += x; } } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t string_attr_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 5000;
+  uint64_t sink = run_source_with("s = \"hello\"; n = 0; for (i = 0; i < 1000; i += 1) { n += s.length; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t array_attr_run(uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = 3000;
+  uint64_t sink = run_source_with("a = [1, 2, 3]; n = 0; for (i = 0; i < 1000; i += 1) { n += a.size; } n;", iterations, elapsed, GLTANG_KIND_INTEGER, 0, NULL);
+  have_expected_integer = 0;
+  return sink;
+}
+
+#ifndef GLTANG_BENCH_NO_STORY6
+static const GLTANG_Type * bench_coll;
+
+static bool bench_coll_read(GLTANG_NativeCall * call, GLTANG_Handle h, int64_t * state) {
+  return gltang_handle_custom_read_bytes(call, h, 0, state, 2u * sizeof(int64_t)) == GLTANG_OK;
+}
+
+static GLTANG_OpStatus bench_coll_begin(GLTANG_NativeCall * call, void * user, GLTANG_Handle self) {
+  (void)user;
+  int64_t state[2];
+  GLTANG_Handle h;
+  if (!bench_coll_read(call, self, state) || gltang_handle_make_custom(call, bench_coll, &h) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  state[1] = 0;
+  if (gltang_handle_custom_write_bytes(call, h, 0, state, sizeof state) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_handle(call, h);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_coll_next(GLTANG_NativeCall * call, void * user, GLTANG_Handle self) {
+  (void)user;
+  int64_t state[2];
+  if (!bench_coll_read(call, self, state)) {
+    return GLTANG_OP_ERROR;
+  }
+  if (state[1] >= state[0]) {
+    return GLTANG_OP_DONE;
+  }
+  ++state[1];
+  if (gltang_handle_custom_write_bytes(call, self, 0, state, sizeof state) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_integer(call, state[1]);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_coll_call(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, const GLTANG_Handle * args, size_t argc) {
+  (void)user;
+  (void)self;
+  gltang_call_return_integer(call, argc ? gltang_handle_integer(call, args[0]) + 1 : 0);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_coll_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_CastTarget target) {
+  (void)user;
+  int64_t state[2];
+  if (target != GLTANG_CAST_TARGET_INT || !bench_coll_read(call, self, state)) {
+    return GLTANG_OP_DECLINE;
+  }
+  gltang_call_return_integer(call, state[0]);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_coll_truthy(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, bool * out) {
+  (void)user;
+  int64_t state[2];
+  if (!bench_coll_read(call, self, state)) {
+    return GLTANG_OP_DECLINE;
+  }
+  *out = state[0] != 0;
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_coll_to_string(GLTANG_NativeCall * call, void * user, GLTANG_Handle self) {
+  (void)user;
+  (void)self;
+  GLTANG_Handle h;
+  if (gltang_handle_make_string(call, "coll", 4, GLTANG_UNICODE_STRING_TYPE_TRUSTED, &h) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_handle(call, h);
+  return GLTANG_OP_OK;
+}
+
+static GLTANG_OpStatus bench_slug(GLTANG_NativeCall * call, void * user, GLTANG_Handle self) {
+  (void)user;
+  (void)self;
+  gltang_call_return_integer(call, 7);
+  return GLTANG_OP_OK;
+}
+
+static bool bench_make_coll(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  int64_t state[2] = {gltang_call_integer(call, 0), 0};
+  GLTANG_Handle h;
+  if (gltang_handle_make_custom(call, bench_coll, &h) != GLTANG_OK || gltang_handle_custom_write_bytes(call, h, 0, state, sizeof state) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
+static GLTANG_TypeRegistry * bench_coll_types(void) {
+  static GLTANG_TypeRegistry * registry;
+  if (!registry) {
+    GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "coll";
+    d.version = 1;
+    d.byte_count = 2u * sizeof(int64_t);
+    d.thread_safe = true;
+    d.iterator_begin = bench_coll_begin;
+    d.iterator_next = bench_coll_next;
+    d.call = bench_coll_call;
+    d.cast = bench_coll_cast;
+    d.truthy = bench_coll_truthy;
+    d.to_string = bench_coll_to_string;
+    if (gltang_type_registry_create(&registry) != GLTANG_OK || gltang_type_registry_add(registry, &d, &bench_coll) != GLTANG_OK
+        || gltang_type_registry_add_attribute(registry, GLTANG_KIND_STRING, "slug", bench_slug, NULL) != GLTANG_OK) {
+      setup_failed("the coll type");
+    }
+  }
+  return registry;
+}
+
+static void setup_coll(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "coll", bench_make_coll, NULL) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK
+      || gltang_execution_attach_types(execution, bench_coll_types()) != GLTANG_OK) {
+    setup_failed("the coll type's library");
+  }
+  gltang_library_release(library);
+}
+
+static uint64_t coll_case(const char * source, int64_t expected, uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = expected;
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup_coll);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t custom_iterate_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; c = coll(1000); n = 0; for (x : c) { n += x; } n;", 500500, iterations, elapsed);
+}
+
+static uint64_t custom_call_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; c = coll(1); n = 0; for (i = 0; i < 1000; i += 1) { n += c(i); } n;", 500500, iterations, elapsed);
+}
+
+static uint64_t custom_truth_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; c = coll(1); n = 0; for (i = 0; i < 1000; i += 1) { if (c) { n += 1; } } n;", 1000, iterations, elapsed);
+}
+
+static uint64_t custom_cast_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; c = coll(3); n = 0; for (i = 0; i < 1000; i += 1) { n += c as int; } n;", 3000, iterations, elapsed);
+}
+
+static uint64_t custom_to_string_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; c = coll(3); n = 0; for (i = 0; i < 1000; i += 1) { n += (c as string).length; } n;", 4000, iterations, elapsed);
+}
+
+static uint64_t host_string_attr_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; s = \"hello\"; n = 0; for (i = 0; i < 1000; i += 1) { n += s.slug; } n;", 7000, iterations, elapsed);
+}
+
+static uint64_t builtin_string_attr_with_registry_run(uint64_t iterations, double * elapsed) {
+  return coll_case("use coll; s = \"hello\"; n = 0; for (i = 0; i < 1000; i += 1) { n += s.length; } n;", 5000, iterations, elapsed);
+}
+#endif /* GLTANG_BENCH_NO_STORY6 */
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -2535,6 +2740,19 @@ static const Case cases[] = {
     {"custom-attribute-read-1000", custom_attr_run, 2000u, 5u},
     {"custom-map-attribute-read-1000", custom_map_attr_run, 5000u, 5u},
     {"custom-make-1000", custom_make_run, 2000u, 5u},
+    {"builtin-truth-tests-1000", builtin_truth_run, 3000u, 5u},
+    {"array-for-1000", array_for_run, 3000u, 5u},
+    {"string-attribute-read-1000", string_attr_run, 5000u, 5u},
+    {"array-attribute-read-1000", array_attr_run, 5000u, 5u},
+#ifndef GLTANG_BENCH_NO_STORY6
+    {"custom-iterate-1000", custom_iterate_run, 2000u, 5u},
+    {"custom-call-1000", custom_call_run, 2000u, 5u},
+    {"custom-truth-1000", custom_truth_run, 2000u, 5u},
+    {"custom-cast-int-1000", custom_cast_run, 2000u, 5u},
+    {"custom-to-string-1000", custom_to_string_run, 2000u, 5u},
+    {"host-string-attribute-read-1000", host_string_attr_run, 2000u, 5u},
+    {"builtin-string-attribute-read-1000-registry-attached", builtin_string_attr_with_registry_run, 5000u, 5u},
+#endif
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
     {"run-statements-1000-polls-off", statements_off_run, 5000u, 5u},

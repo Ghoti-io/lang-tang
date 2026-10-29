@@ -1,0 +1,14 @@
+# 235 a next that errors, swallowed
+# defect: the error an `iterator_next` answers ends the loop but is not its value
+# caught by: the next-errors test (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1071,7 +1071,6 @@
+             if (step == GLTANG_ITER_ERROR) {
+               // The error ends the loop and is its value, as an ITER_INIT error is (13.12): the
+               // statement after the loop that clears the result is stepped over.
+-              gltang_vm_set_result(exec, item, true);
+               if (GLTANG_INSTRUCTION_OP(code[pc]) == GLTANG_OP_CLEAR_RESULT) {
+                 ++pc;
+               }

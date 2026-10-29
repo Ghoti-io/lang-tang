@@ -186,6 +186,33 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
   return k < sizeof kinds ? (GLTANG_ValueKind)kinds[k] : GLTANG_KIND_NULL;
 }
 
+/*
+ * Which predicate each caller of an error test uses (spec-tang-host-extensibility story 6). An
+ * instance marked as standing for an error (handle.h) is not an engine error: no kind, no message,
+ * no origin, never listed, no hook. So:
+ *
+ *   gltang_vm_is_error (engine errors only), because the caller reads an error object or logs it:
+ *     errorlist.c gltang_vm_error_swallowed  - reads the object's flags and kind, lists it
+ *     errorlist.c gltang_vm_set_result       - reads the object's flags: a result that is lost is listed
+ *     execution.c result_text / result_error - read the kind, the message and the origin
+ *     interp.c DISCARD, jit/helpers.c gltang_jit_discard - swallow: a discarded value is logged,
+ *                                              and a marked instance is never logged (both tiers agree)
+ *     ops.c 195, 814, 858, 908               - a deep copy or a stored value that FAILED (an engine
+ *                                              error made by the engine, or the out-of-memory value);
+ *                                              an instance is stored by reference, never copied
+ *   gltang_vm_stands_for_error (engine errors and marked instances), because the caller propagates
+ *   the value as the operation's own:
+ *     custom.c gltang_vm_custom_binary and the `!=` fallback - an operand or an `equal` answer that
+ *                                              stands for an error is the value
+ *     container.c equal_rec                  - an element's `equal` answering one is the comparison's value
+ *   gltang_vm_is_error, kept, in one more place:
+ *     ops.c 356 (a string's `+` with an error operand) - a custom operand (a marked instance too) is
+ *                                              dispatched to custom_binary on the line before, which
+ *                                              uses the predicate above, so the engine-only test is
+ *                                              reached only by an engine error
+ *   Assignment, a function's result, a statement's value and the `for` loop's value carry the value
+ *   unexamined, so a marked instance contaminates them with no test at all.
+ */
 bool gltang_vm_is_error(GLTANG_Value v) {
   return gltang_v_is_kind(v, GLTANG_OBJ_ERROR);
 }
@@ -228,7 +255,7 @@ bool gltang_vm_truthy(GLTANG_Value v) {
     case GLTANG_KIND_FUNCTION: return true;  // unspecified by the reference
     case GLTANG_KIND_LIBRARY: return true;
     case GLTANG_KIND_RNG: return true;
-    case GLTANG_KIND_CUSTOM: return true;  // as a function, until a type can say (story 6)
+    case GLTANG_KIND_CUSTOM: return (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_ERROR) == 0;  // pure: a marked instance is falsy; the type's `truthy` is asked by gltang_vm_custom_truth, a GC point
     case GLTANG_KIND_ERROR: return false;
   }
   return false;

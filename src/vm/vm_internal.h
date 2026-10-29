@@ -281,10 +281,14 @@ typedef struct GLTANG_RngObject {
  */
 typedef struct GLTANG_CustomObject {
   uint32_t kind;
-  uint32_t slot_count;          ///< The type's, copied: what the trace reads.
+  uint16_t slot_count;          ///< The type's, copied: what the trace reads (at most GLTANG_TYPE_SLOTS_MAX, which fits).
+  uint16_t flags;               ///< GLTANG_CUSTOM_FLAG_*: per instance, never traced.
   const GLTANG_Type * type;     ///< Held by a registry the execution retains.
   GLTANG_Value slots[];         ///< Traced; then the raw bytes.
 } GLTANG_CustomObject;
+
+/** @brief The instance stands for an error (handle.h): falsy, and it contaminates as an engine error value does, but it is none. */
+#define GLTANG_CUSTOM_FLAG_ERROR 0x1u
 
 /** @brief Where an instance's raw bytes start. */
 static inline unsigned char * gltang_custom_bytes(GLTANG_CustomObject * object) {
@@ -468,6 +472,7 @@ typedef struct GLTANG_HandleState {
   size_t registry_capacity;
   const GLTANG_Type * snapshot_refused;   ///< The type that made the last snapshot take refuse, or NULL.
   uint64_t context_serial;                ///< What a registry of thread-unsafe types is bound by (custom.c); 0 until the first attach.
+  GLTANG_Value render_failure;            ///< The error a render stopped with (GLTANG_ST_ERROR); read at once, never held across a collection.
 } GLTANG_HandleState;
 
 struct GLTANG_Execution {
@@ -631,7 +636,8 @@ extern const GRCORE_EngineDescriptor gltang_engine_descriptor;
 typedef enum {
   GLTANG_ST_OK = 0,
   GLTANG_ST_OOM,     ///< An allocation failed: make an Out of memory value.
-  GLTANG_ST_UNWIND   ///< A poll ordered an unwind: return GLTANG_V_UNWIND.
+  GLTANG_ST_UNWIND,  ///< A poll ordered an unwind: return GLTANG_V_UNWIND.
+  GLTANG_ST_ERROR    ///< A render stopped with an error value, in `exec->handles->render_failure` (a custom value's text); only gltang_vm_render makes it.
 } GLTANG_Status;
 
 /** @brief Charges the pending fuel to the context. */
@@ -1038,6 +1044,65 @@ GLTANG_Value gltang_vm_custom_set_index(GLTANG_Execution * exec, GLTANG_Value v,
 /** @brief `v[a:b:c]` for a custom `v`; each part a value, null when omitted. A GC point. */
 GLTANG_Value gltang_vm_custom_slice(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Value start, GLTANG_Value stop, GLTANG_Value step);
 
+/**
+ * @brief Whether `v` stands for an error: an engine error value, or a custom
+ *   instance marked so (handle.h). The test of every place an error value
+ *   contaminates; the places that read an error's kind, message or origin keep
+ *   gltang_vm_is_error (value.c has the audit).
+ */
+static inline bool gltang_vm_stands_for_error(GLTANG_Value v) {
+  return gltang_v_is_kind(v, GLTANG_OBJ_ERROR) ||
+         (gltang_v_is_custom(v) && (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_ERROR) != 0);
+}
+
+/** @brief `iterator_begin` of custom `v`: the iterator it answers, or the language's `Not supported` (an error value), or an error it answered. A GC point. */
+GLTANG_Value gltang_vm_custom_iterator_begin(GLTANG_Execution * exec, GLTANG_Value v);
+
+/** @brief What one step of a custom iterator did. */
+typedef enum {
+  GLTANG_ITER_ITEM,   ///< An item, in `*out`.
+  GLTANG_ITER_DONE,   ///< The loop ends normally.
+  GLTANG_ITER_ERROR,  ///< The loop ends; `*out` is its value (an error; `Not supported` for a decline).
+  GLTANG_ITER_UNWIND  ///< The run stops.
+} GLTANG_IterStep;
+
+/** @brief One step of the iterator `it` (a custom value whose type has `iterator_next`). A GC point. */
+GLTANG_IterStep gltang_vm_custom_iterator_next(GLTANG_Execution * exec, GLTANG_Value it, GLTANG_Value * out);
+
+/** @brief `callee(args...)` for a custom callee, the first of `callee_and_args` (the operand stack's layout): its answer, or `Invalid function call`. A GC point. */
+GLTANG_Value gltang_vm_custom_call(GLTANG_Execution * exec, const GLTANG_Value * callee_and_args, size_t argc);
+
+/**
+ * @brief The truth of custom `v`: GLTANG_V_TRUE or GLTANG_V_FALSE, or an error
+ *   value (its type's `truthy` answered an error: falsy, and the value of the
+ *   expression), or GLTANG_V_UNWIND. A marked instance is false and its type is
+ *   not asked; an instance with no entry, or a decline, is true. A GC point.
+ */
+GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v);
+
+/**
+ * @brief `v as target` for a custom `v`, by the type's `cast` first. `*declined`
+ *   is set (and the value null) when the type has none or declines; the caller
+ *   then applies the defaults. A GC point.
+ */
+GLTANG_Value gltang_vm_custom_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_CastTarget target, bool * declined);
+
+/**
+ * @brief The text of custom `v` from its type: `print` (when `for_print`; its
+ *   decline falls to `to_string`) or `to_string`. The answer is a string value;
+ *   `*declined` is set (value null) when the type has no entry, or declines;
+ *   a failure is an error value, the out-of-memory value or GLTANG_V_UNWIND. A
+ *   GC point.
+ */
+GLTANG_Value gltang_vm_custom_text(GLTANG_Execution * exec, GLTANG_Value v, bool for_print, bool * declined);
+
+/**
+ * @brief The attribute a host added to the built-in kind of `container`
+ *   (type.h), for `name`. `*found` is false, and nothing is made, when no
+ *   attached registry holds one. A GC point when found.
+ */
+GLTANG_Value gltang_vm_host_attribute(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, bool * found);
+
 /** @brief The custom heap type's snapshot hook: refuses, and records the type (snapshot.c reads it). */
 GRHEAP_Result gltang_vm_custom_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
 
@@ -1061,6 +1126,8 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
 GLTANG_Value gltang_vm_library_attr(GLTANG_Execution * exec, GLTANG_Value library, const char * name, size_t length);
 /** @brief `rng.name`: `next_int`, `next_float`, `next_bool` draw; `set_seed` is a method. */
 GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length);
+/** @brief Whether `rng.name` is one of the generator's own members (the names gltang_vm_rng_attr answers). */
+bool gltang_vm_rng_has_member(const char * name, size_t length);
 /**
  * @brief Calls a native function value (a host's, or one of the engine's): the
  *   one place a native is entered, from the interpreter's `CALL` and from

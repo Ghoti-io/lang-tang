@@ -762,6 +762,26 @@ GLTANG_Result gltang_handle_custom_write_bytes(GLTANG_NativeCall * call, GLTANG_
   return GLTANG_OK;
 }
 
+GLTANG_Result gltang_handle_custom_set_error(GLTANG_NativeCall * call, GLTANG_Handle handle, bool is_error) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom) {
+    return GLTANG_ERR_INVALID;
+  }
+  // A flag in the header, never traced: no barrier.
+  if (is_error) {
+    custom->flags = (uint16_t)(custom->flags | GLTANG_CUSTOM_FLAG_ERROR);
+  }
+  else {
+    custom->flags = (uint16_t)(custom->flags & ~GLTANG_CUSTOM_FLAG_ERROR);
+  }
+  return GLTANG_OK;
+}
+
+bool gltang_handle_custom_is_error(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  return custom && (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) != 0;
+}
+
 /* For the tests only; declared in vm/test_hooks.h. */
 void * gltang_vm_test_handle_object(const GLTANG_NativeCall * call, GLTANG_Handle handle) {
   bool ok;

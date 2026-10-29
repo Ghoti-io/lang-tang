@@ -4,9 +4,9 @@
 #
 --- a/src/vm/container.c
 +++ b/src/vm/container.c
-@@ -461,8 +461,8 @@
+@@ -472,8 +472,8 @@
      }
-     if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_is_error(r)) {
+     if (r != pacer->exec->roots[GLTANG_ROOT_OOM] && gltang_vm_stands_for_error(r)) {
        // Nothing between here and the comparison's return can collect.
 -      *error = r;
 -      return EQ_ERROR;

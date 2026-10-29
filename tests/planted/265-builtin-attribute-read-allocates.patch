@@ -1,0 +1,16 @@
+# 265 a built-in attribute read that allocates once a registry is attached
+# defect: the attribute rule makes a float box whenever the execution has handle state, so every read of a built-in name costs an object
+# caught by: the built-in-attribute-read-allocates-what-it-did test (testCustom_ops)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -648,6 +648,9 @@
+ 
+ /** The attribute rule; `name_value` is the name as a string value, or null when only its bytes are known. */
+ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value) {
++  if (exec->handles) {
++    (void)gltang_vm_make_float(exec, 1.0); /* planted: a read allocates */
++  }
+   switch (gltang_vm_kind(container)) {
+     case GLTANG_KIND_STRING:
+       if (name_is(name, length, "length")) {

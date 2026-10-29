@@ -1,0 +1,15 @@
+# 259 a clash of host attributes not checked at attach
+# defect: two registries that each give the string `slug` can both be attached to one execution
+# caught by: the registering-an-attribute test: the clash (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -128,7 +128,7 @@
+       return GLTANG_OK;
+     }
+   }
+-  if (clashes(hs, registry) || attribute_clashes(hs, registry)) {
++  if (clashes(hs, registry)) { /* planted: attributes are not compared */
+     return GLTANG_ERR_INVALID;
+   }
+   if (hs->registry_count == hs->registry_capacity) {

@@ -1,0 +1,15 @@
+# 260 a declined host attribute that is null
+# defect: a host attribute that declines reads as null instead of `Not implemented`
+# caught by: the declined-or-unknown-host-attribute test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -768,7 +768,7 @@
+     GLTANG_Value args[1] = {container};
+     bool declined;
+     GLTANG_Value r = invoke(exec, &oc, args, &declined);
+-    return declined ? MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED) : r;
++    return declined ? GLTANG_V_NULL : r; /* planted: a decline is null */
+   }
+   return GLTANG_V_NULL;
+ }

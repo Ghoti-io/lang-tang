@@ -1,0 +1,15 @@
+# 246 `&&` that does not ask the type
+# defect: the `AND` instruction takes a custom value as truthy
+# caught by: the every-truth-test test (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -517,7 +517,7 @@
+         break;
+       }
+       case GLTANG_OP_AND:
+-        if (gltang_v_is_custom(S[sp - 1u])) {
++        if (false && gltang_v_is_custom(S[sp - 1u])) { /* planted */
+           CUSTOM_TRUTH();
+           if (truth_r != GLTANG_V_TRUE) {
+             // Falsy: the left operand is the value, or the error its type answered in its place.

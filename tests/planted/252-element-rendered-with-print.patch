@@ -1,0 +1,15 @@
+# 252 an element rendered with print
+# defect: an element inside an array is rendered with the type's `print`, where it is `to_string` (print is for a print of the value itself)
+# caught by: the element-text test (testCustom_ops)
+#
+--- a/src/vm/text.c
++++ b/src/vm/text.c
+@@ -539,7 +539,7 @@
+ static GLTANG_Status render_custom(GLTANG_Sink * sink, GLTANG_Value v, GLTANG_RenderMode mode, bool * rendered) {
+   GLTANG_Execution * exec = sink->exec;
+   bool declined;
+-  GLTANG_Value r = gltang_vm_custom_text(exec, v, mode == GLTANG_RENDER_PRINT, &declined);
++  GLTANG_Value r = gltang_vm_custom_text(exec, v, ((void)mode, true), &declined); /* planted: print for an element too */
+   if (declined) {
+     return GLTANG_ST_OK;
+   }

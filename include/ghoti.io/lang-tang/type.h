@@ -123,11 +123,52 @@
  * gives the error the language gives for a value with no such operation:
  * `Not implemented` for an attribute read, `Not supported` for the others.
  *
- * Iteration, calls, casts, truthiness, printing and conversion to a string are
- * not operations of this version: a custom value is truthy, `print` appends
- * nothing for it, `as` and string conversion are `Not supported`, and calling
- * one is `Invalid function call`. A snapshot of an execution that holds an
- * instance is refused (::gltang_snapshot_refused_type names the type).
+ * **Iteration.** `for (x : v)` over a custom `v` calls `iterator_begin(v)`.
+ * Its answer drives the loop: a custom value whose type has `iterator_next`
+ * (typically a new instance; `v` itself is allowed), or an array, which is
+ * iterated as an array is. Anything else, a missing `iterator_begin` and a
+ * decline are `Not supported`, the loop's value. Each step calls
+ * `iterator_next(iterator)`: ::GLTANG_OP_OK with the item set yields it (null
+ * when none was set), ::GLTANG_OP_DONE ends the loop, an error answer ends it
+ * and is the loop's value, and a decline ends it with `Not supported`. The
+ * iterator is held by the loop, so the collector sees it.
+ *
+ * **Calls.** `v(a, b)` calls `call(v, args, argc)` with the arguments as
+ * handles; its answer is the value. A missing entry or a decline is
+ * `Invalid function call`. A callable instance is a value, not a function: it
+ * cannot be given where only a function is accepted.
+ *
+ * **Casts.** `v as int|float|bool|string` calls `cast(v, target)` first when
+ * the type has one. A decline falls to the defaults: `bool` is the
+ * truthiness below, `string` is `to_string`, and `int` and `float` are
+ * `Not supported`. A cast to `string` of an instance with neither `cast` nor
+ * `to_string` is `Not supported`.
+ *
+ * **Truthiness.** `truthy` sets `*out_truthy`; a decline, or no entry, is
+ * true. An instance marked as standing for an error
+ * (::gltang_handle_custom_set_error) is falsy and its type is not asked.
+ *
+ * **Printing.** `print` answers a string that is appended to the output with
+ * each segment's own tag, so it is escaped per segment exactly as a string's
+ * is. `to_string` answers the string used for `as string`, for the element
+ * rendering of an instance inside an array or map, and (when there is no
+ * `print`) for `print`. With neither, `print` appends nothing and an element
+ * shows `Custom: name`. An answer that is not a string is
+ * `Host function failed`, and nothing partial is appended.
+ *
+ * **Standing for an error.** ::gltang_handle_custom_set_error marks one
+ * instance. It is falsy, and where an engine error value contaminates (an
+ * operand of an operator, a function's result, a statement's value) it
+ * does too. It is *not* an engine error: it is never in the error list, never
+ * fires the error-created hook, and has no error kind.
+ *
+ * **Attributes on built-in kinds.** ::gltang_type_registry_add_attribute adds
+ * `s.slug` to strings (and to integers, floats, booleans, arrays, functions
+ * and random generators). A built-in name always wins; maps and libraries
+ * take none, since their names are the user's keys and members.
+ *
+ * A snapshot of an execution that holds an instance is refused
+ * (::gltang_snapshot_refused_type names the type).
  *
  * **Threads.** A registry is built on one thread. Once sealed, it and its
  * descriptors may be read from any thread. ::gltang_type_registry_retain and
@@ -167,8 +208,17 @@ typedef struct GLTANG_TypeRegistry GLTANG_TypeRegistry;
 typedef enum GLTANG_OpStatus {
   GLTANG_OP_OK = 0,   ///< Answered: the value set through the call object.
   GLTANG_OP_DECLINE,  ///< No answer for these operands: the next rule is tried.
-  GLTANG_OP_ERROR     ///< Failed: the error kind set through the call object.
+  GLTANG_OP_ERROR,    ///< Failed: the error kind set through the call object.
+  GLTANG_OP_DONE      ///< No more items: valid only from an iterator's `iterator_next`; from any other operation it is `Host function failed`.
 } GLTANG_OpStatus;
+
+/** @brief What a cast converts to (the target of a type's `cast`). */
+typedef enum GLTANG_CastTarget {
+  GLTANG_CAST_TARGET_INT = 0,  ///< `v as int`
+  GLTANG_CAST_TARGET_FLOAT,    ///< `v as float`
+  GLTANG_CAST_TARGET_BOOL,     ///< `v as bool`
+  GLTANG_CAST_TARGET_STRING    ///< `v as string`
+} GLTANG_CastTarget;
 
 /**
  * @brief A binary operator: `+ - * / %`.
@@ -225,6 +275,63 @@ typedef GLTANG_OpStatus (*GLTANG_TypeSliceFn)(GLTANG_NativeCall * call,
     GLTANG_Handle step);
 
 /**
+ * @brief `for (x : self)`: starts an iteration. The answer is the iterator: a
+ *   custom value whose type has `iterator_next` (often a new instance; `self`
+ *   itself is allowed) or an array. Any other answer is `Not supported`.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeIteratorBeginFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
+ * @brief One step of an iteration; `self` is the iterator ::GLTANG_TypeIteratorBeginFn
+ *   answered. ::GLTANG_OP_OK with the item set yields it (null when none was
+ *   set), ::GLTANG_OP_DONE ends the loop, ::GLTANG_OP_ERROR ends it with the
+ *   error as the loop's value, and ::GLTANG_OP_DECLINE ends it with
+ *   `Not supported`.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeIteratorNextFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
+ * @brief `self(args...)`. `args` are handles in the callback's scope.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeCallFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self, const GLTANG_Handle * args, size_t argc);
+
+/** @brief `self as int|float|bool|string`; a decline falls to the defaults. */
+typedef GLTANG_OpStatus (*GLTANG_TypeCastFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self, GLTANG_CastTarget target);
+
+/**
+ * @brief Truthiness: set `*out_truthy` and answer ::GLTANG_OP_OK. A decline is
+ *   true. `*out_truthy` starts true.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeTruthyFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self, bool * out_truthy);
+
+/**
+ * @brief `print self`: the answer is a string (any encoding, any segments)
+ *   appended to the output with each segment's own tag.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypePrintFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
+ * @brief The type's text: the answer is a string. Used for `as string`, for
+ *   the element rendering inside an array or map, and by `print` when the
+ *   type has no `print`.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeToStringFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
+ * @brief An attribute a host adds to a built-in kind (`s.slug`): the answer
+ *   is the attribute's value. A decline is `Not implemented`.
+ */
+typedef GLTANG_OpStatus (*GLTANG_HostAttributeFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
  * @brief What a type is. Size-prefixed: set `size` to
  *   `sizeof(GLTANG_TypeDescriptor)` (::GLTANG_TYPE_DESCRIPTOR_INIT does), and
  *   zero what you do not use.
@@ -258,6 +365,14 @@ typedef struct GLTANG_TypeDescriptor {
   GLTANG_TypeIndexGetFn index_get;     ///< `self[index]`
   GLTANG_TypeIndexSetFn index_set;     ///< `self[index] = value`
   GLTANG_TypeSliceFn slice;            ///< `self[start:stop:step]`
+  // Added after the first version (story 6); a descriptor sized without them leaves them empty.
+  GLTANG_TypeIteratorBeginFn iterator_begin;  ///< `for (x : self)`
+  GLTANG_TypeIteratorNextFn iterator_next;    ///< one step of an iterator of this type
+  GLTANG_TypeCallFn call;                     ///< `self(args...)`
+  GLTANG_TypeCastFn cast;                     ///< `self as int|float|bool|string`
+  GLTANG_TypeTruthyFn truthy;                 ///< `if (self)`, `!self`, `self && x`, `self as bool`
+  GLTANG_TypePrintFn print;                   ///< `print self`
+  GLTANG_TypeToStringFn to_string;            ///< `self as string`, an element's text
 } GLTANG_TypeDescriptor;
 
 /** @brief The smallest `size` a descriptor may state: every member of this first version. */
@@ -273,7 +388,7 @@ typedef struct GLTANG_TypeDescriptor {
  * `{.size = ...}` both draw `-Wmissing-field-initializers` from g++ (C accepts
  * the designated form, C++17 has none). A member added later is added here too.
  */
-#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 /**
  * @brief Creates an empty registry with a reference count of one.
@@ -309,6 +424,37 @@ GLTANG_API void gltang_type_registry_release(GLTANG_TypeRegistry * registry);
 GLTANG_API GLTANG_Result gltang_type_registry_add(
     GLTANG_TypeRegistry * registry, const GLTANG_TypeDescriptor * descriptor,
     const GLTANG_Type ** out_type);
+
+/**
+ * @brief Adds an attribute to a built-in kind: `value.name` reads as `fn`
+ *   answers (`s.slug`). Get only.
+ *
+ * A built-in name always wins (`s.html`, `s.length`, `a.size`, the members of a
+ * random generator), so a module cannot change what a built-in means; the
+ * function is reached only for a name the kind does not have. The functions
+ * are called as a type's operations are, and a decline is `Not implemented`.
+ * A sealed registry is read by every execution that attached it, on any
+ * thread, with no lock, so `fn` and `user` must be usable from several threads
+ * at once (an attribute has no `thread_safe` flag of its own: the registry is
+ * not bound to a context by it).
+ *
+ * @param registry An unsealed registry.
+ * @param kind ::GLTANG_KIND_INTEGER, ::GLTANG_KIND_FLOAT, ::GLTANG_KIND_BOOL,
+ *   ::GLTANG_KIND_STRING, ::GLTANG_KIND_ARRAY, ::GLTANG_KIND_FUNCTION or
+ *   ::GLTANG_KIND_RNG.
+ * @param name 1 to ::GLTANG_TYPE_NAME_MAX identifier characters; copied.
+ * @param fn The attribute.
+ * @param user Given to `fn`.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, a sealed
+ *   registry, a kind other than the above (a map's names are its keys, a
+ *   library's are its members, and a custom value's type has its own
+ *   `attribute_get`), a bad name, or a kind and name the registry holds
+ *   already; ::GLTANG_ERR_OOM. Attaching a registry whose kind and name an
+ *   attached registry holds is refused by ::gltang_execution_attach_types.
+ */
+GLTANG_API GLTANG_Result gltang_type_registry_add_attribute(
+    GLTANG_TypeRegistry * registry, GLTANG_ValueKind kind, const char * name,
+    GLTANG_HostAttributeFn fn, void * user);
 
 /** @brief Whether the registry is sealed (it has been attached). */
 GLTANG_API bool gltang_type_registry_sealed(const GLTANG_TypeRegistry * registry);
@@ -375,7 +521,8 @@ typedef struct GLTANG_Execution GLTANG_Execution;
  * @param registry The registry.
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, an execution
  *   that has started, a call from inside a host function, a registry bound to another context, or a name and
- *   version that clash with a registry already attached; ::GLTANG_ERR_OOM.
+ *   version that clash with a registry already attached, or a built-in kind's
+ *   attribute an attached registry already holds; ::GLTANG_ERR_OOM.
  */
 GLTANG_API GLTANG_Result gltang_execution_attach_types(
     GLTANG_Execution * execution, GLTANG_TypeRegistry * registry);

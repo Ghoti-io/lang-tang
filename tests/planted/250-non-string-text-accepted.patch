@@ -1,0 +1,20 @@
+# 250 a non-string text accepted
+# defect: an answer of `print` or `to_string` that is not a string is passed on as the value instead of being `Host function failed`
+# caught by: the not-a-string tests (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -715,10 +715,9 @@
+ 
+ /** The answer of a `print` or `to_string`: a string, or the failure; anything else is `Host function failed`. */
+ static GLTANG_Value text_answer(GLTANG_Execution * exec, GLTANG_Value r, bool errored) {
+-  if (errored || r == GLTANG_V_UNWIND || gltang_v_is_kind(r, GLTANG_OBJ_STRING)) {
+-    return r;
+-  }
+-  return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
++  (void)exec;
++  (void)errored;
++  return r; /* planted: whatever it answers */
+ }
+ 
+ GLTANG_Value gltang_vm_custom_text(GLTANG_Execution * exec, GLTANG_Value v, bool for_print, bool * declined) {

@@ -1,0 +1,16 @@
+# 264 a truthy that declines makes an error
+# defect: a decline from `truthy` makes the language's error value and drops it: the decline allocates, and the error hooks see it
+# caught by: the decline-path-allocates-what-no-entry-did test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -697,6 +697,9 @@
+   GLTANG_Value args[1] = {v};
+   bool declined;
+   GLTANG_Value r = invoke(exec, &oc, args, &declined);
++  if (declined) {
++    (void)MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED); /* planted: a decline made into a value */
++  }
+   return declined ? GLTANG_V_TRUE : r;
+ }
+ 

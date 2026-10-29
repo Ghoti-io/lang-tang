@@ -1,0 +1,15 @@
+# 237 a declined call that is null
+# defect: a `call` that declines gives null instead of `Invalid function call`
+# caught by: the call-with-no-entry-or-a-decline test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -681,7 +681,7 @@
+   OpCall oc = OPCALL(type, GLTANG_TYPE_OP_CALL, argc + 1u, true, false);
+   bool declined;
+   GLTANG_Value r = invoke(exec, &oc, callee_and_args, &declined);
+-  return declined ? MAKE_ERROR(GLTANG_ERROR_INVALID_FUNCTION_CALL) : r;
++  return declined ? GLTANG_V_NULL : r; /* planted: a decline is null */
+ }
+ 
+ GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v) {

@@ -59,6 +59,15 @@ typedef enum GLTANG_TypeOp {
   GLTANG_TYPE_OP_INDEX_GET,
   GLTANG_TYPE_OP_INDEX_SET,
   GLTANG_TYPE_OP_SLICE,
+  // Story 6. Appended: a type that implements none of them has the operations
+  // bits, and so the table hash, it had before.
+  GLTANG_TYPE_OP_ITERATOR_BEGIN,
+  GLTANG_TYPE_OP_ITERATOR_NEXT,
+  GLTANG_TYPE_OP_CALL,
+  GLTANG_TYPE_OP_CAST,
+  GLTANG_TYPE_OP_TRUTHY,
+  GLTANG_TYPE_OP_PRINT,
+  GLTANG_TYPE_OP_TO_STRING,
   GLTANG_TYPE_OP_COUNT
 } GLTANG_TypeOp;
 
@@ -73,6 +82,15 @@ struct GLTANG_Type {
   GLTANG_TypeDescriptor descriptor;      ///< The copy, `size` the engine's; `name` points at `name` above.
 };
 
+/** @brief An attribute a registry adds to a built-in kind (type.h): get only. */
+typedef struct GLTANG_HostAttribute {
+  GLTANG_ValueKind kind;
+  size_t name_length;
+  char name[GLTANG_TYPE_NAME_MAX + 1u];
+  GLTANG_HostAttributeFn fn;
+  void * user;
+} GLTANG_HostAttribute;
+
 struct GLTANG_TypeRegistry {
   atomic_size_t references;
   atomic_bool sealed;
@@ -82,7 +100,14 @@ struct GLTANG_TypeRegistry {
   GLTANG_Type ** types;                  ///< Each its own block, so a type's address never changes.
   size_t count;
   size_t capacity;
+  GLTANG_HostAttribute * attributes;     ///< Written while the registry is unsealed; read with no lock after.
+  size_t attribute_count;
+  size_t attribute_capacity;
 };
+
+/** @brief The attribute of `kind` and `name` the registry holds, or NULL. */
+const GLTANG_HostAttribute * gltang_type_registry_find_attribute(
+    const GLTANG_TypeRegistry * registry, GLTANG_ValueKind kind, const char * name, size_t length);
 
 /** @brief Seals a registry and takes a reference (an execution attaches it). */
 GLTANG_TypeRegistry * gltang_type_registry_attach(GLTANG_TypeRegistry * registry);

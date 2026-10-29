@@ -330,7 +330,7 @@ INCLUDE += $(JIT_CFLAGS)
 # (AD-2, story 13). They are not in INCLUDE or DEP_LIBS, so the shared and the
 # static library link neither, and tools/check-edges.sh checks that by file and
 # by NEEDED entry. text is listed because runtime-debug reads JSON with it; its
-# pkg-config dependencies (chron, regex and security) can therefore appear in
+# pkg-config dependencies (chron, regex, security and math) can therefore appear in
 # the hosts' NEEDED lists too. The debugger's own .pc file requires text, and
 # it is a hard error to be without either, like every other dependency. WITH_DEBUG=no is the way to build the
 # library and its unit tests on a machine without them: the two hosts then
@@ -839,7 +839,7 @@ ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
 	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
-check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16, 17, 19, 21 to 26, 28 to 45, 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 231 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots, the three of the float bits channel (32 and 33 invisible in the text of a float, 34 a NaN that prints as `nan`), the floats carried raw, the seventeen of float and division operations compiled, the host-described values, handles, host context, custom kind, the template operations compiled, the bench's template policy, and the position written only at a poll and the cheaper entry into compiled code of spec-template-compiled story 4b, story 4d's fast paths of a text, a short string's print and a map's attribute, and story 4g's print, concatenation and cast to string of a raw float)
+check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16, 17, 19, 21 to 26, 28 to 45, 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 267 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots, the three of the float bits channel (32 and 33 invisible in the text of a float, 34 a NaN that prints as `nan`), the floats carried raw, the seventeen of float and division operations compiled, the host-described values, handles, host context, custom kind, the template operations compiled, the bench's template policy, and the position written only at a poll and the cheaper entry into compiled code of spec-template-compiled story 4b, story 4d's fast paths of a text, a short string's print and a map's attribute, and story 4g's print, concatenation and cast to string of a raw float, and the iteration, calls, casts, truthiness, print and to-string, error mark and attributes of built-in kinds of host-defined types of spec-tang-host-extensibility story 6)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
@@ -849,7 +849,7 @@ check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store
 check-planted: ## Every planted defect that needs no relocation heap: each caught by its instrument, each control passing
 	@$(PLANTED_ENV) tools/check-planted.sh --all
 
-check-planted-tsan: ## Planted defect 133 (the language layer read without its lock), caught by ThreadSanitizer and by nothing else (Linux)
+check-planted-tsan: ## Planted defects 133 (the language layer read without its lock) and 268 (a sealed registry written by a lookup), caught by ThreadSanitizer and by nothing else (Linux)
 ifeq ($(OS_NAME), Linux)
 	@$(PLANTED_ENV) tools/check-planted-tsan.sh
 else
@@ -918,7 +918,7 @@ endif
 #   under torture an allocation also collects, which only makes it slower.
 TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
-TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks testHost_context testCustom testJit_templates
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks testHost_context testCustom testCustom_ops testJit_templates
 
 # With the JIT built, `make test` is two arms. The JIT arm is everything below,
 # and then the same unit suites once more with every execution tiering up at

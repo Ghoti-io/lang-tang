@@ -1,0 +1,15 @@
+# 261 a descriptor read past its size
+# defect: the registry copies the engine's whole descriptor from the host's, ignoring the host's `size`, so members a shorter header does not have are read from whatever follows
+# caught by: the descriptor-sized-for-the-first-version test (testCustom_ops)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -198,7 +198,7 @@
+   // as this one goes.
+   GLTANG_TypeDescriptor copy;
+   memset(&copy, 0, sizeof copy);
+-  memcpy(&copy, descriptor, descriptor->size < sizeof copy ? descriptor->size : sizeof copy);
++  memcpy(&copy, descriptor, sizeof copy); /* planted: size is ignored */
+   copy.size = sizeof copy;
+   size_t name_length = 0;
+   if (!valid_name(copy.name, &name_length)) {

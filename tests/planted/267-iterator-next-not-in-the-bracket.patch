@@ -1,0 +1,15 @@
+# 267 an iterator's next called without the host-function flag
+# defect: the operations of a type run with `in_host` clear, so a callback can reconfigure the execution (the new operations go through the same bracket as the old, which this and 149 both break)
+# caught by: the each-new-operation-runs-as-a-host-function test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -351,7 +351,7 @@
+     // Host code from here to its return: it cannot destroy or reconfigure the
+     // execution (the setters refuse), as in a native.
+     const bool outer_in_host = exec->in_host;
+-    exec->in_host = true;
++    exec->in_host = oc->op == GLTANG_TYPE_OP_TRUTHY ? false : true; /* planted: truthy is not host code */
+     status = run_callback(&call, oc, h);
+     exec->in_host = outer_in_host;
+   }

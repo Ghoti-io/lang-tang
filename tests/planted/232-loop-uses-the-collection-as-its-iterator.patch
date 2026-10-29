@@ -1,0 +1,15 @@
+# 232 a loop that iterates the collection itself
+# defect: the loop keeps the iterable in its frame slot and steps that, not the iterator `iterator_begin` answered, so two loops over one collection share one position
+# caught by: the shared-collection test (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1021,7 +1021,7 @@
+           }
+           else if (gltang_v_is_custom(it)) {
+             // A custom iterator: the second slot is not an integer, which is how ITER_NEXT tells.
+-            S[H + a] = it;
++            S[H + a] = v; /* planted: the iterable, not its iterator */
+             S[H + a + 1u] = GLTANG_V_NULL;
+             S[sp - 1u] = GLTANG_V_TRUE;
+           }

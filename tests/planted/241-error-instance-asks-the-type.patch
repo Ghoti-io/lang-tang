@@ -1,0 +1,15 @@
+# 241 an instance that stands for an error asked about its truth
+# defect: the flag is not read before `truthy`, so the type decides for an instance marked as an error
+# caught by: the marked-instance-is-falsy test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -686,7 +686,7 @@
+ 
+ GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v) {
+   const GLTANG_CustomObject * custom = gltang_vm_custom(v);
+-  if (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) {
++  if (false && custom->flags & GLTANG_CUSTOM_FLAG_ERROR) { /* planted: the flag is not read */
+     // An instance that stands for an error is falsy, and its type is not asked.
+     return GLTANG_V_FALSE;
+   }

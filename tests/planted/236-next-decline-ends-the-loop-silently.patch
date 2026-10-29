@@ -1,0 +1,17 @@
+# 236 a next that declines ends the loop without an error
+# defect: a decline from `iterator_next` is the end of the iteration, where it is `Not supported` as the loop's value
+# caught by: the next-declines test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -659,9 +659,7 @@
+   }
+   if (declined) {
+     // The language's error, made now that the type has nothing to say.
+-    r = MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+-    *out = r;
+-    return r == GLTANG_V_UNWIND ? GLTANG_ITER_UNWIND : GLTANG_ITER_ERROR;
++    return GLTANG_ITER_DONE; /* planted: a decline is the end */
+   }
+   if (done) {
+     return GLTANG_ITER_DONE;

@@ -1,0 +1,15 @@
+# 243 `!` that does not ask the type
+# defect: the `NOT` instruction takes a custom value as truthy, without asking its type
+# caught by: the every-truth-test test (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -404,7 +404,7 @@
+         break;
+       }
+       case GLTANG_OP_NOT:
+-        if (gltang_v_is_custom(S[sp - 1u])) {
++        if (false && gltang_v_is_custom(S[sp - 1u])) { /* planted */
+           CUSTOM_TRUTH();
+           // An error the type answered is the value of `!` (it is falsy, and an expression's value).
+           S[sp - 1u] = truth_r == GLTANG_V_TRUE ? GLTANG_V_FALSE : (truth_r == GLTANG_V_FALSE ? GLTANG_V_TRUE : truth_r);

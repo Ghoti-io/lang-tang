@@ -506,13 +506,44 @@ static GLTANG_Value float_to_int(GLTANG_Execution * exec, double d) {
   return gltang_vm_make_int(exec, (int64_t)d);
 }
 
+/**
+ * `v as type` for a custom `v`: its type's `cast` first, for all four targets; a decline falls to
+ * the defaults (type.h). `bool` is the truthiness (the type's `truthy`, or true), `string` the
+ * type's `to_string` (`Not supported` without one), `int` and `float` are `Not supported`.
+ */
+static GLTANG_Value custom_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type) {
+  GLTANG_CastTarget target = GLTANG_CAST_TARGET_INT;
+  switch (type) {
+    case GLTANG_CAST_TYPE_INTEGER: target = GLTANG_CAST_TARGET_INT; break;
+    case GLTANG_CAST_TYPE_FLOAT: target = GLTANG_CAST_TARGET_FLOAT; break;
+    case GLTANG_CAST_TYPE_BOOLEAN: target = GLTANG_CAST_TARGET_BOOL; break;
+    case GLTANG_CAST_TYPE_STRING: target = GLTANG_CAST_TARGET_STRING; break;
+  }
+  bool declined;
+  GLTANG_Value r = gltang_vm_custom_cast(exec, v, target, &declined);
+  if (!declined) {
+    return r;
+  }
+  switch (type) {
+    case GLTANG_CAST_TYPE_BOOLEAN:
+      // True or false, or the error its `truthy` answered (the cast's value).
+      return gltang_vm_custom_truth(exec, v);
+    case GLTANG_CAST_TYPE_STRING:
+      return gltang_vm_to_string(exec, v);
+    default:
+      return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
+  }
+}
+
 GLTANG_Value gltang_vm_op_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_Cast_Type type) {
   GLTANG_ValueKind kind = gltang_vm_kind(v);
   if (kind == GLTANG_KIND_ERROR) {
     return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
   }
-  // A custom value has no cast until its type can say (story 6): as a function.
-  if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG || kind == GLTANG_KIND_CUSTOM) {
+  if (kind == GLTANG_KIND_CUSTOM) {
+    return custom_cast(exec, v, type);
+  }
+  if (kind == GLTANG_KIND_FUNCTION || kind == GLTANG_KIND_LIBRARY || kind == GLTANG_KIND_RNG) {
     return MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED);
   }
   switch (type) {
@@ -595,6 +626,17 @@ static bool name_is(const char * name, size_t length, const char * text) {
 
 static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value);
 
+/**
+ * The value of a name the built-in kind of `container` does not have: an attribute a host added to
+ * that kind (type.h), else `Not implemented`. Reached only after the kind's own names have all
+ * missed, so a built-in name always wins and a built-in read pays nothing for the hook.
+ */
+static GLTANG_Value missing_attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length) {
+  bool found;
+  GLTANG_Value r = gltang_vm_host_attribute(exec, container, name, length, &found);
+  return found ? r : MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+}
+
 GLTANG_Value gltang_vm_op_attr(GLTANG_Execution * exec, GLTANG_Value container, GLTANG_Value name_value) {
   const GLTANG_StringBlock * name = gltang_vm_string(name_value);
   return attr(exec, container, gltang_string_bytes(name), (size_t)name->byte_length, name_value);
@@ -632,12 +674,12 @@ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const 
       if (name_is(name, length, "render")) {
         return gltang_vm_string_render(exec, container);
       }
-      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      return missing_attr(exec, container, name, length);
     case GLTANG_KIND_ARRAY:
       if (name_is(name, length, "size")) {
         return gltang_vm_make_int(exec, (int64_t)gltang_vm_array(container)->length);
       }
-      return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+      return missing_attr(exec, container, name, length);
     case GLTANG_KIND_MAP: {
       // A map has no attributes of its own, so a name is a key; one it does
       // not hold is null (13.7, 13.38).
@@ -647,11 +689,14 @@ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const 
     case GLTANG_KIND_LIBRARY:
       return gltang_vm_library_attr(exec, container, name, length);
     case GLTANG_KIND_RNG:
+      if (!gltang_vm_rng_has_member(name, length)) {
+        return missing_attr(exec, container, name, length);
+      }
       return gltang_vm_rng_attr(exec, container, name, length);
     case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
     default: {
       if (!gltang_v_is_custom(container)) {
-        return MAKE_ERROR(GLTANG_ERROR_NOT_IMPLEMENTED);
+        return missing_attr(exec, container, name, length);
       }
       if (name_value) {
         return gltang_vm_custom_attr(exec, container, name_value);

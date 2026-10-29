@@ -1,0 +1,15 @@
+# 266 the native depth of compiled code's records not handed back for a callback
+# defect: a callback called from a helper that compiled code called is entered with the depth its open records hold still taken, so a tight native-depth budget refuses it in compiled code and not in the interpreter
+# caught by: the tight-native-depth differential (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -311,7 +311,7 @@
+   // compiled record open, as in the interpreter, it lends nothing.
+   // The test is made here, inline: it is false in the interpreter and for every operation reached
+   // from it, which must not pay a call for it.
+-  const size_t lent = exec->jit && exec->jit->records_open > exec->jit->depth_lent ? gltang_jit_lend_depth(exec) : 0;
++  const size_t lent = 0; /* planted: nothing is handed back */
+ #endif
+   GRCORE_Stack * stack = grcore_context_stack(exec->context);
+   GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + oc->argc * sizeof(GLTANG_Value)};

@@ -1,0 +1,14 @@
+# 262 a table hash that changes for a type that uses none of the new operations
+# defect: the table hash folds in the number of operations the engine knows, so every type's hash moved when an operation was added
+# caught by: the hash-as-before-story-6 test (testCustom_ops)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -152,6 +152,7 @@
+   h = fnv_u64(h, t->descriptor.byte_count);
+   h = fnv_u64(h, t->descriptor.thread_safe ? 1u : 0u);
+   h = fnv_u64(h, t->operations);
++  h = fnv_u64(h, GLTANG_TYPE_OP_COUNT); /* planted */
+   return h;
+ }
+ 

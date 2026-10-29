@@ -1,0 +1,15 @@
+# 245 a jump on true that does not ask the type
+# defect: the `JMP_TRUE` instruction takes a custom value as truthy
+# caught by: the every-truth-test test (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -501,7 +501,7 @@
+         break;
+       }
+       case GLTANG_OP_JMP_TRUE: {
+-        if (gltang_v_is_custom(S[sp - 1u])) {
++        if (false && gltang_v_is_custom(S[sp - 1u])) { /* planted */
+           CUSTOM_TRUTH();
+           S[--sp] = 0;
+           if (truth_r == GLTANG_V_TRUE) {

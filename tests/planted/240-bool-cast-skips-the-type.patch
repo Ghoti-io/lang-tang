@@ -1,0 +1,16 @@
+# 240 a cast to bool that does not ask the type
+# defect: `cast` is asked for int, float and string but not for bool, which is always the truthiness
+# caught by: the cast-is-asked-first test (testCustom_ops)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -520,7 +520,8 @@
+     case GLTANG_CAST_TYPE_STRING: target = GLTANG_CAST_TARGET_STRING; break;
+   }
+   bool declined;
+-  GLTANG_Value r = gltang_vm_custom_cast(exec, v, target, &declined);
++  GLTANG_Value r = target == GLTANG_CAST_TARGET_BOOL ? GLTANG_V_NULL : gltang_vm_custom_cast(exec, v, target, &declined);
++  declined = declined || target == GLTANG_CAST_TARGET_BOOL; /* planted: bool is never asked */
+   if (!declined) {
+     return r;
+   }

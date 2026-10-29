@@ -72,6 +72,7 @@ void gltang_type_registry_release(GLTANG_TypeRegistry * registry) {
       gcu_free(registry->types[i]);
     }
     gcu_free(registry->types);
+    gcu_free(registry->attributes);
     gcu_free(registry);
   }
 }
@@ -174,6 +175,13 @@ static uint32_t operations_of(const GLTANG_TypeDescriptor * d) {
   HAS(index_get, GLTANG_TYPE_OP_INDEX_GET);
   HAS(index_set, GLTANG_TYPE_OP_INDEX_SET);
   HAS(slice, GLTANG_TYPE_OP_SLICE);
+  HAS(iterator_begin, GLTANG_TYPE_OP_ITERATOR_BEGIN);
+  HAS(iterator_next, GLTANG_TYPE_OP_ITERATOR_NEXT);
+  HAS(call, GLTANG_TYPE_OP_CALL);
+  HAS(cast, GLTANG_TYPE_OP_CAST);
+  HAS(truthy, GLTANG_TYPE_OP_TRUTHY);
+  HAS(print, GLTANG_TYPE_OP_PRINT);
+  HAS(to_string, GLTANG_TYPE_OP_TO_STRING);
 #undef HAS
   return bits;
 }
@@ -229,6 +237,61 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
   if (out_type) {
     *out_type = type;
   }
+  return GLTANG_OK;
+}
+
+const GLTANG_HostAttribute * gltang_type_registry_find_attribute(const GLTANG_TypeRegistry * registry, GLTANG_ValueKind kind, const char * name, size_t length) {
+  for (size_t i = 0; i < registry->attribute_count; ++i) {
+    const GLTANG_HostAttribute * a = &registry->attributes[i];
+    if (a->kind == kind && a->name_length == length && !memcmp(a->name, name, length)) {
+      return a;
+    }
+  }
+  return NULL;
+}
+
+GLTANG_Result gltang_type_registry_add_attribute(GLTANG_TypeRegistry * registry, GLTANG_ValueKind kind, const char * name, GLTANG_HostAttributeFn fn, void * user) {
+  if (!registry || !fn || gltang_type_registry_sealed(registry)) {
+    return GLTANG_ERR_INVALID;
+  }
+  // Maps and libraries are refused: a map's names are its keys and a library's
+  // are its members, so a host attribute would shadow the program's own data.
+  // A custom value's type has its own attribute_get.
+  switch (kind) {
+    case GLTANG_KIND_INTEGER:
+    case GLTANG_KIND_FLOAT:
+    case GLTANG_KIND_BOOL:
+    case GLTANG_KIND_STRING:
+    case GLTANG_KIND_ARRAY:
+    case GLTANG_KIND_FUNCTION:
+    case GLTANG_KIND_RNG:
+      break;
+    default:
+      return GLTANG_ERR_INVALID;
+  }
+  size_t length = 0;
+  if (!valid_name(name, &length)) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (gltang_type_registry_find_attribute(registry, kind, name, length)) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (registry->attribute_count == registry->attribute_capacity) {
+    size_t grown = registry->attribute_capacity ? registry->attribute_capacity * 2u : 4u;
+    GLTANG_HostAttribute * bigger = gcu_realloc(registry->attributes, grown * sizeof(*bigger));
+    if (!bigger) {
+      return GLTANG_ERR_OOM;
+    }
+    registry->attributes = bigger;
+    registry->attribute_capacity = grown;
+  }
+  GLTANG_HostAttribute * a = &registry->attributes[registry->attribute_count++];
+  memset(a, 0, sizeof *a);
+  a->kind = kind;
+  a->name_length = length;
+  memcpy(a->name, name, length);
+  a->fn = fn;
+  a->user = user;
   return GLTANG_OK;
 }
 

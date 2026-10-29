@@ -100,6 +100,7 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   uint32_t halt_at;         // the HALT whose body runs (halt_frame), interpreted or after a compiled return
   GLTANG_Value halt_text;   // a template call's value, made by that body
   GLTANG_Value binary_r;    // a binary operator's result, from its call (one of three paths)
+  GLTANG_Value truth_r;     // the truth of a custom value, from its type (CUSTOM_TRUTH)
 
   if (grcore_stack_frame_count(stack) == 0) {
     if (exec->state != GLTANG_EXECUTION_NEW) {
@@ -161,6 +162,23 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 #define STAND_AT_OP() (exec->standing = true)
 #define STOOD() (exec->standing = false)
 #define PUSH(v) (S[sp++] = (v))
+// The truth of the custom value on top of the operand stack: its type's `truthy`, a GC point where a
+// host callback runs (and may poll). The value stays on the stack during the call, as an operation's
+// operands do; the result is `truth_r` (GLTANG_V_TRUE, GLTANG_V_FALSE, or an error value, which is
+// falsy and the expression's own value). A test of any other kind is gltang_vm_truthy, a pure
+// function, and pays only the kind test above.
+#define CUSTOM_TRUTH() \
+  do { \
+    SYNC(); \
+    SAVE_AT_OP(); \
+    STAND_AT_OP(); \
+    truth_r = gltang_vm_custom_truth(exec, S[sp - 1u]); \
+    STOOD(); \
+    if (truth_r == GLTANG_V_UNWIND) { \
+      goto unwound; \
+    } \
+    RELOAD(); \
+  } while (0)
 #define DROP(n) \
   do { \
     for (size_t drop_i = 0; drop_i < (n); ++drop_i) { \
@@ -386,6 +404,12 @@ resume_loop:
         break;
       }
       case GLTANG_OP_NOT:
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          CUSTOM_TRUTH();
+          // An error the type answered is the value of `!` (it is falsy, and an expression's value).
+          S[sp - 1u] = truth_r == GLTANG_V_TRUE ? GLTANG_V_FALSE : (truth_r == GLTANG_V_FALSE ? GLTANG_V_TRUE : truth_r);
+          break;
+        }
         S[sp - 1u] = gltang_v_from_bool(!gltang_vm_truthy(S[sp - 1u]));
         break;
 
@@ -461,6 +485,14 @@ resume_loop:
         pc = a;
         break;
       case GLTANG_OP_JMP_FALSE: {
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          CUSTOM_TRUTH();
+          S[--sp] = 0;
+          if (truth_r != GLTANG_V_TRUE) {
+            pc = a;
+          }
+          break;
+        }
         GLTANG_Value v = S[--sp];
         S[sp] = 0;
         if (!gltang_vm_truthy(v)) {
@@ -469,6 +501,14 @@ resume_loop:
         break;
       }
       case GLTANG_OP_JMP_TRUE: {
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          CUSTOM_TRUTH();
+          S[--sp] = 0;
+          if (truth_r == GLTANG_V_TRUE) {
+            pc = a;
+          }
+          break;
+        }
         GLTANG_Value v = S[--sp];
         S[sp] = 0;
         if (gltang_vm_truthy(v)) {
@@ -477,6 +517,20 @@ resume_loop:
         break;
       }
       case GLTANG_OP_AND:
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          CUSTOM_TRUTH();
+          if (truth_r != GLTANG_V_TRUE) {
+            // Falsy: the left operand is the value, or the error its type answered in its place.
+            if (truth_r != GLTANG_V_FALSE) {
+              S[sp - 1u] = truth_r;
+            }
+            pc = a;
+          }
+          else {
+            S[--sp] = 0;
+          }
+          break;
+        }
         if (!gltang_vm_truthy(S[sp - 1u])) {
           pc = a;
         }
@@ -485,6 +539,16 @@ resume_loop:
         }
         break;
       case GLTANG_OP_OR:
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          CUSTOM_TRUTH();
+          if (truth_r == GLTANG_V_TRUE) {
+            pc = a;
+          }
+          else {
+            S[--sp] = 0;
+          }
+          break;
+        }
         if (gltang_vm_truthy(S[sp - 1u])) {
           pc = a;
         }
@@ -805,6 +869,14 @@ resume_loop:
             }
             break;
           }
+          else if (gltang_v_is_custom(callee)) {
+            // A callable instance: its type's `call`, the operands where they are on the stack,
+            // as a native's (a GC point; the arguments are copied before it can collect).
+            SAVE_AT_OP();
+            STAND_AT_OP();
+            r = gltang_vm_custom_call(exec, &S[sp - 1u - argc], argc);
+            STOOD();
+          }
           else {
             r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
           }
@@ -930,6 +1002,34 @@ resume_loop:
           S[H + a + 1u] = gltang_v_from_small_int(0);
           S[sp - 1u] = GLTANG_V_TRUE;
         }
+        else if (gltang_v_is_custom(v)) {
+          // A host collection: its type's `iterator_begin` answers the iterator (a custom value
+          // with `iterator_next`, or an array), or the loop's value is the error (a GC point).
+          SYNC();
+          SAVE_AT_OP();
+          STAND_AT_OP();
+          GLTANG_Value it = gltang_vm_custom_iterator_begin(exec, v);
+          STOOD();
+          if (it == GLTANG_V_UNWIND) {
+            goto unwound;
+          }
+          RELOAD();
+          if (gltang_v_is_kind(it, GLTANG_OBJ_ARRAY)) {
+            S[H + a] = it;
+            S[H + a + 1u] = gltang_v_from_small_int(0);
+            S[sp - 1u] = GLTANG_V_TRUE;
+          }
+          else if (gltang_v_is_custom(it)) {
+            // A custom iterator: the second slot is not an integer, which is how ITER_NEXT tells.
+            S[H + a] = it;
+            S[H + a + 1u] = GLTANG_V_NULL;
+            S[sp - 1u] = GLTANG_V_TRUE;
+          }
+          else {
+            gltang_vm_set_result(exec, it, true);
+            S[sp - 1u] = GLTANG_V_FALSE;
+          }
+        }
         else {
           // Only arrays are iterable; a string says so (5.6). The error is
           // the loop's value (13.12: an expression that cannot be iterated is
@@ -948,6 +1048,37 @@ resume_loop:
 
       case GLTANG_OP_ITER_NEXT: {
         size_t target = code[pc++];
+        if (!gltang_v_is_small_int(S[H + a + 1u])) {
+          // A custom iterator (ITER_INIT left a non-integer here): one step of its type's
+          // `iterator_next`, a GC point. The instruction is at pc - 2 (its jump target follows it).
+          exec->current_function = fidx;
+          exec->current_offset = (uint32_t)(pc - 2u);
+          S[GLTANG_F_PC] = pc - 2u;
+          S[GLTANG_F_SP] = sp;
+          STAND_AT_OP();
+          GLTANG_Value item = GLTANG_V_NULL;
+          GLTANG_IterStep step = gltang_vm_custom_iterator_next(exec, S[H + a], &item);
+          STOOD();
+          if (step == GLTANG_ITER_UNWIND) {
+            goto unwound;
+          }
+          RELOAD();
+          if (step == GLTANG_ITER_ITEM) {
+            PUSH(item);
+          }
+          else {
+            pc = target;
+            if (step == GLTANG_ITER_ERROR) {
+              // The error ends the loop and is its value, as an ITER_INIT error is (13.12): the
+              // statement after the loop that clears the result is stepped over.
+              gltang_vm_set_result(exec, item, true);
+              if (GLTANG_INSTRUCTION_OP(code[pc]) == GLTANG_OP_CLEAR_RESULT) {
+                ++pc;
+              }
+            }
+          }
+          break;
+        }
         const GLTANG_ArrayObject * array = gltang_vm_array(S[H + a]);
         int64_t at = gltang_v_small_int(S[H + a + 1u]);
         if ((uint64_t)at < array->length) {
@@ -1052,6 +1183,7 @@ unwound:
 #undef STAND_AT_OP
 #undef STOOD
 #undef PUSH
+#undef CUSTOM_TRUTH
 #undef DROP
 }
 

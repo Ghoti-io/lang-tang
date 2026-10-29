@@ -1,0 +1,15 @@
+# 254 the truth of an error instance makes an engine error
+# defect: an instance marked as an error is falsy because an engine error is made for it (listed, and offered to the error-created hook)
+# caught by: the not-an-engine-error test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -687,7 +687,7 @@
+ GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v) {
+   const GLTANG_CustomObject * custom = gltang_vm_custom(v);
+   if (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) {
+-    // An instance that stands for an error is falsy, and its type is not asked.
++    (void)MAKE_ERROR(GLTANG_ERROR_NOT_SUPPORTED); /* planted: an engine error for it */
+     return GLTANG_V_FALSE;
+   }
+   if (!gltang_type_has(custom->type, GLTANG_TYPE_OP_TRUTHY)) {

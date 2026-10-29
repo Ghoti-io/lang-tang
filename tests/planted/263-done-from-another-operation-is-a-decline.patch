@@ -1,0 +1,15 @@
+# 263 a done from an operation that is not an iterator's next taken as a decline
+# defect: `GLTANG_OP_DONE` from any operation is read as a decline, where it is `Host function failed`
+# caught by: the done-from-anything-but-next test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -358,7 +358,7 @@
+   GLTANG_Value result;
+   bool settle = true;
+   if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {
+-    if (status == GLTANG_OP_DECLINE) {
++    if (status == GLTANG_OP_DECLINE || (status == GLTANG_OP_DONE && !(oc->extra && oc->extra->done))) { /* planted: done is a decline */
+       // A decline: whatever the callback set is dropped, and no value is made.
+       gltang_vm_call_abandon(&call);
+       *declined = true;

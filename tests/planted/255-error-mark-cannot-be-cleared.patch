@@ -1,0 +1,15 @@
+# 255 an error mark that cannot be cleared
+# defect: `gltang_handle_custom_set_error(..., false)` leaves the mark set
+# caught by: the marked-instance tests: the mark is cleared (testCustom_ops)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -772,7 +772,7 @@
+     custom->flags = (uint16_t)(custom->flags | GLTANG_CUSTOM_FLAG_ERROR);
+   }
+   else {
+-    custom->flags = (uint16_t)(custom->flags & ~GLTANG_CUSTOM_FLAG_ERROR);
++    (void)0; /* planted: the mark stays */
+   }
+   return GLTANG_OK;
+ }
