@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -430,7 +430,7 @@
+@@ -440,7 +440,7 @@
    // good; any other status after a request, or a PENDING with none, is `Host function failed`.
    GLTANG_HandleState * const hs = exec->handles;  // made by the first handle, if there is one
    const bool requested = hs && hs->request.made;

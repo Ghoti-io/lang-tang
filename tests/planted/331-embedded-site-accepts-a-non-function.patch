@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -605,7 +605,7 @@
+@@ -615,7 +615,7 @@
      // that stops at the record, and only a Tang function is accepted. The state is held across it,
      // and the answer is held until the next bracket has copied it.
      ++exec->handles->nested_requests;

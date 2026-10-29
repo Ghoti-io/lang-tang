@@ -35,6 +35,16 @@
  * the answer is read while that scope is open. A refused record is the call's
  * value, as for a native.
  *
+ * **A request for guest code is a status too.** A resumable operation (type.h) may answer
+ * GLTANG_OP_PENDING after gltang_call_guest. The bracket then closes like any other, and what the
+ * callback asked for is made into a pending record (pending.c) and handed to the interpreter by
+ * returning GLTANG_V_UNWIND with `exec->request_made` set. When the callee has returned, the
+ * instruction runs again: every callback of the operation whose step is before the record's is
+ * skipped (it declined), and the record's step calls its continuation in a new bracket. The
+ * operation's own code is therefore the step machine, run from its start each time, with no
+ * second copy of it to keep in step. A site with no instruction to run again (`suspend_mode` 0)
+ * runs the request as a nested activation instead.
+ *
  * **A decline is a status.** It is reported to the caller as a flag beside a
  * null value, never as an error object: nothing is allocated for it and the
  * error-created hook never sees it, so a decline cannot halt the run or appear

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -464,7 +464,7 @@
+@@ -474,7 +474,7 @@
          *oc->extra->errored = true;
        }
      }

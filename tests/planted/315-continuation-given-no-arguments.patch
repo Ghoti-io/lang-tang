@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -400,7 +400,7 @@
+@@ -410,7 +410,7 @@
    memset(&call, 0, sizeof(call));
    call.exec = exec;
    call.args = held;

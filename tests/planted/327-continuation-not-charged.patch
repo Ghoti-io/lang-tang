@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -361,7 +361,9 @@
+@@ -371,7 +371,9 @@
      }
    }
    // Charged as a native call; the bytes of a string answer are charged below.

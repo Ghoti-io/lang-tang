@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -497,7 +497,7 @@
+@@ -507,7 +507,7 @@
      }
    }
    else if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {

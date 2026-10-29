@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -517,7 +517,7 @@
+@@ -527,7 +527,7 @@
    }
    if (settle) {
      if (status == GLTANG_OP_OK) {
