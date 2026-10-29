@@ -1198,8 +1198,9 @@ request in the call object and returns `GLTANG_OK`; the callback returns `GLTANG
 operation) or `true` (a native) at once. A type lists the operations that may ask in
 `resumable_ops` (a bit `1u << GLTANG_TYPE_OP_*` each; every operation but `truthy`) and the
 `continuations` table the index names; a library native is marked with
-`gltang_library_mark_resumable`, and a native made at run time is never resumable (an attribute of a
-built-in kind answers a *bound resumable native* when it wants a guest call). The refusals are in
+`gltang_library_mark_resumable` (a native made at run time is marked when it is made,
+`gltang_handle_make_resumable_native`, which is how an attribute of a built-in kind answers a *bound resumable
+native* when it wants a guest call: the attribute function itself is never resumable). The refusals are in
 the header: not resumable, a second request, a bad index, a stale handle, a callee that no `CALL`
 accepts, too many arguments; each returns `GLTANG_ERR_INVALID` and sets `Host function failed`, and a
 `PENDING` with no request, or a request followed by another status, is `Host function failed` too and
