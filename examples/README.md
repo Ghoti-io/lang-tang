@@ -40,6 +40,7 @@ templates also include `library.h`, and `host_values.c` `description.h`.
 | Define a value type of the host's own that a template adds, compares and reads (`price + tip`, `3 + price`, `price.amount`) | [`custom_type.c`](custom_type.c), `main`: `GLTANG_TypeDescriptor`, `gltang_type_registry_add`, `gltang_execution_attach_types` |
 | Make an instance and keep data in it: raw bytes for plain data, a slot for a value | [`custom_type.c`](custom_type.c), `make_money`: `gltang_handle_make_custom`, `gltang_handle_custom_write_bytes`, `gltang_handle_custom_slot_set` |
 | Answer for some operands and decline the rest, so the other side, or the language, decides | [`custom_type.c`](custom_type.c), `money_add` and `money_less`: `GLTANG_OP_DECLINE`, `self_is_lhs` |
+| Let a host function call a Tang function (`map(values, fn)`), with a pause inside the function and a resume | [`guest_calls.c`](guest_calls.c), `map_values` and `map_continue`: `gltang_call_guest`, `gltang_library_mark_resumable` |
 | Register a template and call it from another (`use sidebar; sidebar()`) | [`nested_templates.c`](nested_templates.c), `gltang_library_add_template` |
 | Stop a runaway nav pane at its own boundary and keep the page | [`nested_templates.c`](nested_templates.c), the scope fuel and `GLTANG_SCOPE_EMPTY` |
 | Read the error list: which template, the chain of calls above it, file and line | [`nested_templates.c`](nested_templates.c), `gltang_execution_error` and `_error_chain` |
