@@ -174,7 +174,8 @@ typedef enum {
   GLTANG_OBJ_NATIVE,        ///< A native function, perhaps bound to a value.
   GLTANG_OBJ_TEMPLATE,      ///< A template: a pointer to its library member.
   GLTANG_OBJ_RNG,           ///< A random number generator, its state inline.
-  GLTANG_OBJ_CUSTOM         ///< An instance of a host-defined type (custom.c).
+  GLTANG_OBJ_CUSTOM,        ///< An instance of a host-defined type (custom.c).
+  GLTANG_OBJ_PENDING        ///< A guest call a host callback asked for (pending.c): never a language value.
 } GLTANG_ObjectKind;
 
 typedef struct GLTANG_IntegerObject {
@@ -287,6 +288,41 @@ typedef struct GLTANG_CustomObject {
   GLTANG_Value slots[];         ///< Traced; then the raw bytes.
 } GLTANG_CustomObject;
 
+/**
+ * @brief A suspended host callback: what the engine keeps while the guest call it
+ *   asked for (::gltang_call_guest) runs (pending.c). A heap object, never a
+ *   language value, whose slots are all strong and traced; the records of an
+ *   execution form a chain, innermost first, held by the execution.
+ *
+ * The callback itself is not suspended (it has returned): this holds what the
+ * continuation is called with, the dispatch step it continues, and where the
+ * callee's value goes.
+ */
+typedef struct GLTANG_PendingObject {
+  uint32_t kind;
+  uint16_t slot_count;
+  uint8_t flags;                ///< GLTANG_PENDING_FLAG_*.
+  uint8_t op;                   ///< The GLTANG_TypeOp that asked; GLTANG_TYPE_OP_COUNT for a native.
+  uint16_t step;                ///< The dispatch step of the callback that asked (custom.c).
+  uint16_t request_argc;        ///< Arguments of the requested call, in the slots after the callee.
+  uint32_t continuation;        ///< Index into the owner's continuation table.
+  uint32_t operand_count;       ///< CHAINED only: the callee and arguments of the call this one continues, replayed on delivery.
+  uint32_t depth;               ///< 1 for the oldest record; the record under this one has depth - 1.
+  size_t callee_frame;          ///< The offset of the frame the callee runs in; 0 while it has none.
+  const GLTANG_Type * type;     ///< The type that asked, or NULL for a native. Held by a registry the execution retains.
+  const GLTANG_LibraryMember * member;  ///< The native that asked, or NULL for a type.
+  GLTANG_Value slots[];         ///< state, previous record, result, requested callee, its arguments, then the operands.
+} GLTANG_PendingObject;
+
+/** @brief GLTANG_PendingObject::flags: its value is the result of the call the record below it waits for (a native or a callable instance in the middle of a chain), not an instruction's. */
+#define GLTANG_PENDING_FLAG_CHAINED 0x1u
+/** @brief The fixed slots of a pending record. */
+#define GLTANG_PENDING_STATE 0u
+#define GLTANG_PENDING_PREVIOUS 1u
+#define GLTANG_PENDING_RESULT 2u
+#define GLTANG_PENDING_CALLEE 3u
+#define GLTANG_PENDING_ARGS 4u
+
 /** @brief The instance stands for an error (handle.h): falsy, and it contaminates as an engine error value does, but it is none. */
 #define GLTANG_CUSTOM_FLAG_ERROR 0x1u
 
@@ -343,9 +379,10 @@ struct GLTANG_NativeCall {
   GLTANG_String_Type encoding;
   GLTANG_ErrorKind error;
   bool failed_to_copy;
-  GLTANG_Value resume_state;    ///< A resumable native's state, handed back (0 on the first call).
-  GLTANG_Value callk_function;  ///< Test natives only: the guest function the native wants called before it is called again.
-  GLTANG_Value callk_state;     ///< ... and the state it wants handed back, with that call's value.
+  GLTANG_Value resume_state;    ///< The value a native is bound to (gltang_call_bound); 0 for an unbound one.
+  bool can_request;             ///< The callback may ask for a guest call (gltang_call_guest): resumable, and not a continuation of an opaque one.
+  uint32_t continuation_count;  ///< The entries of the table a request names an index of.
+  uint32_t resume_step;         ///< The dispatch step a continuation continues; 0 on a first entry.
   GLTANG_ValueDescription * built;   ///< The description the native built during the call (gltang_call_description); the call owns it and frees it when it ends.
   GLTANG_ValueDescription * answer;  ///< The description answered: `built`, or one the host keeps and the call has retained.
   uint32_t scope;               ///< The serial of the handle scope this call opened; 0 if it has used no handle.
@@ -444,7 +481,18 @@ typedef struct GLTANG_Activation {
   uint64_t scope_id;            ///< The call's budget scope; 0 for the main program.
   GLTANG_ScopePolicy policy;
   size_t temp_base;             ///< GLTANG_Execution::temp_count when the call began.
+  size_t call_frame;            ///< The offset of the frame the template's top level runs in (a pending record's callee, pending.c).
 } GLTANG_Activation;
+
+/** @brief A guest call a callback has asked for, between ::gltang_call_guest and the callback's return. The values are read from the handles at the request and not held by anything: nothing runs between. */
+typedef struct GLTANG_GuestRequest {
+  bool made;
+  uint32_t continuation;
+  uint32_t argc;
+  GLTANG_Value state;
+  GLTANG_Value callee;
+  GLTANG_Value args[GLTANG_GUEST_CALL_ARGS_MAX];
+} GLTANG_GuestRequest;
 
 /** @brief What the handle API keeps for an execution (handle.c); made when a callback first asks for a handle. */
 typedef struct GLTANG_HandleState {
@@ -473,6 +521,9 @@ typedef struct GLTANG_HandleState {
   const GLTANG_Type * snapshot_refused;   ///< The type that made the last snapshot take refuse, or NULL.
   uint64_t context_serial;                ///< What a registry of thread-unsafe types is bound by (custom.c); 0 until the first attach.
   GLTANG_Value render_failure;            ///< The error a render stopped with (GLTANG_ST_ERROR); read at once, never held across a collection.
+  GLTANG_GuestRequest request;            ///< The request the callback running has made, read at once when it returns (custom.c, libvalue.c).
+  uint64_t nested_requests;               ///< Requests run as a nested activation (a site inside a C loop); zero at every instruction site.
+  uint64_t suspensions;                   ///< Requests that suspended: a pending record was made.
 } GLTANG_HandleState;
 
 struct GLTANG_Execution {
@@ -557,9 +608,15 @@ struct GLTANG_Execution {
   GRCORE_ActivationRef run_base_record;  ///< A nested run's REENTRY record: what it unwinds to.
   GLTANG_Value nested_value;    ///< The value the nested run's entry frame returned.
 
-  // A resumable native's continuation request (test natives only, AD-23).
-  GLTANG_Value callk_function;  ///< The guest function the native wants called, or 0.
-  GLTANG_Value callk_state;     ///< What it wants handed back to it.
+  // Guest calls a host callback asked for (pending.c, AD-23). The records are heap
+  // objects; this is the only C state of a suspension, and it is in the execution,
+  // so a pause, a resume on another thread and an unwind find it.
+  GLTANG_Value pending_top;     ///< The innermost record (GLTANG_PendingObject), or 0. A root.
+  size_t deliver_frame;         ///< The offset of the frame whose return is the innermost record's callee's value; 0 when none (the one word a return tests).
+  size_t run_base_pending;      ///< The record depth at which a nested run began: what it unwinds to.
+  uint8_t suspend_mode;         ///< 0: a request is run as a nested activation (a site inside a C loop, or compiled code); 1: made at an instruction; 2: made by the call a record in the chain waits for.
+  bool request_made;            ///< A callback's request was recorded and GLTANG_V_UNWIND returned for it: the run loop starts the callee instead of unwinding.
+  bool resume_active;           ///< The innermost record's value has been delivered, and the instruction (or call) is being run again to continue from it.
   uint64_t frames_unwound;
   uint64_t native_polls[GLTANG_NATIVE_COUNT]; ///< Polls made for each native.
 
@@ -708,6 +765,7 @@ extern const GRHEAP_Type gltang_type_native;
 extern const GRHEAP_Type gltang_type_template;
 extern const GRHEAP_Type gltang_type_rng;
 extern const GRHEAP_Type gltang_type_custom;
+extern const GRHEAP_Type gltang_type_pending;
 
 /**
  * @brief A static function the compiler is to inline wherever it is called: one body shared by an
@@ -784,6 +842,9 @@ GLTANG_Value gltang_vm_materialize(GLTANG_Execution * exec, const GLTANG_ValueDe
 
 /** @brief The value a handle names in the call's open scope, or 0 with `*ok` false. */
 GLTANG_Value gltang_vm_handle_value(const GLTANG_NativeCall * call, GLTANG_Handle handle, bool * ok);
+
+/** @brief Gives a value a handle in the call's innermost frame (opening the scope if need be); the failure is the call's out-of-memory. */
+GLTANG_Result gltang_vm_handle_push(GLTANG_NativeCall * call, GLTANG_Value v, GLTANG_Handle * out);
 
 /** @brief Closes the scope a call opened: drops its handles, puts the outer scope back. */
 void gltang_vm_scope_close(GLTANG_NativeCall * call);
@@ -1104,6 +1165,43 @@ GLTANG_Value gltang_vm_custom_text(GLTANG_Execution * exec, GLTANG_Value v, bool
  */
 GLTANG_Value gltang_vm_host_attribute(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, bool * found);
 
+// ---------------------------------------------------------------------------
+// Pending records (pending.c)
+// ---------------------------------------------------------------------------
+
+/** @brief What a request needs to become a record. Values that are not in the temporaries are read from memory the collector does not move. */
+typedef struct GLTANG_PendingSpec {
+  const GLTANG_Type * type;
+  const GLTANG_LibraryMember * member;
+  GLTANG_TypeOp op;
+  uint32_t step;
+  uint32_t continuation;
+  bool chained;
+  bool in_temps;                ///< The state, the callee and the arguments are in the temporaries from `temp_base` (the collector keeps them up to date); else in `state`, `callee` and `args`, which the collector does not move.
+  size_t temp_base;
+  GLTANG_Value state;
+  GLTANG_Value callee;
+  const GLTANG_Value * args;
+  size_t argc;
+  const GLTANG_Value * operands;
+  size_t operand_count;
+} GLTANG_PendingSpec;
+
+/** @brief Makes a record and makes it the innermost. A GC point. @return The record, or a failure value (out of memory, or an unwind). */
+GLTANG_Value gltang_vm_pending_push(GLTANG_Execution * exec, const GLTANG_PendingSpec * spec);
+/** @brief Unlinks the innermost record. */
+void gltang_vm_pending_pop(GLTANG_Execution * exec);
+/** @brief Unlinks records until `depth` are left, and ends any delivery or request in flight (an unwind). */
+void gltang_vm_pending_drop_to(GLTANG_Execution * exec, size_t depth);
+/** @brief The number of records. */
+size_t gltang_vm_pending_depth(const GLTANG_Execution * exec);
+/** @brief Says which frame's return is the innermost record's callee's value. */
+void gltang_vm_pending_set_callee_frame(GLTANG_Execution * exec, size_t offset);
+/** @brief Hands the callee's value to the innermost record, and marks the operation as running again from it. */
+void gltang_vm_pending_deliver(GLTANG_Execution * exec, GLTANG_Value result);
+/** @brief The pending heap type's snapshot hook: refuses, naming the owner. */
+GRHEAP_Result gltang_vm_pending_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
+
 /** @brief The custom heap type's snapshot hook: refuses, and records the type (snapshot.c reads it). */
 GRHEAP_Result gltang_vm_custom_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer);
 
@@ -1165,8 +1263,6 @@ GLTANG_Value gltang_vm_native_refused_value(GLTANG_Execution * exec, GRCORE_Resu
  * function is opaque and cannot reach it. A GC point.
  */
 GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function, size_t argc, const GLTANG_Value * args);
-/** @brief A native bound to `state`: what a resumable native's continuation call is made on. A GC point. */
-GLTANG_Value gltang_vm_native_continuation(GLTANG_Execution * exec, GLTANG_Value callee, GLTANG_Value state);
 /** @brief The member of a template value. */
 static inline const GLTANG_LibraryMember * gltang_vm_template_member(GLTANG_Value v) {
   return ((const GLTANG_TemplateObject *)gltang_object(v))->member;

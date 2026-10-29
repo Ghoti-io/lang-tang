@@ -213,6 +213,59 @@ GLTANG_API void gltang_call_return_handle(
  */
 GLTANG_API GLTANG_Result gltang_call_poll(GLTANG_NativeCall * call, uint64_t work);
 
+/** @brief The most arguments one guest call requested with ::gltang_call_guest passes. */
+#define GLTANG_GUEST_CALL_ARGS_MAX 16u
+
+/**
+ * @brief Asks the engine to call guest code and then to call a continuation
+ *   with the result (the resumable protocol, AD-23).
+ *
+ * Only a callback that is resumable may ask: an operation of a type that lists
+ * it in `resumable_ops` (type.h), a native marked with
+ * ::gltang_library_mark_resumable, or a continuation. The callback must
+ * return ::GLTANG_OP_PENDING (an operation) or `true` (a native) at once and
+ * touch nothing but its return: the engine ends the callback there, so no
+ * handle, scope, text pointer or bytes pointer survives it, and the
+ * continuation is given new ones. What the continuation needs is put in
+ * `state`, a value of any kind (a slot of an instance, an array of its
+ * own...).
+ *
+ * The callee is anything a `CALL` accepts, called exactly as a `CALL` calls
+ * it: a function, a native, a template, a callable instance (which may itself
+ * be pending). One that cannot be entered is not a failure of the request: the
+ * error value is its result. A limit that unwinds the run ends it without a
+ * continuation.
+ *
+ * @may_gc
+ * @param call The call.
+ * @param callee A handle of this call.
+ * @param args Handles of this call, `argc` of them.
+ * @param argc At most ::GLTANG_GUEST_CALL_ARGS_MAX.
+ * @param continuation An index into the continuation table of the type (or of
+ *   the native's member).
+ * @param state A handle of this call, or a null handle (all zero) for none.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID, with the call's error set to
+ *   `Host function failed`, when the callback may not ask, has asked already,
+ *   `continuation` is outside the table, a handle is stale or another scope's,
+ *   the callee is not a value a `CALL` accepts, or `argc` is too large.
+ */
+GLTANG_API GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call,
+    GLTANG_Handle callee, const GLTANG_Handle * args, size_t argc,
+    uint32_t continuation, GLTANG_Handle state);
+
+/**
+ * @brief The dispatch step this callback continues: the zero-based index, in
+ *   the order the engine calls them, of the callback within one execution of
+ *   one instruction (`!=` asks `not_equal` of the left, then of the right at
+ *   steps 0 and 1, then `equal` at steps 2 and 3; `print` asks `print` at 0
+ *   and `to_string` at 1; the other operations ask at step 0, and a binary
+ *   operator's reflected operand at 1). It is 0 on a first entry and in a
+ *   native, and in a continuation it is the step that made the request.
+ *
+ * @no_gc
+ */
+GLTANG_API uint32_t gltang_call_resume_step(const GLTANG_NativeCall * call);
+
 /** @} */
 
 /**

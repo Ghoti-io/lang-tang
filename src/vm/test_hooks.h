@@ -65,6 +65,12 @@ void gltang_vm_set_jit_test_switches_unchecked(GLTANG_Execution * execution, boo
 /** Turns off compiled native calls and loads, or makes the native-record seam a GC point. */
 void gltang_vm_set_native_switches_unchecked(GLTANG_Execution * execution, bool natives_off, bool gc_seam);
 
+/** How many guest calls host callbacks asked for are open (pending records) in the execution. */
+uint64_t gltang_vm_test_pending_depth(const GLTANG_Execution * execution);
+
+/** Requests that were run as a nested activation (a site inside a C loop), and requests that suspended (a pending record). */
+void gltang_vm_test_request_counts(const GLTANG_Execution * execution, uint64_t * nested, uint64_t * suspended);
+
 /** How many natives the execution has entered through the shared wrapper, from either tier. */
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 

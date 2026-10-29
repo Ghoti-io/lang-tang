@@ -1,0 +1,15 @@
+# 317 a step before the record's is called again on resume
+# defect: the left operand's callback is entered a second time before the right operand's continuation
+# caught by: the dispatch-step log tests (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -574,7 +574,7 @@
+   stage.nested = false;
+   if (exec->resume_active) {
+     const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+-    if (step < record->step) {
++    if (step < record->step && false) {
+       // An earlier step of the operation: it declined, or the operation would not be here.
+       *declined = true;
+       return GLTANG_V_NULL;

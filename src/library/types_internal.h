@@ -40,37 +40,6 @@
 #include <stdint.h>
 #include <ghoti.io/lang-tang/type.h>
 
-/** @brief The operations of a type, in the order a table hash lists them. */
-typedef enum GLTANG_TypeOp {
-  GLTANG_TYPE_OP_ADD = 0,
-  GLTANG_TYPE_OP_SUBTRACT,
-  GLTANG_TYPE_OP_MULTIPLY,
-  GLTANG_TYPE_OP_DIVIDE,
-  GLTANG_TYPE_OP_MODULO,
-  GLTANG_TYPE_OP_NEGATE,
-  GLTANG_TYPE_OP_LESS,
-  GLTANG_TYPE_OP_LESS_EQUAL,
-  GLTANG_TYPE_OP_GREATER,
-  GLTANG_TYPE_OP_GREATER_EQUAL,
-  GLTANG_TYPE_OP_EQUAL,
-  GLTANG_TYPE_OP_NOT_EQUAL,
-  GLTANG_TYPE_OP_ATTRIBUTE_GET,
-  GLTANG_TYPE_OP_ATTRIBUTE_SET,
-  GLTANG_TYPE_OP_INDEX_GET,
-  GLTANG_TYPE_OP_INDEX_SET,
-  GLTANG_TYPE_OP_SLICE,
-  // Story 6. Appended: a type that implements none of them has the operations
-  // bits, and so the table hash, it had before.
-  GLTANG_TYPE_OP_ITERATOR_BEGIN,
-  GLTANG_TYPE_OP_ITERATOR_NEXT,
-  GLTANG_TYPE_OP_CALL,
-  GLTANG_TYPE_OP_CAST,
-  GLTANG_TYPE_OP_TRUTHY,
-  GLTANG_TYPE_OP_PRINT,
-  GLTANG_TYPE_OP_TO_STRING,
-  GLTANG_TYPE_OP_COUNT
-} GLTANG_TypeOp;
-
 /** @brief A type: the registry's copy of a descriptor, and its identity. */
 struct GLTANG_Type {
   const GLTANG_TypeRegistry * registry;  ///< Not retained: the registry owns the type.
@@ -79,6 +48,9 @@ struct GLTANG_Type {
   size_t name_length;
   uint64_t table_hash;
   uint32_t operations;                   ///< Bit GLTANG_TYPE_OP_* for each operation implemented.
+  uint32_t resumable;                    ///< Bit GLTANG_TYPE_OP_* for each operation that may call guest code (descriptor `resumable_ops`, checked).
+  GLTANG_Continuation * continuations;   ///< The copy of the descriptor's table (one block: entries, then names); NULL when it declares none. Owned.
+  size_t continuation_count;
   GLTANG_TypeDescriptor descriptor;      ///< The copy, `size` the engine's; `name` points at `name` above.
 };
 
@@ -124,6 +96,11 @@ GLTANG_TypeRegistry * gltang_type_registry_attach(GLTANG_TypeRegistry * registry
  *   to it now or before.
  */
 bool gltang_type_registry_bind(GLTANG_TypeRegistry * registry, uint64_t context_serial);
+
+/** @brief Whether an implemented operation of a type may ask for a guest call (type.h). */
+static inline bool gltang_type_resumable(const GLTANG_Type * type, GLTANG_TypeOp op) {
+  return (type->resumable >> (unsigned)op) & 1u;
+}
 
 /** @brief Whether a type implements an operation. */
 static inline bool gltang_type_has(const GLTANG_Type * type, GLTANG_TypeOp op) {

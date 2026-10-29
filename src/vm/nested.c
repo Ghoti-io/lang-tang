@@ -33,7 +33,8 @@
  * it enters compiled code as it does for any function: the compiled frames below
  * the native are described by the record the native's call opened, the nested ones
  * by a record of their own. No public API reaches this; the engine's test natives
- * (testnatives.c) are its only users.
+ * (testnatives.c) are its only users, and the nested route a resumable callback's request takes
+ * where it has no instruction to be run again from (custom.c, libvalue.c).
  */
 
 #include <ghoti.io/lang-tang/macros.h>
@@ -112,6 +113,7 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   GLTANG_Activation * const saved_act = exec->run_base_act;
   const size_t saved_temps = exec->run_base_temps;
   const GRCORE_ActivationRef saved_record = exec->run_base_record;
+  const size_t saved_pending = exec->run_base_pending;
   const uint32_t saved_function = exec->current_function;
   const uint32_t saved_offset = exec->current_offset;
   // An operation of the caller's that stands (a host callback inside it opened this run) stands for
@@ -123,11 +125,15 @@ GLTANG_Value gltang_vm_call_guest(GLTANG_Execution * exec, GLTANG_Value function
   exec->run_base_act = exec->act;
   exec->run_base_temps = exec->temp_count;
   exec->run_base_record = record;
+  // The guest calls host callbacks have asked for that are still open are the callers' own: a
+  // nested run unwinds to this many and no further.
+  exec->run_base_pending = gltang_vm_pending_depth(exec);
   GRCORE_Step step = gltang_vm_run(exec, context);
   exec->run_base_frames = saved_frames;
   exec->run_base_act = saved_act;
   exec->run_base_temps = saved_temps;
   exec->run_base_record = saved_record;
+  exec->run_base_pending = saved_pending;
   exec->current_function = saved_function;
   exec->current_offset = saved_offset;
   exec->standing = saved_standing;

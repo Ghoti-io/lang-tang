@@ -1,0 +1,26 @@
+# 329 a snapshot is taken at a pause with a pending record
+# defect: the refusal is gone from the take and the record's heap hook accepts, so an image holds an owner address
+# caught by: the snapshot-at-a-pause test (testCustom_reentry)
+#
+--- a/src/vm/snapshot.c
++++ b/src/vm/snapshot.c
+@@ -1044,7 +1044,7 @@
+   if (execution->handles && (execution->handles->persistent_live || execution->handles->held_library_count || execution->handles->owned_member_count)) {
+     return GLTANG_ERR_UNSUPPORTED;
+   }
+-  if (execution->pending_top) {
++  if (execution->pending_top && false) {
+     // A pause with a guest call a host callback asked for open: the record names its owner by address,
+     // and an image cannot until story 8 gives host types and natives their by-name hooks (the heap
+     // type's hook, pending.c, refuses the same way). It names the type that asked, when there is one.
+--- a/src/vm/pending.c
++++ b/src/vm/pending.c
+@@ -64,7 +64,7 @@
+   if (exec && exec->handles && !exec->handles->snapshot_refused) {
+     exec->handles->snapshot_refused = record->type;
+   }
+-  return GRHEAP_ERR_INVALID;
++  return GRHEAP_OK;
+ }
+ 
+ static inline GLTANG_PendingObject * record_of(GLTANG_Value v) {

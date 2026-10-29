@@ -1,0 +1,17 @@
+# 314 the state and the result are swapped
+# defect: the continuation is given the callee's value as its state and its state as the result
+# caught by: the map, sort and operation tests (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -588,8 +588,8 @@
+     stage.continuing = true;
+     stage.pop = true;
+     stage.index = record->continuation;
+-    stage.state = record->slots[GLTANG_PENDING_STATE];
+-    stage.result = record->slots[GLTANG_PENDING_RESULT];
++    stage.state = record->slots[GLTANG_PENDING_RESULT];
++    stage.result = record->slots[GLTANG_PENDING_STATE];
+   }
+   size_t mark = SIZE_MAX;
+   for (;;) {

@@ -622,12 +622,15 @@ string answer is copied when it is set, since the function's buffer may be gone
 when it returns. Returning false with nothing set is the error `Host function
 failed`; returning with nothing set is null.
 
-**Rejected: letting a native call guest functions.** It would make the native a
-nested activation that cannot pause, and a pause inside it would have to be
-refused by the poll (AD-5), which is what AD-23 states instead. That stays true of
-the library API a host uses; the engine itself has the two shapes AD-23 names for
-its own natives (a nested activation, and a resumable native), reached only by
-the test natives below.
+**Rejected: letting a native call guest functions as a nested activation.** It
+would make the native a nested activation that cannot pause, and a pause inside it
+would have to be refused by the poll (AD-5), which is what AD-23 states instead.
+What a host gets is the other shape AD-23 names, the *resumable* protocol
+("Guest calls from host callbacks", below): the callback asks for the call and
+returns, and the interpreter makes it. An opaque callback (one that is not marked
+resumable) still cannot call guest code, and a request it makes is refused. The
+nested activation stays for the engine's own test natives and for the sites no
+instruction can run again.
 
 ### Entering a native: one wrapper for both tiers
 
@@ -672,12 +675,10 @@ meets: `depth` and `records` (what the wrapper opened), `echo`, `alloc_ref` and 
 `src/vm/nested.c`: a `REENTRY` record, the function's frame pushed, and the same interpreter
 loop run on it until that frame returns, entering compiled code as it does for any function; a
 pause inside it is an unwind that stops at the record), `deopt` (returns its argument and asks
-compiled code to leave after the call, the status the library names `GRJIT_NATIVE_DEOPT`) and
-`resumable` (the native calls `f` three times and returns the sum; it asks the interpreter,
-which makes each call from its own loop and leaves a native bound to the native's state in the
-caller's frame as the continuation, so a pause inside `f` resumes like any other, and the
-continuation is called again with `f`'s value). A resumable native is reached only through an exit:
-the JIT does not compile a call of a member that is flagged resumable.
+compiled code to leave after the call, the status the library names `GRJIT_NATIVE_DEOPT`) `resumable` (the native calls `f` three times and returns the sum; it is written on the public
+protocol, `gltang_call_guest` and a continuation table, and is the engine's regression fixture of it)
+and `scopes` (the handle frames open while it runs). A resumable native is reached only through an
+exit: the JIT does not compile a call of a member that is flagged resumable.
 
 ### Native values
 
@@ -798,7 +799,7 @@ description built *during a call* is allocated from the context's own allocator,
 not the process's (planted defect 89), so a native that builds an enormous answer
 is refused by the memory budget while it builds, and its description belongs to
 the call: it cannot be retained, and it is freed when the call returns whether it
-was answered or not (the `callk` path included). The native gate has two rows for
+was answered or not (a request for a guest call included). The native gate has two rows for
 `DESCRIPTION_MATERIALIZE`, one a reach in a straight line and one a reach in an
 endless loop of a function that is compiled when every function is.
 
@@ -1183,6 +1184,137 @@ keys and a library's its members. Compiled code reaches the same function (it
 already calls the generic attribute operation for anything but a map).
 
 **Measured.** On the x86-64 build box an add that a type answers costs 118 ns where the interpreter's integer add costs 29 (4.1 times: a native activation record, a handle scope with two handles, the callback and a new instance, and the bracket is the larger part); an attribute read that a type answers costs 84 ns where a map's costs 48 (1.75 times); a constructor that makes an instance costs a native call and a 24-byte allocation (93 ns against 60). Paths that existed before are level: every existing case is within 1% of the commit before this story in instructions (the largest rise +0.21%) and the ten-run wall-clock A/B against it puts none past its spread + 2%. The first cut was not level (three cases over 1%: `gltang_vm_kind` no longer inlined, a kind switch's dispatch changed by an eleventh arm, and the execution struct past a malloc size class), which is why `custom` sits in the `default` arm of those switches and the struct keeps its size.
+
+### Guest calls from host callbacks (the resumable protocol)
+
+*Spec-tang-host-extensibility story 9 (CAP-9, AD-23).* A host callback cannot call guest code
+(it has no frames of its own to save, and a pause inside it would be refused). The protocol that
+makes `map(fn)`, `sort(cmp)`, a callable object that runs a template and an iterator that computes
+each item with a Tang function possible is `lua_callk`'s: the callback *asks* for the call and
+returns, and the engine makes it.
+
+**The request.** `gltang_call_guest(call, callee, args, argc, continuation, state)` records one
+request in the call object and returns `GLTANG_OK`; the callback returns `GLTANG_OP_PENDING` (an
+operation) or `true` (a native) at once. A type lists the operations that may ask in
+`resumable_ops` (a bit `1u << GLTANG_TYPE_OP_*` each; every operation but `truthy`) and the
+`continuations` table the index names; a library native is marked with
+`gltang_library_mark_resumable`, and a native made at run time is never resumable (an attribute of a
+built-in kind answers a *bound resumable native* when it wants a guest call). The refusals are in
+the header: not resumable, a second request, a bad index, a stale handle, a callee that no `CALL`
+accepts, too many arguments; each returns `GLTANG_ERR_INVALID` and sets `Host function failed`, and a
+`PENDING` with no request, or a request followed by another status, is `Host function failed` too and
+runs nothing. The values are read out of the handles at the request into one `GLTANG_GuestRequest`
+(in the handle state, so the execution struct did not grow), and out of there into words the
+callback's activation record still covers while the pending record is made, so a collection there
+cannot move them.
+
+**What a suspension holds.** The bracket (the activation record, the unit of native depth, the
+handle scope, `in_host`) closes at the return of `PENDING`. What stays is one heap object, the
+*pending record* (`GLTANG_OBJ_PENDING`, `src/vm/pending.c`; never a language value; every slot
+strong and traced; stores through the barrier): the owner (the type, or the native's member), the
+operation, the dispatch step, the continuation index, the state, a slot for the callee's value, the
+requested callee and arguments, and, for a record in the middle of a chain, the operands of the call
+it continues. The records form a chain held by the execution (`pending_top`, a root), and the frame
+of the callee is named by one word (`deliver_frame`, a frame offset), which is what the interpreter's
+`RET`, a template's `HALT` and a compiled function's return test: `frame.offset == deliver_frame`,
+a load and a compare, and a return that is not a callee's pays nothing else. Nothing of the callback
+is on the C stack, so a pause (the callee's polls), a resume on any thread, the collector's moves
+and an unwind need nothing of it: an unwind drops the chain (`gltang_vm_pending_drop_to`), so no
+continuation runs and nothing is left; a nested run (AD-23) drops what it opened; a template
+callee whose own budget scope stops is the callee's limit error and is delivered as its value. The
+operands of the instruction stay on the caller's operand stack, as roots, for the whole call.
+Core keeps no activation record while the callee runs (the existing resumable native kept none
+either; `grcore_boundary_*` is the cross-engine record of a later story): the `depth`, `records`
+and `scopes` test natives read the same inside the callee as before the callback, and a test holds
+it.
+
+**Making the call, delivering the value.** `unwound:` in `src/vm/interp.c` first asks
+`exec->request_made`: the callback's request is returned up the C frames as `GLTANG_V_UNWIND`
+(every caller already hands that up unchanged, so no intermediate function changed) with that flag,
+and the loop's `pending:` path starts the callee exactly as a `CALL` does for its kind: a function
+(arity, depth and frame checks; a callee that cannot be entered is the *error value* as the
+callee's result, not a failure of the request), a template (its activation and budget scope), a
+native (marked as the call a record waits for, so a resumable native that asks again chains), a
+callable instance (the same), anything else `Invalid function call`. A value with no frame to run
+in is delivered at once. `deliver:` hands the value to the innermost record and *runs the
+instruction again*, from the saved frame, skipping its fuel (it was charged the first time); if the
+record belongs to a chained call, that call is run again instead and its value goes on to the record
+below. Running the instruction again is what makes the stack effect of every instruction (the drop
+count, the push, the jump target of `ITER_NEXT`, a setter's value) the instruction's own and not a
+second copy of it.
+
+**Dispatch steps.** An operation's callbacks have fixed places in it, and *replay* is how a record
+continues from its own: the operation runs again from the start, a callback whose step is before
+the record's is not called (it declined, or the record would not be at a later step), and the record's
+step calls the continuation, in a new bracket whose call object has the same arguments (`gltang_call_arg`
+and `gltang_call_bound` still work) plus the state and the result as handles. From there the status means
+what it means at first entry: `DECLINE` falls to the next step, `ERROR` is the value, `DONE` ends an
+iterator, `OK` with no answer follows the setter rule, and `PENDING` with a new request chains. The
+table (it is `invoke`'s `step` argument in `src/vm/custom.c`, and `gltang_call_resume_step` answers
+it in a continuation; a first entry answers 0):
+
+| Operation | Steps |
+| --- | --- |
+| `+ - * / %`, `< <= > >=`, `==` | 0 the left operand's operation, 1 the right operand's (reflected) |
+| `!=` | 0, 1 `not_equal` of the left and of the right; then 2, 3 `equal` of the left and of the right |
+| unary `-`, attribute get and set, index get and set, slice, call, `iterator_begin`, `iterator_next`, cast | 0 |
+| `print` | 0 `print`, 1 `to_string` (when `print` declines or the type has none) |
+| `as string` | 0 `cast`, 1 `to_string` (when `cast` declines) |
+
+Each `iterator_next` is its own execution of `ITER_NEXT`, so it is step 0 of that execution: a step is
+the callback's place within one execution of one instruction, not within the whole loop.
+
+**Charging.** The entry callback and every continuation are each charged as a native call plus one unit
+per `GLTANG_WORK_BYTES_PER_FUEL` bytes answered; the request is charged as the `CALL` of its callee is;
+the callee's work is its own; memory is the context's counting allocator (the pending record is a heap
+object); native depth is held while a callback body runs and never while the callee does; guest depth is
+the callee frame's. A callback whose work the guest controls polls the runtime (`gltang_call_poll`).
+
+**The sites that cannot suspend (the audit).** Every caller of `invoke` (`src/vm/custom.c`), and what it
+does with a request:
+
+| Caller | Reached from | A request |
+| --- | --- | --- |
+| `reflect` through `gltang_vm_custom_binary` | the binary and comparison instructions with a custom operand (interpreter) | suspends |
+| the same | the helpers compiled code calls (`natives.c`), after a guard that exits for a custom operand | nested (not reached: the exit comes first) |
+| `gltang_vm_custom_element_equal` | `==` on arrays and maps, per element (`container.c`) | nested |
+| `unary_like`: negate, attribute get and set, index get and set, slice | `NEG`, `ATTR`, `SET_ATTR`, `INDEX`, `SET_INDEX`, `SLICE` | suspends |
+| `unary_like`: attribute get | `use a.b` (`gltang_vm_resolve`, `libvalue.c`) | nested |
+| `gltang_vm_custom_iterator_begin`, `_iterator_next` | `ITER_INIT`, `ITER_NEXT` | suspends |
+| `gltang_vm_custom_call` | `CALL` of an instance; and the call a pending record waits for | suspends; chains |
+| `gltang_vm_custom_cast` | `CAST` | suspends |
+| `gltang_vm_custom_text` | `PRINT` and `CAST` to string of an instance | suspends |
+| `gltang_vm_custom_text` | `gltang_vm_render` of an element inside a container, the text of a container in a concatenation or a cast, a host reading the result | nested |
+| `gltang_vm_custom_truth` | `JMP_*`, `AND`, `OR`, `NOT`, `as bool` | never resumable |
+| `gltang_vm_host_attribute` | an attribute a host added to a built-in kind | never resumable |
+
+The mark is one byte of the execution, `suspend_mode`: the interpreter sets it to 1 around a helper call
+whose primary operand is host-defined (so a built-in pair pays a kind test on the path that already
+tested for a string or a float, and nothing more), `gltang_vm_call_native` sets it for a resumable native the
+interpreter calls (`!compiled`), and the `pending:`/`deliver:` paths set it to 2 around a call a record
+waits for; anywhere else it is 0, which is the safe default, and a request at a 0 site is run as a nested
+activation (`gltang_vm_call_guest`): a Tang function callee only (anything else, and any callee while the
+program is not running, is `Host function failed`), a pause inside is an unwind that stops at the record, and
+a statistic (`nested_requests`) counts them. The corpus test asserts it is zero at every instruction site
+(ledger row D-057 records the departure).
+
+**Compiled code and the JIT.** Unchanged. A call of a resumable member and every operation with a custom
+operand already leave compiled code (`guard_not_custom`, the resumable flag at the member); the interpreter is
+the only tier that services a request, and a request that arrives from a compiled helper runs nested. The
+differential of the fixtures (JIT on against off) gives identical answers, output and errors, and no
+`JIT=yes` statistic gains an exit kind.
+
+**Snapshots.** A snapshot at a pause with a record open is refused (`GLTANG_ERR_UNSUPPORTED`, and
+`gltang_snapshot_refused_type` names the type that asked): the record names its owner by address, and writing it
+by name and version needs a by-name mechanism for host types, which does not exist yet. The pending heap type's
+snapshot hook refuses the same way. The criterion that a pause round-trips is dropped until then.
+
+**The cost of the return test.** `RET`, `HALT` and the return of a compiled function each gained the one
+load and compare above. The standing call-heavy cases (`run-fib-15`, `run-native-call-1000`,
+`run-template-call-200`, `fib-15-jit-default`, `steady-template-compiled-warm-call`) are measured
+before and after in callgrind instructions and in wall clock, and the figures are in the benchmark
+history; compiled code does not return through the interpreter's `RET`, so the compiled cases are
+level by construction.
 
 ### The seed sequence and the generator per context
 
@@ -4068,7 +4200,7 @@ The float work added bookkeeping to the compiled-call hooks, and a claim that in
   a template runs in the interpreter, and its function 0 can be compiled when it
   enters it), of an engine builtin (`random.seeded`, `rng.set_seed`), of a native or
   a function the declaration scan cannot name (a parameter, an array element, a
-  global with no declaration), of a resumable native (the test natives only; reached
+  global with no declaration), of a resumable native (reached
   through an exit by design, AD-23), of a native with sixteen arguments or more
   (runtime-jit's native call takes the callee and fifteen), a load that does not
   yield a host function or a library, and any call with the wrong number of

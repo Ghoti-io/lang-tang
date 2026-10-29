@@ -1,0 +1,15 @@
+# 304 the resumable mask is not consulted when a callback is entered
+# defect: every operation of every type is entered as resumable, whatever resumable_ops says
+# caught by: the opaque-callback misuse test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -403,7 +403,7 @@
+   call.argc = oc->argc;
+   if (oc->op != GLTANG_TYPE_OP_COUNT) {
+     // Only an operation the type listed may ask for a guest call (the attribute of a built-in kind never).
+-    call.can_request = gltang_type_resumable(oc->type, oc->op);
++    call.can_request = true;
+     call.continuation_count = (uint32_t)oc->type->continuation_count;
+   }
+   call.resume_step = stage->continuing ? step : 0u;

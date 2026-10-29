@@ -28,6 +28,7 @@
 
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
+#include "continuations.h"
 #include "library_internal.h"
 
 static char * copy_text(const char * text, size_t length) {
@@ -76,6 +77,7 @@ GLTANG_Library * gltang_library_retain(GLTANG_Library * library) {
 
 static void member_free(GLTANG_LibraryMember * member) {
   gcu_free(member->name);
+  gcu_free(member->continuations);
   gcu_free(member->text);
   gltang_program_release(member->program);
   gltang_library_release(member->library);
@@ -252,16 +254,23 @@ GLTANG_Result gltang_library_add_native(GLTANG_Library * library, const char * n
   return member_commit(library);
 }
 
-GLTANG_Result gltang_library_mark_resumable(GLTANG_Library * library, const char * name) {
-  if (!library || !name || gltang_library_sealed(library)) {
+GLTANG_Result gltang_library_mark_resumable(GLTANG_Library * library, const char * name, const GLTANG_Continuation * continuations, size_t continuation_count) {
+  if (!library || !name || gltang_library_sealed(library) || !gltang_continuations_valid(continuations, continuation_count)) {
     return GLTANG_ERR_INVALID;
   }
   const GLTANG_LibraryMember * found = gltang_library_find(library, name, strlen(name));
-  if (!found || found->kind != GLTANG_MEMBER_NATIVE) {
+  if (!found || found->kind != GLTANG_MEMBER_NATIVE || (found->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE)) {
     return GLTANG_ERR_INVALID;
   }
+  void * block = gcu_calloc(1, gltang_continuations_bytes(continuations, continuation_count));
+  if (!block) {
+    return GLTANG_ERR_OOM;
+  }
+  gltang_continuations_copy(block, continuations, continuation_count);
   // The member is in the library's own array: the const is the reader's.
   GLTANG_LibraryMember * member = &library->members[found - library->members];
+  member->continuations = block;
+  member->continuation_count = continuation_count;
   member->native_flags |= GLTANG_NATIVE_FLAG_RESUMABLE;
   return GLTANG_OK;
 }

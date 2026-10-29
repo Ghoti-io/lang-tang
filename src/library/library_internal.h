@@ -66,7 +66,7 @@ typedef enum {
   GLTANG_BUILTIN_RNG_SET_SEED      ///< `rng.set_seed(n)`: the method of a generator.
 } GLTANG_BuiltinId;
 
-/** @brief ::GLTANG_LibraryMember::native_flags: the native is resumable (AD-23): it asks the interpreter to call guest code and call it again, and is reached only through an exit. */
+/** @brief ::GLTANG_LibraryMember::native_flags: the native is resumable (AD-23, library.h): it asks the interpreter to call guest code and call it again, and is reached only through an exit. */
 #define GLTANG_NATIVE_FLAG_RESUMABLE 1u
 
 /** @brief One member of a library. */
@@ -80,7 +80,9 @@ typedef struct GLTANG_LibraryMember {
   size_t length;
   GLTANG_String_Type encoding;
   GLTANG_NativeFn native;
-  uint32_t native_flags;         ///< GLTANG_NATIVE_FLAG_*: what only the engine's test natives have (src/vm/testnatives.c).
+  uint32_t native_flags;         ///< GLTANG_NATIVE_FLAG_*.
+  GLTANG_Continuation * continuations;   ///< RESUMABLE: the table (one block, entries then names), owned by the library, or by the execution for a native made at run time.
+  size_t continuation_count;
   GLTANG_FactoryFn factory;
   GLTANG_ValueFactoryFn value_factory;   ///< VALUE_FACTORY.
   GLTANG_ValueDescription * description; ///< VALUE: retained, sealed.
@@ -101,9 +103,6 @@ struct GLTANG_Library {
   size_t count;
   size_t capacity;
 };
-
-/** @brief Marks a native member resumable (src/vm/testnatives.c; the library must not be sealed). */
-GLTANG_Result gltang_library_mark_resumable(GLTANG_Library * library, const char * name);
 
 /** @brief The member of this name, or NULL. */
 const GLTANG_LibraryMember * gltang_library_find(

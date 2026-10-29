@@ -642,7 +642,30 @@ static bool integer_argument(GLTANG_Value v) {
  * heap, pause or call guest code through the library's API). Test natives
  * (src/vm/testnatives.c) are host functions that reach the engine's internals.
  */
-static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args) {
+/**
+ * The words a resumable native's frame keeps after the arguments, covered by the record's
+ * conservative segment as the operation brackets' are (custom.c): a continuation's state and
+ * result come in through the first two, and a request goes out through the rest.
+ */
+#define N_STATE 0u
+#define N_RESULT 1u
+#define N_CALLEE 2u
+#define N_ARGS 3u
+#define N_NEXT_STATE (N_ARGS + GLTANG_GUEST_CALL_ARGS_MAX)
+#define N_EXTRA (N_NEXT_STATE + 1u)
+
+/**
+ * The value of a native itself, once its activation record is open: the
+ * engine's own builtins, then a host function (opaque, AD-23: it cannot reach the
+ * heap, pause or call guest code, unless it is marked resumable, in which case it may
+ * ask the interpreter to, through gltang_call_guest). Test natives
+ * (src/vm/testnatives.c) are host functions that reach the engine's internals.
+ *
+ * `extra` is the native's frame past its arguments when it is resumable, else NULL. A request
+ * made at an instruction (or by the call a pending record waits for) becomes a pending record and
+ * the result is GLTANG_V_UNWIND with `request_made` set; made anywhere else it is run nested here.
+ */
+static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, size_t argc, const GLTANG_Value * args, GLTANG_Value * extra) {
   const GLTANG_NativeObject * native = gltang_object(callee);
   switch ((GLTANG_BuiltinId)native->builtin) {
     case GLTANG_BUILTIN_RANDOM_SEEDED:
@@ -672,35 +695,124 @@ static GLTANG_Value run_native(GLTANG_Execution * exec, GLTANG_Value callee, siz
       break;
   }
   const GLTANG_LibraryMember * member = native->member;
-  GLTANG_NativeCall call;
-  memset(&call, 0, sizeof(call));
-  call.exec = exec;
-  call.args = args;
-  call.argc = argc;
-  // A continuation of a resumable native carries the state it asked to be given
-  // back in the value it is bound to.
-  call.resume_state = native->bound;
-  exec->callk_function = 0;
-  // A native that re-entered guest code may have called another native: the outer
-  // one is still running when the inner returns, so the flag goes back as it was.
-  const bool outer_in_host = exec->in_host;
-  exec->in_host = true;
-  bool worked = member->native(&call, member->user);
-  exec->in_host = outer_in_host;
-  if (call.callk_function) {
-    // The native asked for a guest call and to be called again with its result
-    // (AD-23): the interpreter does that, from its own loop, never here.
-    gltang_vm_scope_close(&call);
-    call_finish(&call);
-    exec->callk_function = call.callk_function;
-    exec->callk_state = call.callk_state;
-    exec->native_status = GLTANG_NATIVE_STATUS_OK;
-    return GLTANG_V_NULL;
+  bool continuing = false;
+  uint32_t continuation_index = 0;
+  if (exec->resume_active) {
+    // The call is run again to continue from the pending record: this native's, or a bug.
+    const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+    if (!extra || record->member != member || record->type) {
+      gltang_vm_pending_pop(exec);
+      exec->resume_active = false;
+      return gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+    }
+    continuing = true;
+    continuation_index = record->continuation;
+    extra[N_STATE] = record->slots[GLTANG_PENDING_STATE];
+    extra[N_RESULT] = record->slots[GLTANG_PENDING_RESULT];
+    gltang_vm_pending_pop(exec);
+    exec->resume_active = false;
+    // A continuation is a native call: charged as the call was.
+    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
   }
-  GLTANG_Value result = call_result(exec, &call, worked);
-  // Last, so that a nested call the native made does not leave its own status here.
-  exec->native_status = call.test_status;
-  return result;
+  for (;;) {
+    GLTANG_NativeCall call;
+    memset(&call, 0, sizeof(call));
+    call.exec = exec;
+    call.args = args;
+    call.argc = argc;
+    // The value the native is bound to (gltang_call_bound).
+    call.resume_state = native->bound;
+    if (extra) {
+      call.can_request = true;
+      call.continuation_count = (uint32_t)member->continuation_count;
+    }
+    // A native that re-entered guest code may have called another native: the outer
+    // one is still running when the inner returns, so the flag goes back as it was.
+    const bool outer_in_host = exec->in_host;
+    exec->in_host = true;
+    bool worked;
+    GLTANG_OpStatus status = GLTANG_OP_OK;
+    if (continuing) {
+      GLTANG_Handle h_state;
+      GLTANG_Handle h_result;
+      const bool pushed = gltang_vm_handle_push(&call, extra[N_STATE], &h_state) == GLTANG_OK && gltang_vm_handle_push(&call, extra[N_RESULT], &h_result) == GLTANG_OK;
+      if (pushed) {
+        status = member->continuations[continuation_index].function(&call, member->user, h_state, h_result);
+      }
+      // OK is the value set; ERROR is the error set (`Host function failed` without a kind); DECLINE,
+      // DONE and a PENDING that asked for nothing are `Host function failed`.
+      worked = pushed && status == GLTANG_OP_OK;
+    }
+    else {
+      worked = member->native(&call, member->user);
+    }
+    exec->in_host = outer_in_host;
+    GLTANG_HandleState * hs = exec->handles;
+    const bool requested = hs && hs->request.made;
+    const bool wants = continuing ? status == GLTANG_OP_PENDING : worked;
+    const bool asked = requested && wants && !call.scope_unwind && !call.scope_oom && call.set != GLTANG_CALL_ERROR;
+    if (requested && !asked) {
+      // A request followed by anything else is a failure, and runs nothing.
+      hs->request.made = false;
+      worked = false;
+    }
+    if (!asked) {
+      GLTANG_Value result = call_result(exec, &call, worked);
+      // Last, so that a nested call the native made does not leave its own status here.
+      exec->native_status = call.test_status;
+      return result;
+    }
+    // A guest call was asked for: copy it out of the handles into words the collector does not
+    // move, and close the callback (its scope, handles and text pointers go; its record is left by
+    // the caller of this function, before the interpreter starts the callee).
+    const GLTANG_GuestRequest * request = &hs->request;
+    extra[N_CALLEE] = request->callee;
+    for (uint32_t i = 0; i < request->argc; ++i) {
+      extra[N_ARGS + i] = request->args[i];
+    }
+    extra[N_NEXT_STATE] = request->state;
+    const uint32_t request_argc = request->argc;
+    const uint32_t request_index = request->continuation;
+    hs->request.made = false;
+    gltang_vm_call_abandon(&call);
+    exec->native_status = GLTANG_NATIVE_STATUS_OK;
+    if (exec->suspend_mode != 0) {
+      const bool chained = exec->suspend_mode == 2u;
+      GLTANG_PendingSpec spec = {
+        .type = NULL, .member = member, .op = GLTANG_TYPE_OP_COUNT, .step = 0, .continuation = request_index,
+        .chained = chained, .state = extra[N_NEXT_STATE], .callee = extra[N_CALLEE],
+        .args = &extra[N_ARGS], .argc = request_argc,
+        // The callee then its arguments are contiguous in the frame the caller copied them to.
+        .operands = chained ? args - 1 : NULL, .operand_count = chained ? argc + 1u : 0u,
+      };
+      GLTANG_Value record = gltang_vm_pending_push(exec, &spec);
+      if (record == GLTANG_V_UNWIND || record == exec->roots[GLTANG_ROOT_OOM]) {
+        return record;
+      }
+      ++hs->suspensions;
+      exec->request_made = true;
+      return GLTANG_V_UNWIND;
+    }
+    // Nothing to run again (compiled code called this native): the call is nested, and the
+    // continuation is called in a scope of its own, in the same record.
+    ++hs->nested_requests;
+    if (!gltang_v_is_function(extra[N_CALLEE])) {
+      return gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+    }
+    GLTANG_Value nested_args[GLTANG_GUEST_CALL_ARGS_MAX];
+    for (uint32_t i = 0; i < request_argc; ++i) {
+      nested_args[i] = extra[N_ARGS + i];
+    }
+    GLTANG_Value answer = gltang_vm_call_guest(exec, extra[N_CALLEE], request_argc, nested_args);
+    if (answer == GLTANG_V_UNWIND) {
+      return answer;
+    }
+    extra[N_STATE] = extra[N_NEXT_STATE];
+    extra[N_RESULT] = answer;
+    continuing = true;
+    continuation_index = request_index;
+    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
+  }
 }
 
 #define NATIVE_COPY_MAX 16u
@@ -730,11 +842,14 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
   GLTANG_Value held_small[1u + NATIVE_COPY_MAX] = {0};
   GLTANG_Value * held = held_small;
   size_t held_count = 1u + NATIVE_COPY_MAX;
-  if (argc > NATIVE_COPY_MAX) {
+  // A resumable native keeps the words of a request after its arguments, in the same segment.
+  const GLTANG_NativeObject * object = gltang_object(callee);
+  const bool resumable = object->member && (object->member->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE);
+  if (argc > NATIVE_COPY_MAX || resumable) {
     // More arguments than the frame holds: the copy is made on the heap, zeroed,
     // and is the record's segment all the same, so every argument count is pinned
     // and read from a copy the operand stack's moves cannot reach.
-    held_count = 1u + argc;
+    held_count = 1u + argc + (resumable ? N_EXTRA : 0u);
     held = gcu_calloc(held_count, sizeof(GLTANG_Value));
     if (!held) {
       return exec->roots[GLTANG_ROOT_OOM];
@@ -770,7 +885,14 @@ GLTANG_Value gltang_vm_call_native(GLTANG_Execution * exec, GLTANG_Value callee,
       // this one. The native then finds its arguments where they were copied.
       (void)grheap_collect(exec->heap);
     }
-    result = run_native(exec, held[0], argc, given);
+    // A resumable native the interpreter calls (not one compiled code calls, nor the call a record waits for, which
+    // is already marked) is called at an instruction: a request it makes becomes a pending record.
+    const uint8_t outer_mode = exec->suspend_mode;
+    if (resumable && !compiled && outer_mode == 0) {
+      exec->suspend_mode = 1;
+    }
+    result = run_native(exec, held[0], argc, given, resumable ? &held[1u + argc] : NULL);
+    exec->suspend_mode = outer_mode;
     (void)grcore_activation_leave(stack, record);
   }
 #ifdef GLTANG_WITH_JIT
@@ -823,8 +945,3 @@ bool gltang_vm_test_float_bits(uint64_t value, uint64_t * bits) {
   return true;
 }
 
-GLTANG_Value gltang_vm_native_continuation(GLTANG_Execution * exec, GLTANG_Value callee, GLTANG_Value state) {
-  const GLTANG_NativeObject * native = gltang_object(callee);
-  const GLTANG_LibraryMember * member = native->member;
-  return native_value(exec, member, GLTANG_BUILTIN_NONE, state);
-}

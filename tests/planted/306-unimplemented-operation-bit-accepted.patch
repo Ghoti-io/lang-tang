@@ -1,0 +1,15 @@
+# 306 a descriptor may list an operation it does not implement as resumable
+# defect: the registration check that the mask names implemented operations is gone
+# caught by: the registration checks test (testCustom_reentry)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -222,7 +222,7 @@
+   if (copy.resumable_ops >> (unsigned)GLTANG_TYPE_OP_COUNT) {
+     return GLTANG_ERR_INVALID;
+   }
+-  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY))) {
++  if ((copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY))) {
+     return GLTANG_ERR_INVALID;
+   }
+   const bool has_table = copy.continuations != NULL || copy.continuation_count != 0;

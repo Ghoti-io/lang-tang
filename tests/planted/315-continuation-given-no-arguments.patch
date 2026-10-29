@@ -1,0 +1,15 @@
+# 315 the continuation's call object has no arguments
+# defect: a map continuation has lost the function it is mapping
+# caught by: the map, sort and operation tests (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -400,7 +400,7 @@
+   memset(&call, 0, sizeof(call));
+   call.exec = exec;
+   call.args = held;
+-  call.argc = oc->argc;
++  call.argc = stage->continuing ? 0u : oc->argc;
+   if (oc->op != GLTANG_TYPE_OP_COUNT) {
+     // Only an operation the type listed may ask for a guest call (the attribute of a built-in kind never).
+     call.can_request = gltang_type_resumable(oc->type, oc->op);

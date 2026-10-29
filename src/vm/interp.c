@@ -101,6 +101,11 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   GLTANG_Value halt_text;   // a template call's value, made by that body
   GLTANG_Value binary_r;    // a binary operator's result, from its call (one of three paths)
   GLTANG_Value truth_r;     // the truth of a custom value, from its type (CUSTOM_TRUTH)
+  GLTANG_Value deliver_value;   // the value of a call a pending record waits for, on its way to the record
+  bool deliver_to_record;   // the frame being left is the callee of the innermost pending record
+  uint32_t word;            // the instruction being run
+  GLTANG_Opcode op;
+  uint32_t a;
 
   if (grcore_stack_frame_count(stack) == 0) {
     if (exec->state != GLTANG_EXECUTION_NEW) {
@@ -196,10 +201,11 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 
 resume_loop:
   for (;;) {
-    uint32_t word = code[pc++];
-    GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(word);
-    uint32_t a = GLTANG_INSTRUCTION_A(word);
+    word = code[pc++];
+    op = GLTANG_INSTRUCTION_OP(word);
+    a = GLTANG_INSTRUCTION_A(word);
     exec->pending_fuel += gltang_opcode_cost_table[op];
+  redispatch:  // an instruction run again to continue from a pending record: its fuel was charged the first time
     switch (op) {
       case GLTANG_OP_HALT:
         // The end of the main activation, or of a template call (halt_frame). A compiled
@@ -209,6 +215,7 @@ resume_loop:
       halted:  // only the JIT arm jumps here (an unused label is a warning in the other)
 #endif
         halt_text = GLTANG_V_NULL;
+        deliver_to_record = frame.offset == exec->deliver_frame;
         if (halt_frame(exec, stack, fidx, halt_at, &halt_text)) {
           return GRCORE_STEP_FINISHED;
         }
@@ -216,6 +223,11 @@ resume_loop:
         LOAD_FRAME();
         if (halt_text == GLTANG_V_UNWIND) {
           goto unwound;
+        }
+        if (deliver_to_record) {
+          // A template a host callback asked for: its text is the callee's value.
+          deliver_value = halt_text;
+          goto deliver;
         }
         PUSH(halt_text);
         break;
@@ -261,6 +273,7 @@ resume_loop:
                 // frame included: the interpreter's `HALT` does not ask).
                 goto halted;
               }
+              deliver_to_record = frame.offset == exec->deliver_frame;
               grcore_stack_pop(stack);
               if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
                 // The entry frame of a nested run (AD-23) returned: the native that
@@ -270,6 +283,10 @@ resume_loop:
               }
               frame = grcore_stack_top(stack);
               LOAD_FRAME();
+              if (deliver_to_record) {
+                deliver_value = returned;
+                goto deliver;
+              }
               PUSH(returned);
               break;
             case GLTANG_JIT_DEOPTED:
@@ -401,7 +418,15 @@ resume_loop:
       case GLTANG_OP_NEG: {
         GLTANG_Value v = S[sp - 1u];
         SYNC();
-        GLTANG_Value r = gltang_vm_op_neg(exec, v);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(v)) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_neg(exec, v);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_neg(exec, v);
+        }
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -470,7 +495,16 @@ resume_loop:
         if (gltang_vm_binary_may_pace(x, y)) {
           SAVE_AT_OP();
           STAND_AT_OP();
-          binary_r = gltang_vm_op_binary(exec, op, x, y);
+          if (gltang_v_is_custom(x) || gltang_v_is_custom(y)) {
+            // A host-defined operand: its type's callback may ask for a guest call, which this
+            // instruction then continues from (pending:).
+            exec->suspend_mode = 1;
+            binary_r = gltang_vm_op_binary(exec, op, x, y);
+            exec->suspend_mode = 0;
+          }
+          else {
+            binary_r = gltang_vm_op_binary(exec, op, x, y);
+          }
           STOOD();
         }
         else {
@@ -578,7 +612,15 @@ resume_loop:
           SAVE_AT_OP();
           STAND_AT_OP();
         }
-        GLTANG_Value r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(v)) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
+        }
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -595,7 +637,15 @@ resume_loop:
         // A string's grapheme is a substring, paced by its bytes: stand at the index.
         SAVE_AT_OP();
         STAND_AT_OP();
-        GLTANG_Value r = gltang_vm_op_index(exec, c, i);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(c)) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_index(exec, c, i);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_index(exec, c, i);
+        }
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -616,7 +666,15 @@ resume_loop:
           goto unwound;
         }
         RELOAD();
-        GLTANG_Value r = gltang_vm_op_attr(exec, S[sp - 1u], name);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_attr(exec, S[sp - 1u], name);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_attr(exec, S[sp - 1u], name);
+        }
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -632,7 +690,15 @@ resume_loop:
         // Both passes of a long slice poll inside.
         SAVE_AT_OP();
         STAND_AT_OP();
-        GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(S[sp - 1u - parts])) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
+        }
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -648,7 +714,15 @@ resume_loop:
         GLTANG_Value i = S[sp - 2u];
         GLTANG_Value v = S[sp - 1u];
         SYNC();
-        GLTANG_Value r = gltang_vm_op_set_index(exec, c, i, v, (a & 1u) != 0);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(c)) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_set_index(exec, c, i, v, (a & 1u) != 0);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_set_index(exec, c, i, v, (a & 1u) != 0);
+        }
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -665,7 +739,15 @@ resume_loop:
           goto unwound;
         }
         RELOAD();
-        GLTANG_Value r = gltang_vm_op_set_attr(exec, S[sp - 2u], name, S[sp - 1u], (a & 1u) != 0);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(S[sp - 2u])) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_set_attr(exec, S[sp - 2u], name, S[sp - 1u], (a & 1u) != 0);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_set_attr(exec, S[sp - 2u], name, S[sp - 1u], (a & 1u) != 0);
+        }
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
         }
@@ -736,72 +818,6 @@ resume_loop:
             // the arguments where they are on the operand stack.
             SAVE_AT_OP();
             r = gltang_vm_call_native(exec, callee, argc, &S[sp - argc], false);
-            if (exec->callk_function) {
-              // A resumable native asked for a guest call and to be called again
-              // with its value (AD-23): its continuation is a native bound to the
-              // state it gave, left where the callee was, and the call is made
-              // here, by this loop, so a pause inside it resumes like any other.
-              // The `CALL` itself is run again when the callee returns, finding
-              // the continuation and the value.
-              GLTANG_Value kf = exec->callk_function;
-              // Nothing allocates between the native's return and the continuation
-              // below (which holds the state itself across its allocation), so the
-              // state is not moved in between.
-              GLTANG_Value kstate = exec->callk_state;
-              exec->callk_function = 0;
-              RELOAD();
-              uint64_t ktarget = gltang_v_function_index(kf);
-              if (argc != 1u || !gltang_v_is_function(kf) || ktarget >= program->function_count || program->functions[ktarget].parameter_count != 0) {
-                r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
-                goto call_result;
-              }
-              if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
-                r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
-                goto call_result;
-              }
-              GLTANG_Value k = gltang_vm_native_continuation(exec, S[sp - 2u], kstate);
-              if (k == GLTANG_V_UNWIND || k == exec->roots[GLTANG_ROOT_OOM]) {
-                r = k;
-                goto call_result;
-              }
-              RELOAD();
-              S[sp - 2u] = k;
-              S[sp - 1u] = kf;
-              const GLTANG_Function * kfn = &program->functions[ktarget];
-              SAVE();
-              grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, pc - 1u, exec->engine});
-              GRCORE_FrameRef kframe;
-              GRCORE_Result kpushed = grcore_stack_push(stack, exec->engine, kfn->frame_slots, &kframe);
-              if (kpushed != GRCORE_OK) {
-                if (kpushed == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
-                  goto unwound;
-                }
-                r = exec->roots[GLTANG_ROOT_OOM];
-                goto call_result;
-              }
-              (void)grcore_stack_set_guest_function(stack, kframe, (uint32_t)ktarget);
-              {
-                uint64_t * caller = grcore_stack_slots(stack, frame);
-                uint64_t * callee_slots = grcore_stack_slots(stack, kframe);
-                caller[sp - 1u] = 0;
-                --sp;
-                caller[GLTANG_F_SP] = sp;
-                caller[GLTANG_F_PC] = pc - 1u;
-                callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(GLTANG_FN_PROGRAM(fword), ktarget);
-                callee_slots[GLTANG_F_PC] = 0;
-                callee_slots[GLTANG_F_SP] = H + kfn->local_count;
-                callee_slots[GLTANG_F_FLAGS] = exec->act->depth;
-                frame = kframe;
-                S = callee_slots;
-                fidx = (uint32_t)ktarget;
-                fword = callee_slots[GLTANG_F_FUNCTION];
-                fn = kfn;
-                code = kfn->code;
-                pc = 0;
-                sp = H + kfn->local_count;
-              }
-              break;
-            }
           }
           else if (gltang_v_is_kind(callee, GLTANG_OBJ_TEMPLATE)) {
             const GLTANG_LibraryMember * member = gltang_vm_template_member(callee);
@@ -858,6 +874,7 @@ resume_loop:
             (void)grcore_stack_set_guest_function(stack, callee_frame, 0);
             act->scope_id = scope.id;
             act->policy = member->policy;
+            act->call_frame = callee_frame.offset;
             gltang_vm_activation_enter(exec, act, fidx, (uint32_t)(pc - 1u));
             {
               uint64_t * caller = grcore_stack_slots(stack, frame);
@@ -886,7 +903,9 @@ resume_loop:
             // as a native's (a GC point; the arguments are copied before it can collect).
             SAVE_AT_OP();
             STAND_AT_OP();
+            exec->suspend_mode = 1;
             r = gltang_vm_custom_call(exec, &S[sp - 1u - argc], argc);
+            exec->suspend_mode = 0;
             STOOD();
           }
           else {
@@ -966,6 +985,8 @@ resume_loop:
       case GLTANG_OP_RET: {
         GLTANG_Value v = S[sp - 1u];
         S[sp - 1u] = 0;
+        // The one word a return tests for a guest call a host callback asked for: is this the callee's frame?
+        deliver_to_record = frame.offset == exec->deliver_frame;
         grcore_stack_pop(stack);
         if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
           // The entry frame of a nested run (AD-23) returned.
@@ -974,6 +995,10 @@ resume_loop:
         }
         frame = grcore_stack_top(stack);
         LOAD_FRAME();
+        if (deliver_to_record) {
+          deliver_value = v;
+          goto deliver;
+        }
         PUSH(v);
         break;
       }
@@ -984,7 +1009,15 @@ resume_loop:
         SYNC();
         SAVE_AT_OP();
         STAND_AT_OP();
-        GLTANG_Value r = gltang_vm_op_print(exec, S[sp - 1u]);
+        GLTANG_Value r;
+        if (gltang_v_is_custom(S[sp - 1u])) {
+          exec->suspend_mode = 1;
+          r = gltang_vm_op_print(exec, S[sp - 1u]);
+          exec->suspend_mode = 0;
+        }
+        else {
+          r = gltang_vm_op_print(exec, S[sp - 1u]);
+        }
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound;
@@ -1020,7 +1053,9 @@ resume_loop:
           SYNC();
           SAVE_AT_OP();
           STAND_AT_OP();
+          exec->suspend_mode = 1;
           GLTANG_Value it = gltang_vm_custom_iterator_begin(exec, v);
+          exec->suspend_mode = 0;
           STOOD();
           if (it == GLTANG_V_UNWIND) {
             goto unwound;
@@ -1069,7 +1104,9 @@ resume_loop:
           S[GLTANG_F_SP] = sp;
           STAND_AT_OP();
           GLTANG_Value item = GLTANG_V_NULL;
+          exec->suspend_mode = 1;
           GLTANG_IterStep step = gltang_vm_custom_iterator_next(exec, S[H + a], &item);
+          exec->suspend_mode = 0;
           STOOD();
           if (step == GLTANG_ITER_UNWIND) {
             goto unwound;
@@ -1108,7 +1145,217 @@ resume_loop:
     }
   }
 
+pending: {
+  // A host callback asked for a guest call (gltang_call_guest) and returned: the innermost
+  // pending record holds the request and the rest of the operation, and nothing of the callback
+  // is on the C stack. The callee is entered as a CALL would enter it, from this loop (so a pause
+  // inside it is a pause like any other), and its value is delivered to the record (deliver:).
+  exec->request_made = false;
+  RELOAD();
+  S[GLTANG_F_PC] = exec->current_offset;
+  S[GLTANG_F_SP] = sp;
+  // The request is charged as the CALL of its callee is.
+  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
+  grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});
+  GLTANG_Value pending_r = GLTANG_V_NULL;
+  {
+    const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+    const GLTANG_Value callee = record->slots[GLTANG_PENDING_CALLEE];
+    const size_t argc = record->request_argc;
+    if (gltang_v_is_function(callee)) {
+      uint64_t target = gltang_v_function_index(callee);
+      if (target >= program->function_count) {
+        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+        goto pending_value;
+      }
+      const GLTANG_Function * cf = &program->functions[target];
+      if (cf->parameter_count != argc) {
+        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+        goto pending_value;
+      }
+      if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+        goto pending_value;
+      }
+      GRCORE_FrameRef callee_frame;
+      GRCORE_Result pushed = grcore_stack_push(stack, exec->engine, cf->frame_slots, &callee_frame);
+      if (pushed != GRCORE_OK) {
+        if (pushed == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
+          gltang_vm_pending_pop(exec);
+          goto unwound;
+        }
+        pending_r = exec->roots[GLTANG_ROOT_OOM];
+        goto pending_value;
+      }
+      (void)grcore_stack_set_guest_function(stack, callee_frame, (uint32_t)target);
+      {
+        // The push may have moved the stack and a collection may have moved the record: both are read afresh.
+        record = gltang_object(exec->pending_top);
+        uint64_t * callee_slots = grcore_stack_slots(stack, callee_frame);
+        for (size_t i = 0; i < argc; ++i) {
+          callee_slots[H + i] = record->slots[GLTANG_PENDING_ARGS + i];
+        }
+        callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(GLTANG_FN_PROGRAM(fword), target);
+        callee_slots[GLTANG_F_PC] = 0;
+        callee_slots[GLTANG_F_SP] = H + cf->local_count;
+        callee_slots[GLTANG_F_FLAGS] = exec->act->depth;
+        gltang_vm_pending_set_callee_frame(exec, callee_frame.offset);
+        frame = callee_frame;
+        S = callee_slots;
+        fidx = (uint32_t)target;
+        fword = callee_slots[GLTANG_F_FUNCTION];
+        fn = cf;
+        code = cf->code;
+        pc = 0;
+        sp = H + cf->local_count;
+      }
+      goto resume_loop;
+    }
+    if (gltang_v_is_kind(callee, GLTANG_OBJ_TEMPLATE)) {
+      const GLTANG_LibraryMember * member = gltang_vm_template_member(callee);
+      if (argc != 0) {
+        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+        goto pending_value;
+      }
+      if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+        goto pending_value;
+      }
+      uint32_t callee_program;
+      if (!gltang_vm_program_index(exec, member->program, &callee_program)) {
+        pending_r = exec->roots[GLTANG_ROOT_OOM];
+        goto pending_value;
+      }
+      GLTANG_Activation * act = gltang_vm_activation_new(exec, callee_program, member->name);
+      if (!act) {
+        pending_r = exec->roots[GLTANG_ROOT_OOM];
+        goto pending_value;
+      }
+      const GLTANG_Function * top = &member->program->functions[0];
+      gltang_vm_flush_fuel(exec);
+      GRCORE_BudgetScope scope;
+      GRCORE_ScopePolicy policy = member->policy == GLTANG_SCOPE_PAUSE ? GRCORE_SCOPE_POLICY_PAUSE : GRCORE_SCOPE_POLICY_UNWIND;
+      GRCORE_Result opened = grcore_budget_scope_open(stack, member->scope_fuel, policy, &scope);
+      GRCORE_FrameRef callee_frame;
+      GRCORE_Result pushed = GRCORE_ERR_INTERNAL;
+      if (opened == GRCORE_OK) {
+        pushed = grcore_stack_push(stack, exec->engine, top->frame_slots, &callee_frame);
+        if (pushed != GRCORE_OK) {
+          (void)grcore_budget_scope_close(stack, scope);
+        }
+      }
+      if (opened != GRCORE_OK || pushed != GRCORE_OK) {
+        gltang_vm_activation_free(exec, act);
+        GRCORE_Result refused = opened != GRCORE_OK ? opened : pushed;
+        if (refused == GRCORE_ERR_LIMIT && GLTANG_NATIVE_POLL(exec, CALL_REFUSED, 0) != GLTANG_ST_OK) {
+          gltang_vm_pending_pop(exec);
+          goto unwound;
+        }
+        pending_r = exec->roots[GLTANG_ROOT_OOM];
+        goto pending_value;
+      }
+      (void)grcore_stack_set_guest_function(stack, callee_frame, 0);
+      act->scope_id = scope.id;
+      act->policy = member->policy;
+      act->call_frame = callee_frame.offset;
+      gltang_vm_activation_enter(exec, act, fidx, exec->current_offset);
+      {
+        uint64_t * callee_slots = grcore_stack_slots(stack, callee_frame);
+        callee_slots[GLTANG_F_FUNCTION] = GLTANG_FN_WORD(callee_program, 0);
+        callee_slots[GLTANG_F_PC] = 0;
+        callee_slots[GLTANG_F_SP] = H + top->local_count;
+        callee_slots[GLTANG_F_FLAGS] = act->depth;
+        gltang_vm_pending_set_callee_frame(exec, callee_frame.offset);
+        frame = callee_frame;
+        S = callee_slots;
+        program = member->program;
+        fidx = 0;
+        fword = callee_slots[GLTANG_F_FUNCTION];
+        fn = top;
+        code = top->code;
+        pc = 0;
+        sp = H + top->local_count;
+      }
+      goto resume_loop;
+    }
+    if (gltang_v_is_kind(callee, GLTANG_OBJ_NATIVE)) {
+      // The call a record in the chain waits for (mode 2): a resumable native that asks again chains.
+      exec->suspend_mode = 2;
+      pending_r = gltang_vm_call_native(exec, callee, argc, &record->slots[GLTANG_PENDING_ARGS], false);
+      exec->suspend_mode = 0;
+    }
+    else if (gltang_v_is_custom(callee)) {
+      exec->suspend_mode = 2;
+      pending_r = gltang_vm_custom_call(exec, &record->slots[GLTANG_PENDING_CALLEE], argc);
+      exec->suspend_mode = 0;
+    }
+    else {
+      pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+    }
+  }
+  if (pending_r == GLTANG_V_UNWIND) {
+    if (exec->request_made) {
+      // The call asked for another: its record is the innermost, and chains to this one.
+      goto pending;
+    }
+    gltang_vm_pending_pop(exec);
+    goto unwound;
+  }
+pending_value:
+  if (pending_r == GLTANG_V_UNWIND) {
+    gltang_vm_pending_pop(exec);
+    goto unwound;
+  }
+  deliver_value = pending_r;
+}
+
+deliver:
+  // `deliver_value` is the value of the call the innermost pending record waits for. If that call
+  // was one a record in the chain made (a native, an instance's `call`), it is run again to call
+  // its continuation, and its value goes on to the record below; else the instruction that asked
+  // is run again, finds the record, and continues from the step it holds.
+  for (;;) {
+    if (!exec->pending_top) {
+      // Not reached: a value is delivered only to a record.
+      RELOAD();
+      PUSH(deliver_value);
+      goto resume_loop;
+    }
+    GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+    gltang_vm_pending_deliver(exec, deliver_value);
+    LOAD_FRAME();
+    exec->current_function = fidx;
+    exec->current_offset = (uint32_t)pc;
+    if (record->flags & GLTANG_PENDING_FLAG_CHAINED) {
+      const size_t operands = GLTANG_PENDING_ARGS + record->request_argc;
+      exec->suspend_mode = 2;
+      if (record->type) {
+        deliver_value = gltang_vm_custom_call(exec, &record->slots[operands], record->operand_count - 1u);
+      }
+      else {
+        deliver_value = gltang_vm_call_native(exec, record->slots[operands], record->operand_count - 1u, &record->slots[operands + 1u], false);
+      }
+      exec->suspend_mode = 0;
+      if (deliver_value == GLTANG_V_UNWIND) {
+        if (exec->request_made) {
+          goto pending;
+        }
+        goto unwound;
+      }
+      continue;
+    }
+    word = code[pc];
+    op = GLTANG_INSTRUCTION_OP(word);
+    a = GLTANG_INSTRUCTION_A(word);
+    ++pc;
+    goto redispatch;
+  }
+
 unwound:
+  if (exec->request_made) {
+    // Not an unwind: a host callback asked for a guest call, and a pending record holds the rest.
+    goto pending;
+  }
   // No STOOD() here: every unwind of a standing operation came from a runtime poll inside it, and
   // that poll has already written the identity and ended the stand (gltang_vm_native_poll); an
   // unwind out of a nested run leaves through the operation's own STOOD() after its call.
@@ -1123,6 +1370,17 @@ unwound:
     gltang_vm_error_scope_limit(exec, stopped);
     size_t popped = 0;
     if (grcore_budget_scope_unwind(stack, (GRCORE_BudgetScope){stopped->scope_id}, &popped) == GRCORE_OK) {
+      // A host callback's call that ran in the frames just gone is over with them; the one whose
+      // callee is the template itself takes the limit error as the callee's value.
+      bool to_record = false;
+      exec->resume_active = false;
+      while (exec->pending_top && ((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame >= stopped->call_frame) {
+        if (((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame == stopped->call_frame) {
+          to_record = true;
+          break;
+        }
+        gltang_vm_pending_pop(exec);
+      }
       // The callee's half-built objects are released: whatever it had pinned
       // while it was stopped is let go, and the frames are gone.
       while (exec->temp_count > stopped->temp_base) {
@@ -1141,6 +1399,10 @@ unwound:
       if (value != GLTANG_V_UNWIND) {
         frame = grcore_stack_top(stack);
         LOAD_FRAME();
+        if (to_record) {
+          deliver_value = value;
+          goto deliver;
+        }
         PUSH(value);
         goto resume_loop;
       }
@@ -1157,6 +1419,8 @@ unwound:
   // above its record go, and the native that opened it takes the unwind back to
   // the run that called it.
   const bool nested = exec->run_base_frames != 0;
+  // The guest calls host callbacks asked for that this run opened go with its frames.
+  gltang_vm_pending_drop_to(exec, nested ? exec->run_base_pending : 0u);
   while (exec->act != exec->run_base_act) {
     GLTANG_Activation * open = exec->act;
     gltang_vm_activation_leave(exec, open);

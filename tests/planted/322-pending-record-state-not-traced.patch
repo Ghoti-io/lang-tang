@@ -1,0 +1,15 @@
+# 322 the pending record's state slot is not traced
+# defect: the state a callback named is collected while the callee runs
+# caught by: the collection-while-the-callee-runs tests under torture (testCustom_reentry)
+#
+--- a/src/vm/pending.c
++++ b/src/vm/pending.c
+@@ -47,7 +47,7 @@
+ 
+ static void pending_trace(GRHEAP_Tracer * tracer, void * payload) {
+   GLTANG_PendingObject * object = payload;
+-  for (uint32_t i = 0; i < object->slot_count; ++i) {
++  for (uint32_t i = 1; i < object->slot_count; ++i) {
+     grheap_trace_word(tracer, &object->slots[i]);
+   }
+ }

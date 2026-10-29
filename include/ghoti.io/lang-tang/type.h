@@ -197,6 +197,31 @@
  * `as int|float|string` for its `cast` (and `to_string`); only `as bool` is
  * false without asking.
  *
+ * **Calling guest code (the resumable protocol, AD-23).** An operation a type
+ * lists in `resumable_ops` (a bit `1u << GLTANG_TYPE_OP_*` for each) may ask the
+ * engine to call a function, a template, a native or a callable instance and
+ * to be called again with the result. It makes the request with
+ * ::gltang_call_guest, naming an entry of the type's `continuations` table, and
+ * returns ::GLTANG_OP_PENDING at once and touching nothing but its return. The
+ * engine closes the callback (no scope, handle, text pointer, native-depth unit
+ * or activation record of it is live from then on), runs the callee as a `CALL`
+ * would, and calls the continuation, in a new callback with the same arguments,
+ * with the callee's value. The continuation's status continues the operation
+ * exactly as the original callback's would have: `OK` is the answer, `DECLINE`
+ * falls to the reflected operand (or the next rule), `ERROR` is the error,
+ * `DONE` ends an iterator, and `PENDING` with a new request chains. An error the
+ * callee produced is an ordinary value to the continuation (Tang has no
+ * catchable exception); a callee the run cannot enter (argument count, depth) is
+ * the same error value; a limit that unwinds the run stops it and no continuation
+ * is called. Any operation except `truthy` may be resumable; an operation not
+ * listed is opaque and its request is refused. A callee that is itself a
+ * resumable native or a callable instance whose `call` is pending chains.
+ * A pause inside the callee, and a resume on another thread, need nothing of the
+ * type: nothing of it is on the C stack. Operations the engine reaches from
+ * inside a C loop (the element comparison of an array `==`, the element text of
+ * a container) cannot suspend, and run a request as a nested activation: the
+ * callee must be a Tang function there, and a pause inside it is an unwind.
+ *
  * A snapshot of an execution that holds an instance is refused
  * (::gltang_snapshot_refused_type names the type).
  *
@@ -239,8 +264,69 @@ typedef enum GLTANG_OpStatus {
   GLTANG_OP_OK = 0,   ///< Answered: the value set through the call object.
   GLTANG_OP_DECLINE,  ///< No answer for these operands: the next rule is tried.
   GLTANG_OP_ERROR,    ///< Failed: the error kind set through the call object.
-  GLTANG_OP_DONE      ///< No more items: valid only from an iterator's `iterator_next`; from any other operation it is `Host function failed`.
+  GLTANG_OP_DONE,     ///< No more items: valid only from an iterator's `iterator_next`; from any other operation it is `Host function failed`.
+  GLTANG_OP_PENDING   ///< A guest call was requested with ::gltang_call_guest: return at once. From a callback that made no request, or after one it did not return it from, it is `Host function failed`.
 } GLTANG_OpStatus;
+
+/**
+ * @brief The operations of a type, in the order a table hash lists them. A bit
+ *   of ::GLTANG_TypeDescriptor::resumable_ops is `1u << GLTANG_TYPE_OP_*`.
+ */
+typedef enum GLTANG_TypeOp {
+  GLTANG_TYPE_OP_ADD = 0,
+  GLTANG_TYPE_OP_SUBTRACT,
+  GLTANG_TYPE_OP_MULTIPLY,
+  GLTANG_TYPE_OP_DIVIDE,
+  GLTANG_TYPE_OP_MODULO,
+  GLTANG_TYPE_OP_NEGATE,
+  GLTANG_TYPE_OP_LESS,
+  GLTANG_TYPE_OP_LESS_EQUAL,
+  GLTANG_TYPE_OP_GREATER,
+  GLTANG_TYPE_OP_GREATER_EQUAL,
+  GLTANG_TYPE_OP_EQUAL,
+  GLTANG_TYPE_OP_NOT_EQUAL,
+  GLTANG_TYPE_OP_ATTRIBUTE_GET,
+  GLTANG_TYPE_OP_ATTRIBUTE_SET,
+  GLTANG_TYPE_OP_INDEX_GET,
+  GLTANG_TYPE_OP_INDEX_SET,
+  GLTANG_TYPE_OP_SLICE,
+  GLTANG_TYPE_OP_ITERATOR_BEGIN,
+  GLTANG_TYPE_OP_ITERATOR_NEXT,
+  GLTANG_TYPE_OP_CALL,
+  GLTANG_TYPE_OP_CAST,
+  GLTANG_TYPE_OP_TRUTHY,  ///< Never resumable: its answer is needed at once by a jump.
+  GLTANG_TYPE_OP_PRINT,
+  GLTANG_TYPE_OP_TO_STRING,
+  GLTANG_TYPE_OP_COUNT
+} GLTANG_TypeOp;
+
+/**
+ * @brief The continuation of a guest call (::gltang_call_guest): called with
+ *   the callee's value, in a new callback whose call object has the same
+ *   arguments as the callback that asked.
+ *
+ * @param call The call: answer through it, and make handles in it. Its
+ *   arguments (::gltang_call_arg, ::gltang_call_bound) are those of the entry;
+ *   ::gltang_call_resume_step says which step of the operation asked.
+ * @param user The descriptor's `user` (a type), or the member's (a native).
+ * @param state The handle the request named, or a null handle; in this scope.
+ * @param result The callee's value, in this scope: an error value if the callee
+ *   could not be entered or answered one.
+ * @return What the original callback may return, including ::GLTANG_OP_PENDING
+ *   with a new request. For a native: ::GLTANG_OP_OK answers, ::GLTANG_OP_ERROR
+ *   fails with the kind set, anything else is `Host function failed`.
+ */
+typedef GLTANG_OpStatus (*GLTANG_ContinuationFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle state, GLTANG_Handle result);
+
+/** @brief One entry of a continuation table: its name (a stable identity) and its function. Its index in the table is what ::gltang_call_guest names. */
+typedef struct GLTANG_Continuation {
+  const char * name;             ///< 1 to ::GLTANG_TYPE_NAME_MAX of `[A-Za-z0-9_]`, not starting with a digit, unique in the table. Copied.
+  GLTANG_ContinuationFn function;
+} GLTANG_Continuation;
+
+/** @brief The most continuations one table holds. */
+#define GLTANG_CONTINUATIONS_MAX 256u
 
 /** @brief What a cast converts to (the target of a type's `cast`). */
 typedef enum GLTANG_CastTarget {
@@ -403,6 +489,10 @@ typedef struct GLTANG_TypeDescriptor {
   GLTANG_TypeTruthyFn truthy;                 ///< `if (self)`, `!self`, `self && x`, `self as bool`
   GLTANG_TypePrintFn print;                   ///< `print self`
   GLTANG_TypeToStringFn to_string;            ///< `self as string`, an element's text
+  // Added after story 6 (guest calls); a descriptor sized without them declares nothing resumable.
+  uint32_t resumable_ops;                     ///< A bit `1u << GLTANG_TYPE_OP_*` for each operation that may call guest code; not `truthy`, and only an operation the type implements.
+  const GLTANG_Continuation * continuations;  ///< The table ::gltang_call_guest names an index of; copied. Needed when `resumable_ops` is not 0.
+  size_t continuation_count;                  ///< Entries of `continuations`, at most ::GLTANG_CONTINUATIONS_MAX.
 } GLTANG_TypeDescriptor;
 
 /** @brief The smallest `size` a descriptor may state: every member of this first version. */
@@ -418,7 +508,7 @@ typedef struct GLTANG_TypeDescriptor {
  * `{.size = ...}` both draw `-Wmissing-field-initializers` from g++ (C accepts
  * the designated form, C++17 has none). A member added later is added here too.
  */
-#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0u, NULL, 0u}
 
 /**
  * @brief Creates an empty registry with a reference count of one.
@@ -521,8 +611,10 @@ GLTANG_API uint32_t gltang_type_byte_count(const GLTANG_Type * type);
 
 /**
  * @brief The type's table hash: a function of its name, version, slot count,
- *   byte count, `thread_safe` and the set of operations it implements. Never
- *   of an address, so the same descriptor gives the same hash in every process.
+ *   byte count, `thread_safe` and the set of operations it implements and, when it
+ *   declares any, its resumable mask, and the count, index and name of each
+ *   continuation. Never of an address, so the same descriptor gives the same hash in
+ *   every process; a descriptor that declares no guest calls hashes as it always did.
  */
 GLTANG_API uint64_t gltang_type_table_hash(const GLTANG_Type * type);
 

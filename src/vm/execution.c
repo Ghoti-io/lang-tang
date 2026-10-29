@@ -433,6 +433,8 @@ static void enumerate_roots(GRCORE_Context * context, void * value, const GRCORE
   for (size_t i = 0; i < exec->temp_count; ++i) {
     visitor->slot(visitor->user, &exec->temps[i]);
   }
+  // The innermost pending record (a guest call a host callback asked for), which holds the rest.
+  visitor->slot(visitor->user, &exec->pending_top);
 #ifdef GLTANG_WITH_JIT
   // The float boxes made ahead of time for the rebuild's conversions.
   gltang_jit_enumerate_roots(exec, visitor);

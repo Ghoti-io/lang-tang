@@ -1,0 +1,15 @@
+# 332 compiled code calls a resumable native
+# defect: the exit at a resumable member is lost, so the native is entered from compiled code with no instruction to suspend at
+# caught by: the resumable-native-is-an-exit test (testNative_calls)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -930,7 +930,7 @@
+     return NULL;
+   }
+   const GLTANG_LibraryMember * member = static_member(c, producer, 0);
+-  return member && member->kind == GLTANG_MEMBER_NATIVE && !(member->native_flags & GLTANG_NATIVE_FLAG_RESUMABLE) ? member : NULL;
++  return member && member->kind == GLTANG_MEMBER_NATIVE ? member : NULL;
+ }
+ 
+ /** Marks the instructions a jump lands on. The one two-word instruction is skipped over. */

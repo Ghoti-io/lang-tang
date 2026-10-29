@@ -36,9 +36,10 @@
  *   unwind of this call.
  * - `deopt(x)`: returns x and asks compiled code to leave after the call (the
  *   status the library names `GRJIT_NATIVE_DEOPT`).
- * - `resumable(f)`: f() + f() + f(), the first two of them called by the
- *   interpreter on the native's behalf, with its state in a guest frame (AD-23); it
- *   is reached only through an exit.
+ * - `resumable(f)`: f() + f() + f(), each called by the interpreter on the native's
+ *   behalf through the public resumable protocol (gltang_call_guest, AD-23); it is
+ *   reached only through an exit. Kept as the engine's regression fixture of the protocol.
+ * - `scopes()`: the handle frames open while the native runs (none belongs to a suspended callback).
  * - `after(f)`: calls the guest function f as a nested activation, and returns 1 if
  *   the native is still inside a host function once that has returned (it is: a
  *   native f called must not have cleared the flag the public setters read), else 0.
@@ -59,7 +60,8 @@ typedef enum {
   TEST_NATIVE_REENTER,
   TEST_NATIVE_DEOPT,
   TEST_NATIVE_RESUMABLE,
-  TEST_NATIVE_AFTER
+  TEST_NATIVE_AFTER,
+  TEST_NATIVE_SCOPES
 } TestNative;
 
 static void return_value(GLTANG_NativeCall * call, GLTANG_Value value) {
@@ -75,44 +77,49 @@ static bool is_array(GLTANG_Value v) {
   return gltang_v_is_kind(v, GLTANG_OBJ_ARRAY);
 }
 
+/*
+ * `resumable(f)`: f() + f() + f(), written on the public protocol (handle.h, library.h): the first
+ * entry asks for f() and names the continuation; the continuation adds the value to the sum kept
+ * in its state (an array [calls made, sum so far]) and asks again, or answers. It is the engine's
+ * regression fixture for the protocol, and the first user of it.
+ */
+static bool resumable_ask(GLTANG_NativeCall * call, GLTANG_Handle function, GLTANG_Handle state) {
+  return gltang_call_guest(call, function, NULL, 0, 0, state) == GLTANG_OK;
+}
+
 static bool resumable(GLTANG_NativeCall * call) {
-  GLTANG_Execution * exec = call->exec;
   if (call->argc != 1u) {
     gltang_call_return_error(call, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
     return true;
   }
-  // The state is an array [function, calls made, sum so far], bound to the
-  // continuation the interpreter leaves in the caller's frame.
-  GLTANG_Value function = GLTANG_V_NULL;
-  int64_t made = 0;
-  int64_t sum = 0;
-  if (call->resume_state) {
-    if (!is_array(call->resume_state) || !gltang_v_is_small_int(call->args[0])) {
-      gltang_call_return_error(call, GLTANG_ERROR_INVALID_FUNCTION_CALL);
-      return true;
-    }
-    const GLTANG_ArrayObject * state = gltang_vm_array(call->resume_state);
-    function = state->store.typed->slots[0];
-    made = gltang_v_small_int(state->store.typed->slots[1]) + 1;
-    sum = gltang_v_small_int(state->store.typed->slots[2]) + gltang_v_small_int(call->args[0]);
-    if (made >= 3) {
-      gltang_call_return_integer(call, sum);
-      return true;
-    }
+  GLTANG_Handle function, state, count, sum;
+  if (gltang_call_arg(call, 0, &function) != GLTANG_OK || gltang_handle_make_array(call, 2, &state) != GLTANG_OK || gltang_handle_make_integer(call, 0, &count) != GLTANG_OK ||
+      gltang_handle_make_integer(call, 0, &sum) != GLTANG_OK || gltang_handle_array_push(call, state, count) != GLTANG_OK || gltang_handle_array_push(call, state, sum) != GLTANG_OK) {
+    return false;
   }
-  else {
-    function = call->args[0];
+  return resumable_ask(call, function, state);
+}
+
+static GLTANG_OpStatus resumable_continue(GLTANG_NativeCall * call, void * user, GLTANG_Handle state, GLTANG_Handle result) {
+  (void)user;
+  GLTANG_Handle function, count, sum;
+  if (gltang_call_arg(call, 0, &function) != GLTANG_OK || gltang_handle_kind(call, result) != GLTANG_KIND_INTEGER || gltang_handle_array_get(call, state, 0, &count) != GLTANG_OK ||
+      gltang_handle_array_get(call, state, 1, &sum) != GLTANG_OK) {
+    gltang_call_return_error(call, GLTANG_ERROR_INVALID_FUNCTION_CALL);
+    return GLTANG_OP_ERROR;
   }
-  GLTANG_Value state = gltang_vm_array_new(exec, 3);
-  if (!is_array(state)) {
-    return_value(call, state);
-    return true;
+  const int64_t made = gltang_handle_integer(call, count) + 1;
+  const int64_t total = gltang_handle_integer(call, sum) + gltang_handle_integer(call, result);
+  if (made >= 3) {
+    gltang_call_return_integer(call, total);
+    return GLTANG_OP_OK;
   }
-  const GLTANG_Value fill[3] = {function, gltang_v_from_small_int(made), gltang_v_from_small_int(sum)};
-  gltang_vm_array_fill(exec, state, fill, 3);
-  call->callk_function = function;
-  call->callk_state = state;
-  return true;
+  GLTANG_Handle next, c, t;
+  if (gltang_handle_make_array(call, 2, &next) != GLTANG_OK || gltang_handle_make_integer(call, made, &c) != GLTANG_OK || gltang_handle_make_integer(call, total, &t) != GLTANG_OK ||
+      gltang_handle_array_push(call, next, c) != GLTANG_OK || gltang_handle_array_push(call, next, t) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  return resumable_ask(call, function, next) ? GLTANG_OP_PENDING : GLTANG_OP_ERROR;
 }
 
 static bool test_native(GLTANG_NativeCall * call, void * user) {
@@ -172,6 +179,11 @@ static bool test_native(GLTANG_NativeCall * call, void * user) {
       return true;
     case TEST_NATIVE_RESUMABLE:
       return resumable(call);
+    case TEST_NATIVE_SCOPES:
+      // The handle frames open while this native runs: its own, if it has asked for a handle (it has not), and
+      // those of any callback that is suspended (none: a suspension keeps no scope).
+      gltang_call_return_integer(call, (int64_t)(exec->handles ? exec->handles->frame_count : 0));
+      return true;
     case TEST_NATIVE_AFTER: {
       (void)gltang_vm_call_guest(exec, arg(call, 0), 0, NULL);
       gltang_call_return_integer(call, exec->in_host ? 1 : 0);
@@ -184,7 +196,8 @@ static bool test_native(GLTANG_NativeCall * call, void * user) {
 GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * name, int kind) {
   GLTANG_Result r = gltang_library_add_native(library, name, test_native, (void *)(uintptr_t)kind);
   if (r == GLTANG_OK && kind == (int)TEST_NATIVE_RESUMABLE) {
-    r = gltang_library_mark_resumable(library, name);
+    static const GLTANG_Continuation table[] = {{"resumable_continue", resumable_continue}};
+    r = gltang_library_mark_resumable(library, name, table, 1);
   }
   return r;
 }

@@ -1,0 +1,15 @@
+# 326 ITER_NEXT run again does not step over its own word
+# defect: the jump target of ITER_NEXT is read from the instruction itself after a continuation
+# caught by: the computed-iterator test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1347,7 +1347,7 @@
+     word = code[pc];
+     op = GLTANG_INSTRUCTION_OP(word);
+     a = GLTANG_INSTRUCTION_A(word);
+-    ++pc;
++    pc += op == GLTANG_OP_ITER_NEXT ? 0u : 1u;
+     goto redispatch;
+   }
+ 

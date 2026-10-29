@@ -1,0 +1,14 @@
+# 333 a template callee stopped by its own budget is not the callee's value
+# defect: the limit error is pushed for the instruction and the pending record is left behind
+# caught by: the template-callee-limit test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1376,7 +1376,6 @@
+       exec->resume_active = false;
+       while (exec->pending_top && ((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame >= stopped->call_frame) {
+         if (((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame == stopped->call_frame) {
+-          to_record = true;
+           break;
+         }
+         gltang_vm_pending_pop(exec);

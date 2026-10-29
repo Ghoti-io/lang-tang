@@ -1,0 +1,15 @@
+# 313 a callee that cannot be entered ends the run
+# defect: the error value of a callee refused for its arguments is taken for an unwind, so the continuation is not called
+# caught by: the callee-that-cannot-be-entered test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1302,7 +1302,7 @@
+     goto unwound;
+   }
+ pending_value:
+-  if (pending_r == GLTANG_V_UNWIND) {
++  if (pending_r == GLTANG_V_UNWIND || gltang_vm_is_error(pending_r)) {
+     gltang_vm_pending_pop(exec);
+     goto unwound;
+   }

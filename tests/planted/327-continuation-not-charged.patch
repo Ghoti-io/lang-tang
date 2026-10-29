@@ -1,0 +1,17 @@
+# 327 a continuation is not charged as a native call
+# defect: the continuation runs for free
+# caught by: the golden fuel totals test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -361,7 +361,9 @@
+     }
+   }
+   // Charged as a native call; the bytes of a string answer are charged below.
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
++  if (!stage->continuing) {
++    exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
++  }
+ #ifdef GLTANG_WITH_JIT
+   // From a helper that compiled code called (a cast, a print, a host attribute of a string), the
+   // native-depth units its open records hold are handed back for the call, as for a native

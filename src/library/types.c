@@ -33,6 +33,7 @@
 
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
+#include "continuations.h"
 #include "types_internal.h"
 
 /** The id of the next registry: process-wide, counted up, never reused. */
@@ -69,6 +70,7 @@ void gltang_type_registry_release(GLTANG_TypeRegistry * registry) {
   // happen before the free.
   if (atomic_fetch_sub_explicit(&registry->references, 1, memory_order_acq_rel) == 1) {
     for (size_t i = 0; i < registry->count; ++i) {
+      gcu_free(registry->types[i]->continuations);
       gcu_free(registry->types[i]);
     }
     gcu_free(registry->types);
@@ -152,6 +154,11 @@ static uint64_t table_hash(const GLTANG_Type * t) {
   h = fnv_u64(h, t->descriptor.byte_count);
   h = fnv_u64(h, t->descriptor.thread_safe ? 1u : 0u);
   h = fnv_u64(h, t->operations);
+  if (t->resumable || t->continuation_count) {
+    // Only a type that declares guest calls folds them in: one that does not hashes as it always did.
+    h = fnv_u64(h, t->resumable);
+    h = gltang_continuations_hash(h, t->continuations, t->continuation_count);
+  }
   return h;
 }
 
@@ -210,6 +217,18 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
   if (gltang_type_registry_find(registry, copy.name, copy.version)) {
     return GLTANG_ERR_INVALID;
   }
+  const uint32_t operations = operations_of(&copy);
+  // Guest calls: the mask names implemented operations other than `truthy`, and a table to ask them with.
+  if (copy.resumable_ops >> (unsigned)GLTANG_TYPE_OP_COUNT) {
+    return GLTANG_ERR_INVALID;
+  }
+  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY))) {
+    return GLTANG_ERR_INVALID;
+  }
+  const bool has_table = copy.continuations != NULL || copy.continuation_count != 0;
+  if ((copy.resumable_ops || has_table) && !gltang_continuations_valid(copy.continuations, copy.continuation_count)) {
+    return GLTANG_ERR_INVALID;
+  }
   if (registry->count == registry->capacity) {
     size_t grown = registry->capacity ? registry->capacity * 2u : 8u;
     GLTANG_Type ** bigger = gcu_realloc(registry->types, grown * sizeof(*bigger));
@@ -230,7 +249,19 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
   type->name_length = name_length;
   type->descriptor = copy;
   type->descriptor.name = type->name;
-  type->operations = operations_of(&type->descriptor);
+  type->operations = operations;
+  type->resumable = copy.resumable_ops;
+  if (has_table) {
+    void * block = gcu_calloc(1, gltang_continuations_bytes(copy.continuations, copy.continuation_count));
+    if (!block) {
+      gcu_free(type);
+      return GLTANG_ERR_OOM;
+    }
+    gltang_continuations_copy(block, copy.continuations, copy.continuation_count);
+    type->continuations = block;
+    type->continuation_count = copy.continuation_count;
+    type->descriptor.continuations = type->continuations;
+  }
   type->table_hash = table_hash(type);
   registry->types[registry->count++] = type;
   registry->bindable = registry->bindable || !copy.thread_safe;

@@ -1547,6 +1547,147 @@ static uint64_t builtin_string_attr_with_registry_run(uint64_t iterations, doubl
 }
 #endif /* GLTANG_BENCH_NO_TYPE_OPERATIONS */
 
+#ifndef GLTANG_BENCH_NO_GUEST_CALLS
+/*
+ * The cases of spec-tang-host-extensibility story 9 (a host callback that calls guest code). A
+ * resumable native `mapn(n, f)` is the hot loop CAP-9 names: one request, one callee frame and one
+ * continuation per element, against the same loop written in Tang and the loop a host writes
+ * today, around a native that answers each index. A callable instance whose `call` runs a template
+ * is the case "obj(1) runs a template" against a plain template call; the pause-and-resume case is
+ * the map paused every 500 units of fuel; the chain case recurses through `mapn` to a depth of 200.
+ * A build without the story leaves them out (GLTANG_BENCH_NO_GUEST_CALLS).
+ */
+static GLTANG_OpStatus bench_mapn_continue(GLTANG_NativeCall * call, void * user, GLTANG_Handle state, GLTANG_Handle result) {
+  (void)user;
+  GLTANG_Handle f;
+  if (gltang_call_arg(call, 1, &f) != GLTANG_OK || gltang_handle_array_push(call, state, result) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  const size_t done = gltang_handle_array_length(call, state);
+  if ((int64_t)done >= gltang_call_integer(call, 0)) {
+    gltang_call_return_handle(call, state);
+    return GLTANG_OP_OK;
+  }
+  GLTANG_Handle next;
+  if (gltang_handle_make_integer(call, (int64_t)done, &next) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  return gltang_call_guest(call, f, &next, 1, 0, state) == GLTANG_OK ? GLTANG_OP_PENDING : GLTANG_OP_ERROR;
+}
+
+static const GLTANG_Continuation bench_mapn_table[] = {{"continue", bench_mapn_continue}};
+
+static bool bench_mapn(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle f, zero, results;
+  if (gltang_call_arg(call, 1, &f) != GLTANG_OK || gltang_handle_make_integer(call, 0, &zero) != GLTANG_OK || gltang_handle_make_array(call, 0, &results) != GLTANG_OK) {
+    return false;
+  }
+  return gltang_call_guest(call, f, &zero, 1, 0, results) == GLTANG_OK;
+}
+
+static GLTANG_OpStatus bench_view_call(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, const GLTANG_Handle * args, size_t argc) {
+  (void)user;
+  (void)args;
+  (void)argc;
+  GLTANG_Handle t;
+  const GLTANG_Handle none = {0, 0};
+  if (gltang_handle_custom_slot_get(call, self, 0, &t) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  return gltang_call_guest(call, t, NULL, 0, 0, none) == GLTANG_OK ? GLTANG_OP_PENDING : GLTANG_OP_ERROR;
+}
+
+static GLTANG_OpStatus bench_view_continue(GLTANG_NativeCall * call, void * user, GLTANG_Handle state, GLTANG_Handle result) {
+  (void)user;
+  (void)state;
+  gltang_call_return_handle(call, result);
+  return GLTANG_OP_OK;
+}
+
+static const GLTANG_Continuation bench_view_table[] = {{"continue", bench_view_continue}};
+static const GLTANG_Type * bench_view;
+
+static bool bench_make_view(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle h, t;
+  if (gltang_handle_make_custom(call, bench_view, &h) != GLTANG_OK || gltang_call_arg(call, 0, &t) != GLTANG_OK || gltang_handle_custom_slot_set(call, h, 0, t) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
+static GLTANG_TypeRegistry * bench_view_types(void) {
+  static GLTANG_TypeRegistry * registry;
+  if (!registry) {
+    GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "view";
+    d.version = 1;
+    d.slot_count = 1;
+    d.thread_safe = true;
+    d.call = bench_view_call;
+    d.resumable_ops = 1u << GLTANG_TYPE_OP_CALL;
+    d.continuations = bench_view_table;
+    d.continuation_count = 1;
+    if (gltang_type_registry_create(&registry) != GLTANG_OK || gltang_type_registry_add(registry, &d, &bench_view) != GLTANG_OK) {
+      setup_failed("the view type");
+    }
+  }
+  return registry;
+}
+
+static void setup_guest(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create(NULL, &library) != GLTANG_OK
+      || gltang_library_add_native(library, "inc", bench_increment, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "mapn", bench_mapn, NULL) != GLTANG_OK
+      || gltang_library_mark_resumable(library, "mapn", bench_mapn_table, 1) != GLTANG_OK
+      || gltang_library_add_native(library, "view", bench_make_view, NULL) != GLTANG_OK
+      || gltang_library_add_template(library, "t", bench_template(), 100000, GLTANG_SCOPE_EMPTY) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, library) != GLTANG_OK
+      || gltang_execution_attach_types(execution, bench_view_types()) != GLTANG_OK) {
+    setup_failed("the guest-call library");
+  }
+  gltang_library_release(library);
+}
+
+static uint64_t guest_case(const char * source, int64_t expected, uint64_t iterations, double * elapsed, uint64_t poll_every) {
+  have_expected_integer = 1;
+  expected_integer = expected;
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, poll_every, setup_guest);
+  have_expected_integer = 0;
+  return sink;
+}
+
+#define GUEST_MAP_SOURCE "use mapn; function sq(x) { return x + 1; } r = mapn(1000, sq); r.size;"
+
+static uint64_t reentry_map_resumable_run(uint64_t iterations, double * elapsed) {
+  return guest_case(GUEST_MAP_SOURCE, 1000, iterations, elapsed, 0);
+}
+
+static uint64_t reentry_map_tang_loop_run(uint64_t iterations, double * elapsed) {
+  return guest_case("function sq(x) { return x + 1; } a = []; for (i = 0; i < 1000; i += 1) { a[i] = sq(i); } a.size;", 1000, iterations, elapsed, 0);
+}
+
+static uint64_t reentry_map_host_loop_run(uint64_t iterations, double * elapsed) {
+  /* What a host does without the protocol: the host function answers each element, and the Tang loop calls the function. */
+  return guest_case("use inc; function sq(x) { return x + 1; } a = []; for (i = 0; i < 1000; i += 1) { a[i] = sq(inc(i)); } a.size;", 1000, iterations, elapsed, 0);
+}
+
+static uint64_t reentry_callable_template_run(uint64_t iterations, double * elapsed) {
+  return guest_case("use view; use t; v = view(t); n = 0; for (i = 0; i < 200; i += 1) { n += v().length; } n;", 2600, iterations, elapsed, 0);
+}
+
+static uint64_t reentry_pause_resume_run(uint64_t iterations, double * elapsed) {
+  return guest_case(GUEST_MAP_SOURCE, 1000, iterations, elapsed, 500);
+}
+
+static uint64_t reentry_chain_run(uint64_t iterations, double * elapsed) {
+  return guest_case("d = 0; function down(i) { global d; use mapn; d += 1; if (d >= 200) { return d; } r = mapn(1, down); return r[0]; } r = down(0); r;", 200, iterations, elapsed, 0);
+}
+#endif /* GLTANG_BENCH_NO_GUEST_CALLS */
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -2752,6 +2893,14 @@ static const Case cases[] = {
     {"custom-to-string-1000", custom_to_string_run, 2000u, 5u},
     {"host-string-attribute-read-1000", host_string_attr_run, 2000u, 5u},
     {"builtin-string-attribute-read-1000-registry-attached", builtin_string_attr_with_registry_run, 5000u, 5u},
+#endif
+#ifndef GLTANG_BENCH_NO_GUEST_CALLS
+    {"reentry-map-1000-resumable-native", reentry_map_resumable_run, 2000u, 5u},
+    {"reentry-map-1000-tang-loop", reentry_map_tang_loop_run, 3000u, 5u},
+    {"reentry-map-1000-host-loop", reentry_map_host_loop_run, 3000u, 5u},
+    {"reentry-callable-template-200", reentry_callable_template_run, 2000u, 5u},
+    {"reentry-pause-resume-1000", reentry_pause_resume_run, 1000u, 2u},
+    {"reentry-chain-depth-200", reentry_chain_run, 2000u, 5u},
 #endif
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},

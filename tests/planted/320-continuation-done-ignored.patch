@@ -1,0 +1,15 @@
+# 320 DONE from an iterator step's continuation is a failure
+# defect: the loop does not end when the continuation of iterator_next answers DONE
+# caught by: the done-from-the-continuation test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -504,7 +504,7 @@
+       result = GLTANG_V_NULL;
+       settle = false;
+     }
+-    else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done) {
++    else if (status == GLTANG_OP_DONE && oc->extra && oc->extra->done && !stage->continuing) {
+       // An iterator has no more items: a status like a decline, and nothing is made.
+       gltang_vm_call_abandon(&call);
+       *oc->extra->done = true;

@@ -56,10 +56,13 @@
  * attribute rule: a member of a library, `Not implemented` for an absent one. A
  * first name nothing provides binds null.
  *
- * **Host functions are opaque (AD-23).** A native function or a factory runs
- * synchronously, on the thread that owns the context, inside the run. It is
- * given a call object (::GLTANG_NativeCall) and its `user` pointer, and nothing
- * else: it cannot pause, and it cannot call back into guest code. Anything it
+ * **Host functions are opaque (AD-23), unless marked resumable.** A native
+ * function or a factory runs synchronously, on the thread that owns the context,
+ * inside the run. It is given a call object (::GLTANG_NativeCall) and its `user`
+ * pointer, and nothing else: it cannot pause, and it cannot call back into guest
+ * code, except a native marked with ::gltang_library_mark_resumable, which asks
+ * the engine to call guest code and to call it again with the result
+ * (::gltang_call_guest). Anything it
  * calls on the execution that is running it (any `gltang_execution_*` setter,
  * ::grcore_run, ::grcore_resume) is refused: the setters with
  * ::GLTANG_ERR_INVALID, the runtime calls with ::GRCORE_ERR_INVALID, and
@@ -89,6 +92,7 @@
 #include <ghoti.io/lang-tang/description.h>
 #include <ghoti.io/lang-tang/handle.h>
 #include <ghoti.io/lang-tang/program.h>
+#include <ghoti.io/lang-tang/type.h>
 #include <ghoti.io/lang-tang/unicodeString.h>
 #include <ghoti.io/lang-tang/value.h>
 
@@ -239,6 +243,31 @@ GLTANG_API GLTANG_Result gltang_library_add_string(GLTANG_Library * library,
  */
 GLTANG_API GLTANG_Result gltang_library_add_native(GLTANG_Library * library,
     const char * name, GLTANG_NativeFn function, void * user);
+
+/**
+ * @brief Marks a native member resumable: it may ask the engine to call guest
+ *   code with ::gltang_call_guest, and is then called back through one entry of
+ *   `continuations` (a table the library copies).
+ *
+ * A resumable native requests by returning `true` after ::gltang_call_guest;
+ * its continuation is a ::GLTANG_ContinuationFn, given the member's `user`, and
+ * answers with ::GLTANG_OP_OK (the value set through the call object) or
+ * ::GLTANG_OP_ERROR, or chains with ::GLTANG_OP_PENDING. Compiled code does not
+ * call a resumable native: the call is an exit to the interpreter. An attribute
+ * function of a built-in kind and a factory are never resumable (answer a
+ * resumable native bound with ::gltang_handle_make_native instead).
+ *
+ * @param library An unsealed library.
+ * @param name A native member already added.
+ * @param continuations The table; entries as in ::GLTANG_TypeDescriptor.
+ * @param continuation_count 1 to ::GLTANG_CONTINUATIONS_MAX.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, a sealed
+ *   library, a member that is not a native, one marked already, an empty or
+ *   over-long table, or a bad, repeated or function-less entry; ::GLTANG_ERR_OOM.
+ */
+GLTANG_API GLTANG_Result gltang_library_mark_resumable(GLTANG_Library * library,
+    const char * name, const GLTANG_Continuation * continuations,
+    size_t continuation_count);
 
 /**
  * @brief Adds a lazy factory that answers with any value, called each time a

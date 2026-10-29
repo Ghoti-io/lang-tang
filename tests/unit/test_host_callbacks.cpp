@@ -154,6 +154,9 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   CASE(gltang_persistent_get, false, (void)gltang_persistent_get(call, persistent, &out));
   CASE(gltang_persistent_release, false, (void)gltang_persistent_release(call, persistent));
   CASE(gltang_call_poll, false, (void)gltang_call_poll(call, 1));
+  // Refused (the probe is not resumable): it reads the handles and makes nothing.
+  CASE(gltang_call_guest, false, (void)gltang_call_guest(call, s, nullptr, 0, 0, s));
+  CASE(gltang_call_resume_step, false, (void)gltang_call_resume_step(call));
   CASE(gltang_handle_make_custom, true, (void)gltang_handle_make_custom(call, type, &out));
   CASE(gltang_handle_custom_type, false, (void)gltang_handle_custom_type(call, c));
   CASE(gltang_handle_custom_slot_get, false, (void)gltang_handle_custom_slot_get(call, c, 0, &out));

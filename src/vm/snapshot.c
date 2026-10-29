@@ -1044,6 +1044,15 @@ GLTANG_Result gltang_snapshot_take(GLTANG_Execution * execution, GLTANG_Snapshot
   if (execution->handles && (execution->handles->persistent_live || execution->handles->held_library_count || execution->handles->owned_member_count)) {
     return GLTANG_ERR_UNSUPPORTED;
   }
+  if (execution->pending_top) {
+    // A pause with a guest call a host callback asked for open: the record names its owner by address,
+    // and an image cannot until story 8 gives host types and natives their by-name hooks (the heap
+    // type's hook, pending.c, refuses the same way). It names the type that asked, when there is one.
+    if (execution->handles) {
+      execution->handles->snapshot_refused = ((const GLTANG_PendingObject *)gltang_object(execution->pending_top))->type;
+    }
+    return GLTANG_ERR_UNSUPPORTED;
+  }
   GRCORE_Snapshot * snapshot = NULL;
   GRCORE_Result r = grcore_context_snapshot(execution->context, NULL, &snapshot);
   if (r != GRCORE_OK) {

@@ -786,12 +786,19 @@ TEST(TypeOps, TheNewMembersAreAtTheEndInTheDocumentedOrderAndTheMinimumSizeDidNo
   EXPECT_LT(offsetof(D, cast), offsetof(D, truthy));
   EXPECT_LT(offsetof(D, truthy), offsetof(D, print));
   EXPECT_LT(offsetof(D, print), offsetof(D, to_string));
-  EXPECT_EQ(offsetof(D, to_string) + sizeof(GLTANG_TypeToStringFn), sizeof(D));
+  EXPECT_LT(offsetof(D, to_string), offsetof(D, resumable_ops));
+  EXPECT_LT(offsetof(D, resumable_ops), offsetof(D, continuations));
+  EXPECT_LT(offsetof(D, continuations), offsetof(D, continuation_count));
+  EXPECT_EQ(offsetof(D, continuation_count) + sizeof(size_t), sizeof(D));
   D d = GLTANG_TYPE_DESCRIPTOR_INIT;
   EXPECT_EQ(d.size, sizeof(D));
   EXPECT_EQ(d.iterator_begin, nullptr);
   EXPECT_EQ(d.to_string, nullptr);
   EXPECT_EQ(GLTANG_OP_DONE, 3) << "appended to the status enum: the three before it keep their numbers";
+  EXPECT_EQ(GLTANG_OP_PENDING, 4);
+  EXPECT_EQ(d.resumable_ops, 0u);
+  EXPECT_EQ(d.continuations, nullptr);
+  EXPECT_EQ(d.continuation_count, 0u);
 }
 
 TEST(TypeOps, ADescriptorSizedForTheFirstVersionWorksAndHasNoNewOperation) {

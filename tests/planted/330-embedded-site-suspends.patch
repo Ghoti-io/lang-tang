@@ -1,0 +1,15 @@
+# 330 a request from a site inside a C loop makes a pending record
+# defect: a C frame would be live across the pause: the nested route is never taken
+# caught by: the embedded-site tests (the nested statistic) (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -464,7 +464,7 @@
+         *oc->extra->errored = true;
+       }
+     }
+-    else if (exec->suspend_mode != 0) {
++    else if (true) {
+       GLTANG_PendingSpec spec = {
+         .type = oc->type, .member = NULL, .op = oc->op, .step = step, .continuation = request_index,
+         .chained = exec->suspend_mode == 2u, .temp_base = request_base, .in_temps = true, .argc = request_argc,

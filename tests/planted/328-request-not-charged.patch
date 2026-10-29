@@ -1,0 +1,15 @@
+# 328 a request is not charged as the CALL of its callee is
+# defect: the call a callback asked for costs nothing
+# caught by: the golden fuel totals test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1154,8 +1154,6 @@
+   RELOAD();
+   S[GLTANG_F_PC] = exec->current_offset;
+   S[GLTANG_F_SP] = sp;
+-  // The request is charged as the CALL of its callee is.
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
+   grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});
+   GLTANG_Value pending_r = GLTANG_V_NULL;
+   {

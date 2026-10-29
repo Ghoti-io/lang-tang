@@ -1,0 +1,15 @@
+# 324 the suspended instruction's top operand is dropped from the stack
+# defect: the stack pointer saved for the caller's frame is one too low, so the instruction finds its operands wrong when it runs again
+# caught by: the matrix and operation tests (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1153,7 +1153,7 @@
+   exec->request_made = false;
+   RELOAD();
+   S[GLTANG_F_PC] = exec->current_offset;
+-  S[GLTANG_F_SP] = sp;
++  S[GLTANG_F_SP] = sp - 1u;
+   // The request is charged as the CALL of its callee is.
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
+   grcore_stack_set_identity(stack, frame, (GRCORE_PollIdentity){fword, exec->current_offset, exec->engine});

@@ -1,0 +1,15 @@
+# 334 a template callee's text is pushed for the instruction
+# defect: the mark on the callee frame is not tested at the template's HALT
+# caught by: the callable-object-runs-a-template test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -215,7 +215,7 @@
+       halted:  // only the JIT arm jumps here (an unused label is a warning in the other)
+ #endif
+         halt_text = GLTANG_V_NULL;
+-        deliver_to_record = frame.offset == exec->deliver_frame;
++        deliver_to_record = false;
+         if (halt_frame(exec, stack, fidx, halt_at, &halt_text)) {
+           return GRCORE_STEP_FINISHED;
+         }

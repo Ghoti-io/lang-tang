@@ -1,0 +1,15 @@
+# 331 a nested request may name a callee that is not a function
+# defect: the nested route hands any callee to the nested activation
+# caught by: the non-function-callee embedded test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -605,7 +605,7 @@
+     // that stops at the record, and only a Tang function is accepted. The state is held across it,
+     // and the answer is held until the next bracket has copied it.
+     ++exec->handles->nested_requests;
+-    if (exec->state != GLTANG_EXECUTION_RUNNING || !gltang_v_is_function(stage.callee)) {
++    if (exec->state != GLTANG_EXECUTION_RUNNING) {
+       // Only a Tang function, and only while the program runs: a host rendering the result of a finished or
+       // paused run has no frames to nest one on.
+       return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);

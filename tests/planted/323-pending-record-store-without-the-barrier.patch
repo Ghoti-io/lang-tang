@@ -1,0 +1,15 @@
+# 323 a pointer is stored into the pending record without the barrier
+# defect: the state slot is written directly, which barrier-verify sees
+# caught by: the collection-while-the-callee-runs tests under torture and verify (testCustom_reentry)
+#
+--- a/src/vm/pending.c
++++ b/src/vm/pending.c
+@@ -102,7 +102,7 @@
+   // does not move.
+   const GLTANG_Value state = spec->in_temps ? gltang_vm_temp_at(exec, spec->temp_base) : spec->state;
+   const GLTANG_Value callee = spec->in_temps ? gltang_vm_temp_at(exec, spec->temp_base + 1u) : spec->callee;
+-  (void)grheap_store_word(heap, record, &record->slots[GLTANG_PENDING_STATE], state);
++  record->slots[GLTANG_PENDING_STATE] = state;
+   (void)grheap_store_word(heap, record, &record->slots[GLTANG_PENDING_PREVIOUS], exec->pending_top);
+   (void)grheap_store_word(heap, record, &record->slots[GLTANG_PENDING_CALLEE], callee);
+   for (size_t i = 0; i < spec->argc; ++i) {

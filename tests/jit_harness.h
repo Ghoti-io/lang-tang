@@ -174,8 +174,9 @@ struct Outcome {
 };
 
 // run() and expect_same() serve the JIT arm only; the JIT=no arm has no test that
-// calls them, and -Wunused-function would report them there.
-#ifdef GLTANG_WITH_JIT
+// calls them, and -Wunused-function would report them there. A test that wants run() in
+// both arms (it compares the interpreter with itself in one) defines GLTANG_HARNESS_RUN first.
+#if defined(GLTANG_WITH_JIT) || defined(GLTANG_HARNESS_RUN)
 /// The context run() makes for `sc` at `threshold`.
 inline Config config_of(const Scenario & sc, long threshold) {
   Config config;

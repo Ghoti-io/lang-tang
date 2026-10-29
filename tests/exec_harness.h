@@ -590,14 +590,14 @@ class Context {
   /// The library of natives the call tests and the frame differential use: `inc` (adds
   /// one) and `sum` (the sum of its arguments, each weighted by its position) through the
   /// public API, and the engine's test natives (src/vm/testnatives.c) `depth`, `records`,
-  /// `echo`, `alloc_ref`, `alloc_n`, `reenter`, `deopt`, `resumable` and `after`.
+  /// `echo`, `alloc_ref`, `alloc_n`, `reenter`, `deopt`, `resumable`, `after` and `scopes`.
   void add_native_library() {
     GLTANG_Library * lib = library();
     ASSERT_NE(lib, nullptr);
     ASSERT_EQ(gltang_library_add_native(lib, "inc", &Context::inc_native, nullptr), GLTANG_OK);
     ASSERT_EQ(gltang_library_add_native(lib, "sum", &Context::sum_native, nullptr), GLTANG_OK);
-    const char * names[] = {"depth", "records", "echo", "alloc_ref", "alloc_n", "reenter", "deopt", "resumable", "after"};
-    for (int k = 0; k < 9; ++k) {
+    const char * names[] = {"depth", "records", "echo", "alloc_ref", "alloc_n", "reenter", "deopt", "resumable", "after", "scopes"};
+    for (int k = 0; k < 10; ++k) {
       ASSERT_EQ(gltang_vm_test_add_native(lib, names[k], k), GLTANG_OK);
     }
   }

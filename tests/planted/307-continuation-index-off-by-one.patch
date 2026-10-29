@@ -1,0 +1,15 @@
+# 307 a request may name the entry one past the table
+# defect: gltang_call_guest accepts an index equal to the table size, and the continuation is read past the end
+# caught by: the bad-continuation-index misuse test (testCustom_reentry)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -828,7 +828,7 @@
+   GLTANG_HandleState * hs = call->exec->handles;
+   GLTANG_GuestRequest request;
+   memset(&request, 0, sizeof(request));
+-  bool ok = hs && call->can_request && !hs->request.made && continuation < call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
++  bool ok = hs && call->can_request && !hs->request.made && continuation <= call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
+   if (ok) {
+     request.callee = gltang_vm_handle_value(call, callee, &ok);
+     ok = ok && callable_value(request.callee);

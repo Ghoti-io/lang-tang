@@ -1,0 +1,15 @@
+# 319 the steps of the equal fallback of != are 0 and 1
+# defect: the steps of a != chain repeat, so a resume cannot tell the left's not_equal from its equal
+# caught by: the != chain log test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -749,7 +749,7 @@
+   }
+   if (declined && op == GLTANG_TYPE_OP_NOT_EQUAL) {
+     // A `!=` nobody answered asks `==` the same way, and is its opposite (steps 2 and 3).
+-    r = reflect(exec, mark, GLTANG_TYPE_OP_EQUAL, false, 2, &declined);
++    r = reflect(exec, mark, GLTANG_TYPE_OP_EQUAL, false, 0, &declined);
+     if (r == GLTANG_V_UNWIND) {
+       gltang_vm_temp_release(exec, mark);
+       return r;

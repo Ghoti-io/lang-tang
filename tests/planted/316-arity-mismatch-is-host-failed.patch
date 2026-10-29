@@ -1,0 +1,15 @@
+# 316 a callee refused for its argument count is Host function failed
+# defect: the error value delivered to the continuation is the wrong kind
+# caught by: the callee-that-cannot-be-entered test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1170,7 +1170,7 @@
+       }
+       const GLTANG_Function * cf = &program->functions[target];
+       if (cf->parameter_count != argc) {
+-        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
++        pending_r = gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+         goto pending_value;
+       }
+       if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {

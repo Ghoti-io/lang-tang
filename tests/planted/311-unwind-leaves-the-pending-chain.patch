@@ -1,0 +1,14 @@
+# 311 an unwound run keeps its pending records
+# defect: the records of calls an unwind ended are not let go, so a continuation could be delivered to them and they are never collected
+# caught by: the limit-unwind test (no record survives) (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1420,7 +1420,6 @@
+   // the run that called it.
+   const bool nested = exec->run_base_frames != 0;
+   // The guest calls host callbacks asked for that this run opened go with its frames.
+-  gltang_vm_pending_drop_to(exec, nested ? exec->run_base_pending : 0u);
+   while (exec->act != exec->run_base_act) {
+     GLTANG_Activation * open = exec->act;
+     gltang_vm_activation_leave(exec, open);

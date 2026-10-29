@@ -1,0 +1,15 @@
+# 321 an assignment that answers nothing after a request is null
+# defect: the value assigned is not the value of the assignment when its continuation sets no answer
+# caught by: the assignment-of-no-answer test and the generated operation test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -517,7 +517,7 @@
+   }
+   if (settle) {
+     if (status == GLTANG_OP_OK) {
+-      if (call.set == GLTANG_CALL_NONE && (oc->op == GLTANG_TYPE_OP_ATTRIBUTE_SET || oc->op == GLTANG_TYPE_OP_INDEX_SET)) {
++      if (!stage->continuing && call.set == GLTANG_CALL_NONE && (oc->op == GLTANG_TYPE_OP_ATTRIBUTE_SET || oc->op == GLTANG_TYPE_OP_INDEX_SET)) {
+         // An assignment with no answer of its own is worth the value assigned.
+         call.set = GLTANG_CALL_VALUE;
+         call.value = held[2];

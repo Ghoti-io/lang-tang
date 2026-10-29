@@ -1,0 +1,15 @@
+# 335 a compiled callee's return is pushed for the instruction
+# defect: the mark on the callee frame is not tested where compiled code returns to the interpreter
+# caught by: the tests that run at threshold 1 (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -273,7 +273,7 @@
+                 // frame included: the interpreter's `HALT` does not ask).
+                 goto halted;
+               }
+-              deliver_to_record = frame.offset == exec->deliver_frame;
++              deliver_to_record = false;
+               grcore_stack_pop(stack);
+               if (exec->run_base_frames != 0 && grcore_stack_frame_count(stack) == exec->run_base_frames) {
+                 // The entry frame of a nested run (AD-23) returned: the native that

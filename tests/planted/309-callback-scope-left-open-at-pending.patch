@@ -1,0 +1,24 @@
+# 309 the callback's handle scope is not closed at PENDING
+# defect: the scope stays open while the callee runs, and its handles and temporaries with it
+# caught by: the depth, records and scopes readings inside the callee test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -450,7 +450,6 @@
+       values[2u + i] = request->args[i];
+     }
+     request->made = false;
+-    gltang_vm_call_abandon(&call);
+     settle = false;
+     *declined = false;
+     const size_t request_base = gltang_vm_temp_mark(exec);
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -774,7 +774,6 @@
+     const uint32_t request_argc = request->argc;
+     const uint32_t request_index = request->continuation;
+     hs->request.made = false;
+-    gltang_vm_call_abandon(&call);
+     exec->native_status = GLTANG_NATIVE_STATUS_OK;
+     if (exec->suspend_mode != 0) {
+       const bool chained = exec->suspend_mode == 2u;

@@ -171,6 +171,10 @@ static GLTANG_Result push_handle(GLTANG_NativeCall * call, GLTANG_Value v, GLTAN
   return GLTANG_OK;
 }
 
+GLTANG_Result gltang_vm_handle_push(GLTANG_NativeCall * call, GLTANG_Value v, GLTANG_Handle * out) {
+  return push_handle(call, v, out);
+}
+
 GLTANG_Result gltang_handle_push_frame(GLTANG_NativeCall * call) {
   if (!call) {
     return GLTANG_ERR_INVALID;
@@ -806,6 +810,52 @@ GLTANG_Result gltang_call_poll(GLTANG_NativeCall * call, uint64_t work) {
     return GLTANG_ERR_LIMIT;
   }
   return GLTANG_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Guest calls (AD-23)
+// ---------------------------------------------------------------------------
+
+/** Whether `CALL` accepts the value as a callee: a function, a native, a template or an instance (whose type may have no `call`, which is an error value). */
+static bool callable_value(GLTANG_Value v) {
+  return gltang_v_is_function(v) || gltang_v_is_kind(v, GLTANG_OBJ_NATIVE) || gltang_v_is_kind(v, GLTANG_OBJ_TEMPLATE) || gltang_v_is_custom(v);
+}
+
+GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call, GLTANG_Handle callee, const GLTANG_Handle * args, size_t argc, uint32_t continuation, GLTANG_Handle state) {
+  if (!call) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_HandleState * hs = call->exec->handles;
+  GLTANG_GuestRequest request;
+  memset(&request, 0, sizeof(request));
+  bool ok = hs && call->can_request && !hs->request.made && continuation < call->continuation_count && argc <= GLTANG_GUEST_CALL_ARGS_MAX && (argc == 0 || args);
+  if (ok) {
+    request.callee = gltang_vm_handle_value(call, callee, &ok);
+    ok = ok && callable_value(request.callee);
+  }
+  for (size_t i = 0; ok && i < argc; ++i) {
+    request.args[i] = gltang_vm_handle_value(call, args[i], &ok);
+  }
+  if (ok) {
+    // A null handle (all zero) names no state; any other must be valid in this call.
+    request.state = GLTANG_V_NULL;
+    if (state.scope || state.index) {
+      request.state = gltang_vm_handle_value(call, state, &ok);
+    }
+  }
+  if (!ok) {
+    gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+    return GLTANG_ERR_INVALID;
+  }
+  request.made = true;
+  request.continuation = continuation;
+  request.argc = (uint32_t)argc;
+  hs->request = request;
+  return GLTANG_OK;
+}
+
+uint32_t gltang_call_resume_step(const GLTANG_NativeCall * call) {
+  return call ? call->resume_step : 0;
 }
 
 // ---------------------------------------------------------------------------

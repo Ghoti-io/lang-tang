@@ -1,0 +1,15 @@
+# 300 a PENDING that asked for nothing taken for an answer
+# defect: a callback returns GLTANG_OP_PENDING without calling gltang_call_guest and the operation answers null instead of Host function failed
+# caught by: the pending-with-no-request misuse test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -523,7 +523,7 @@
+         call.value = held[2];
+       }
+     }
+-    else if (status == GLTANG_OP_DONE || call.set != GLTANG_CALL_ERROR) {
++    else if (status == GLTANG_OP_DONE || (call.set != GLTANG_CALL_ERROR && status != GLTANG_OP_PENDING)) {
+       // An error with no kind set, or a status this engine does not know (a PENDING that asked for
+       // nothing included); and a DONE, which is valid from an iterator's `iterator_next` only
+       // (above), whatever kind it set.
