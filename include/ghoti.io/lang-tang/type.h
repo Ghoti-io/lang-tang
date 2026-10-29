@@ -146,7 +146,14 @@
  *
  * **Truthiness.** `truthy` sets `*out_truthy`; a decline, or no entry, is
  * true. An instance marked as standing for an error
- * (::gltang_handle_custom_set_error) is falsy and its type is not asked.
+ * (::gltang_handle_custom_set_error) is falsy and its type is not asked, in
+ * `as bool` too. When `truthy` answers an error (::GLTANG_OP_ERROR, or an error
+ * set through the call object), the error is falsy, and each site does one of
+ * two things with it. It is the *value* of `!v`, of `v && x` (in place of `v`)
+ * and of `v as bool`. It is *treated as false and recorded as discarded* (as
+ * an expression statement's error value is, ::GLTANG_ERROR_HOW_DISCARDED) in
+ * `if`, `while`, `do ... while`, `?:` and as the left side of `v || x`, where
+ * it is the value of nothing.
  *
  * **Printing.** `print` answers a string that is appended to the output with
  * each segment's own tag, so it is escaped per segment exactly as a string's
@@ -166,6 +173,29 @@
  * `s.slug` to strings (and to integers, floats, booleans, arrays, functions
  * and random generators). A built-in name always wins; maps and libraries
  * take none, since their names are the user's keys and members.
+ *
+ * **Lifetimes.** The handles an operation is given (`self`, the operands, a
+ * call's `args`) are valid until the callback returns and no longer; to keep a
+ * value, store it in a slot (::gltang_handle_custom_slot_set) or promote it
+ * (::gltang_handle_promote). An answer set with ::gltang_call_return_handle is
+ * read when the callback returns, and an iterator's item is copied into the
+ * loop's variable then: the handle need not outlive the call.
+ * `iterator_begin` runs once each time the loop is *entered*, so a loop nested
+ * in another calls it once per iteration of the outer one; each entry is a new
+ * iterator. A callback gets its operands in a copy held by the call; up to
+ * sixteen operands beside `self` (a call's arguments) the copy is in the
+ * engine's frame, and past that it is a transient block of host memory (cutil's
+ * allocator, not the execution's heap), made even when the callback declines,
+ * so that the decline path of such a call makes allocations but no heap object.
+ *
+ * **A marked instance as the operand of an operation.** An instance marked as
+ * standing for an error is an error value only where the rules above say so:
+ * falsy, and contaminating as an operand of an operator, in assignment, as a
+ * function's result and as a statement's value. It is an ordinary instance
+ * everywhere else: as the source of a `for` it is asked for its
+ * `iterator_begin`, as a callee for its `call`, and as an operand of
+ * `as int|float|string` for its `cast` (and `to_string`); only `as bool` is
+ * false without asking.
  *
  * A snapshot of an execution that holds an instance is refused
  * (::gltang_snapshot_refused_type names the type).

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -499,11 +499,8 @@
+@@ -504,11 +504,8 @@
      // An error operand is the value, and the type is not asked, as a string's
      // `+` gives its error operand (a custom value is never an error, so at
      // most one side is). Equality keeps its rule: it is asked of any pair.

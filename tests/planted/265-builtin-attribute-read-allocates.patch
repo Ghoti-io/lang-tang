@@ -4,7 +4,7 @@
 #
 --- a/src/vm/ops.c
 +++ b/src/vm/ops.c
-@@ -648,6 +648,9 @@
+@@ -652,6 +652,9 @@
  
  /** The attribute rule; `name_value` is the name as a string value, or null when only its bytes are known. */
  static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value) {

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -687,7 +687,7 @@
+@@ -692,7 +692,7 @@
  GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v) {
    const GLTANG_CustomObject * custom = gltang_vm_custom(v);
    if (custom->flags & GLTANG_CUSTOM_FLAG_ERROR) {

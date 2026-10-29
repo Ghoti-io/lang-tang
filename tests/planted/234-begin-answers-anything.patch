@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -638,7 +638,7 @@
+@@ -643,7 +643,7 @@
    if (gltang_v_is_custom(r) && gltang_type_has(gltang_vm_custom(r)->type, GLTANG_TYPE_OP_ITERATOR_NEXT)) {
      return r;
    }

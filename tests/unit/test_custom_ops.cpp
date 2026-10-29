@@ -22,6 +22,7 @@
 
 #include "exec_harness.h"
 
+#include <ghoti.io/cutil/memory.h>
 #include <ghoti.io/lang-tang/type.h>
 
 #include <atomic>
@@ -55,6 +56,7 @@ struct Types {
   const GLTANG_Type * decliner = nullptr;
   const GLTANG_Type * plain = nullptr;
   const GLTANG_Type * eqmark = nullptr;
+  const GLTANG_Type * pollcast = nullptr;
   std::vector<std::string> log;
   Context * context = nullptr;
   explicit Types(bool with_attributes = true);
@@ -169,6 +171,12 @@ GLTANG_OpStatus coll_next(GLTANG_NativeCall * call, void * user, GLTANG_Handle s
   if (!write_bytes(call, self, b)) {
     return GLTANG_OP_ERROR;
   }
+  if (b.mode == 10 && b.pos == 2) {
+    // An item, and then an error set through the call object, with the status OK: the error wins.
+    gltang_call_return_integer(call, 99);
+    gltang_call_return_error(call, GLTANG_ERROR_NOT_A_NUMBER);
+    return GLTANG_OP_OK;
+  }
   if (b.mode == 1) {
     return answer_text(call, "item" + std::to_string(b.pos));
   }
@@ -200,7 +208,7 @@ GLTANG_OpStatus callee_call(GLTANG_NativeCall * call, void * user, GLTANG_Handle
   return GLTANG_OP_OK;
 }
 
-// Modes: 0 answers every target; 1 only int and float; 2 declines all; 3 errors.
+// Modes: 0 answers every target; 1 only int and float; 2 declines all; 3 errors; 4 answers the wrong kind.
 GLTANG_OpStatus caster_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_CastTarget target) {
   Types * t = types_of(user);
   Bytes b;
@@ -212,6 +220,14 @@ GLTANG_OpStatus caster_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle
   if (b.mode == 3) {
     gltang_call_return_error(call, GLTANG_ERROR_NOT_A_NUMBER);
     return GLTANG_OP_ERROR;
+  }
+  if (b.mode == 4) {
+    // The wrong kind for every target: a string for a number, an integer for a bool or a string.
+    if (target == GLTANG_CAST_TARGET_INT || target == GLTANG_CAST_TARGET_FLOAT) {
+      return answer_text(call, "wrong");
+    }
+    gltang_call_return_integer(call, 7);
+    return GLTANG_OP_OK;
   }
   switch (target) {
     case GLTANG_CAST_TARGET_INT: gltang_call_return_integer(call, 41); return GLTANG_OP_OK;
@@ -231,7 +247,7 @@ GLTANG_OpStatus caster_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle
   return GLTANG_OP_DECLINE;
 }
 
-// Modes: 0 false; 1 true; 2 declines; 3 errors.
+// Modes: 0 false; 1 true; 2 declines; 3 errors; 4 sets an error through the call object and answers OK.
 GLTANG_OpStatus truthy_truthy(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, bool * out) {
   Types * t = types_of(user);
   Bytes b;
@@ -241,8 +257,15 @@ GLTANG_OpStatus truthy_truthy(GLTANG_NativeCall * call, void * user, GLTANG_Hand
     return GLTANG_OP_DECLINE;
   }
   if (b.mode == 3) {
-    gltang_call_return_error(call, GLTANG_ERROR_NOT_A_NUMBER);
+    // Not a marker kind: a marker error prints itself and is never recorded as discarded.
+    gltang_call_return_error(call, GLTANG_ERROR_DIVIDE_BY_ZERO);
     return GLTANG_OP_ERROR;
+  }
+  if (b.mode == 4) {
+    // An error set through the call object, with the status OK.
+    *out = true;
+    gltang_call_return_error(call, GLTANG_ERROR_NOT_A_NUMBER);
+    return GLTANG_OP_OK;
   }
   *out = b.mode == 1;
   return GLTANG_OP_OK;
@@ -340,7 +363,12 @@ GLTANG_OpStatus all_call(GLTANG_NativeCall * call, void * user, GLTANG_Handle se
 }
 GLTANG_OpStatus all_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle, GLTANG_CastTarget target) {
   types_of(user)->log.push_back("all cast " + std::to_string(static_cast<int>(target)));
-  gltang_call_return_integer(call, 5);
+  switch (target) {
+    case GLTANG_CAST_TARGET_INT: gltang_call_return_integer(call, 5); break;
+    case GLTANG_CAST_TARGET_FLOAT: gltang_call_return_float(call, 2.5); break;
+    case GLTANG_CAST_TARGET_BOOL: gltang_call_return_bool(call, true); break;
+    case GLTANG_CAST_TARGET_STRING: return answer_text(call, "5");
+  }
   return GLTANG_OP_OK;
 }
 GLTANG_OpStatus all_truthy(GLTANG_NativeCall *, void * user, GLTANG_Handle, bool * out) {
@@ -390,6 +418,35 @@ GLTANG_OpStatus eqmark_equal(GLTANG_NativeCall * call, void * user, GLTANG_Handl
     return GLTANG_OP_ERROR;
   }
   gltang_call_return_handle(call, h);
+  return GLTANG_OP_OK;
+}
+
+// pollcast: mode 0 answers the right kind for each target; mode 1 polls for good first, so a
+// budget ends the run inside the cast.
+GLTANG_OpStatus pollcast_cast(GLTANG_NativeCall * call, void * user, GLTANG_Handle self, GLTANG_CastTarget target) {
+  Types * t = types_of(user);
+  Bytes b;
+  read_bytes(call, self, &b);
+  if (b.mode == 1) {
+    for (int i = 0; i < 100000; ++i) {
+      if (gltang_call_poll(call, 100) != GLTANG_OK) {
+        return GLTANG_OP_DECLINE;  // the run is to stop: whatever is answered, it unwinds
+      }
+      if (i == 0) {
+        // The identity the first poll wrote in the top frame: where the run stands, as a debugger would read it.
+        GRCORE_Stack * stack = grcore_context_stack(t->context->context);
+        GRCORE_PollIdentity id = {0, 0};
+        (void)grcore_stack_identity(stack, grcore_stack_top(stack), &id);
+        t->log.push_back("identity " + std::to_string(id.function) + ":" + std::to_string(id.offset));
+      }
+    }
+  }
+  switch (target) {
+    case GLTANG_CAST_TARGET_INT: gltang_call_return_integer(call, 3); break;
+    case GLTANG_CAST_TARGET_FLOAT: gltang_call_return_float(call, 1.5); break;
+    case GLTANG_CAST_TARGET_BOOL: gltang_call_return_bool(call, true); break;
+    case GLTANG_CAST_TARGET_STRING: return answer_text(call, "p");
+  }
   return GLTANG_OP_OK;
 }
 
@@ -492,6 +549,9 @@ Types::Types(bool with_attributes) {
   d = base("eqmark");
   d.equal = eqmark_equal;
   EXPECT_EQ(gltang_type_registry_add(registry, &d, &eqmark), GLTANG_OK);
+  d = base("pollcast");
+  d.cast = pollcast_cast;
+  EXPECT_EQ(gltang_type_registry_add(registry, &d, &pollcast), GLTANG_OK);
   if (with_attributes) {
     EXPECT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_STRING, "slug", attr_slug, this), GLTANG_OK);
     EXPECT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_STRING, "html", attr_wrong, this), GLTANG_OK);
@@ -594,10 +654,20 @@ struct Out {
   uint64_t compiled_functions = 0;
   uint64_t deopts = 0;
   uint64_t fuel = 0;
+  uint64_t position = 0;
+  uint64_t native_depth = 0;
+  bool fired = false;
+  std::vector<GLTANG_ErrorHow> hows;
+  std::vector<GLTANG_ErrorKind> error_kinds;
   std::vector<std::string> log;
 };
 
 using Setup = std::function<void(Context &, Types &)>;
+
+/// While an allocation failure is being injected, the setup calls of `run` may fail without that being a defect of the test.
+static bool g_injecting = false;
+#define CHECK_EQ(a, b) do { if (!g_injecting) { EXPECT_EQ(a, b); } else { (void)((a) == (b)); } } while (0)
+#define CHECK_TRUE(x) do { if (!g_injecting) { EXPECT_TRUE(x); } else { (void)(x); } } while (0)
 
 Out run(const std::string & source, Types & types, const Config & config = Config(), const Setup & setup = Setup(), bool attach = true) {
   Out out;
@@ -607,33 +677,34 @@ Out run(const std::string & source, Types & types, const Config & config = Confi
     return out;
   }
   Context context(compiled.program, config);
-  EXPECT_TRUE(context.ok());
+  CHECK_TRUE(context.ok());
   if (!context.ok()) {
     return out;
   }
   types.context = &context;
   types.log.clear();
   GLTANG_Library * t = nullptr;
-  EXPECT_EQ(gltang_library_create("t", &t), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "coll", make_coll, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "callee", make_with_mode<&Types::callee>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "caster", make_with_mode<&Types::caster>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "truthy", make_with_mode<&Types::truthy>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "texty", make_with_mode<&Types::texty>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "bad", make_with_mode<&Types::bad>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "all", make_with_mode<&Types::all>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "decliner", make_with_mode<&Types::decliner>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "plain", make_with_mode<&Types::plain>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "eqmark", make_with_mode<&Types::eqmark>, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "mark", mark, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "marked", marked, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "allocs", allocs, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "mallocs", mallocs, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_native(t, "collect", collect, &types), GLTANG_OK);
-  EXPECT_EQ(gltang_library_add_library(context.library(), t), GLTANG_OK);
+  CHECK_EQ(gltang_library_create("t", &t), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "coll", make_coll, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "callee", make_with_mode<&Types::callee>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "caster", make_with_mode<&Types::caster>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "truthy", make_with_mode<&Types::truthy>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "texty", make_with_mode<&Types::texty>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "bad", make_with_mode<&Types::bad>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "all", make_with_mode<&Types::all>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "decliner", make_with_mode<&Types::decliner>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "plain", make_with_mode<&Types::plain>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "eqmark", make_with_mode<&Types::eqmark>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "pollcast", make_with_mode<&Types::pollcast>, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "mark", mark, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "marked", marked, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "allocs", allocs, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "mallocs", mallocs, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_native(t, "collect", collect, &types), GLTANG_OK);
+  CHECK_EQ(gltang_library_add_library(context.library(), t), GLTANG_OK);
   gltang_library_release(t);
   if (attach) {
-    EXPECT_EQ(gltang_execution_attach_types(context.execution, types.registry), GLTANG_OK);
+    CHECK_EQ(gltang_execution_attach_types(context.execution, types.registry), GLTANG_OK);
   }
   if (setup) {
     setup(context, types);
@@ -657,6 +728,13 @@ Out run(const std::string & source, Types & types, const Config & config = Confi
   out.compiled_functions = jit.functions_compiled;
   out.deopts = jit.deopts;
   out.fuel = grcore_context_fuel_used(context.context);
+  out.position = gltang_vm_test_position(context.execution);
+  out.native_depth = grcore_context_depth(context.context, GRCORE_DEPTH_NATIVE);
+  out.fired = context.tracker.fired;
+  for (size_t i = 0; i < out.errors_listed; ++i) {
+    out.hows.push_back(context.error(i).e.how);
+    out.error_kinds.push_back(context.error(i).e.kind);
+  }
   out.log = types.log;
   types.context = nullptr;
   return out;
@@ -690,7 +768,7 @@ Config no_instruments() {
 
 #define PRELUDE                                                                                                     \
   "use t; coll = t.coll; callee = t.callee; caster = t.caster; truthy = t.truthy; texty = t.texty; bad = t.bad; " \
-  "all = t.all; decliner = t.decliner; plain = t.plain; eqmark = t.eqmark; mark = t.mark; marked = t.marked; "
+  "all = t.all; decliner = t.decliner; plain = t.plain; eqmark = t.eqmark; pollcast = t.pollcast; mark = t.mark; marked = t.marked; "
 
 }  // namespace
 
@@ -861,8 +939,8 @@ TEST(TypeOps, ATypeThatImplementsEverythingIsReachedWithTheDocumentedOperands) {
     "all to_string",
   };
   EXPECT_EQ(o.log, expected);
-  // as bool is the cast's answer (5), not the truthiness.
-  EXPECT_EQ(o.described, "[3, 77, [5, 5, 5, 5], [2, true, Custom: all, 2]]");
+  // as bool is the cast's answer (true), not the truthiness (false).
+  EXPECT_EQ(o.described, "[3, 77, [5, 2.5, true, 5], [2, true, Custom: all, 2]]");
   EXPECT_EQ(o.raw, "P[S]");
 }
 
@@ -1100,7 +1178,7 @@ TEST(TypeOps, ATruthyThatErrorsIsTheExpressionsValue) {
   Types types;
   Out o = run(PRELUDE "e = truthy(3); [!e, e && 1, e || 5, e as bool, e ? 1 : 2];", types);
   ASSERT_TRUE(o.finished);
-  EXPECT_EQ(o.described, "[[NOT A NUMBER], [NOT A NUMBER], 5, [NOT A NUMBER], 2]");
+  EXPECT_EQ(o.described, "[Error: Divide by zero, Error: Divide by zero, 5, Error: Divide by zero, 2]");
 }
 
 TEST(TypeOps, ATruthyIsAGcPointAndTheInstanceSurvivesIt) {
@@ -1576,18 +1654,6 @@ TEST(TypeOps, TheNewOperationsAreChargedAsANativeCallPlusTheBytesTheyAnswer) {
   EXPECT_GT(declined, 0u);
 }
 
-TEST(TypeOps, AnOperationThatRunsOutOfMemoryIsOutOfMemoryAndTheRunGoesOn) {
-  Types types;
-  Config config;
-  config.memory_bytes = 64 * 1024;
-  Out o = run(PRELUDE "s = \"\"; for (x : coll(400, 1)) { s += x; } 7;", types, config);
-  // Either it finishes or the budget ends the run; what matters is that it does not crash and
-  // that a finished run is the one asked for.
-  if (o.finished) {
-    EXPECT_TRUE(o.integer == 7 || o.kind == GLTANG_KIND_ERROR) << o.described;
-  }
-}
-
 TEST(TypeOps, ACallableInstanceCannotBePassedWhereOnlyAFunctionIsAccepted) {
   Types types;
   // The engine's test native `reenter` accepts a function and refuses anything else with the same
@@ -1744,6 +1810,317 @@ TEST(TypeOps, TwoContextsOnTwoThreadsShareOneRegistryOfHostAttributesAndOperatio
   gltang_library_release(library);
   gltang_type_registry_release(registry);
   EXPECT_EQ(agreed.load(), 2 * rounds);
+}
+
+// ---------------------------------------------------------------------------
+// The review's rules (a truthy's error, the kind of a cast's answer, a marked instance,
+// polling inside a cast, refused records, injected allocation failures, the names)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// `run`, with the cutil allocations the whole run left outstanding (blocks made less blocks freed).
+Out run_counted(const std::string & source, Types & types, const Config & config, const Setup & setup, long * outstanding) {
+  const long before = static_cast<long>(gcu_memory_alloc_count) - static_cast<long>(gcu_memory_free_count);
+  Out out = run(source, types, config, setup);
+  *outstanding = static_cast<long>(gcu_memory_alloc_count) - static_cast<long>(gcu_memory_free_count) - before;
+  return out;
+}
+
+}  // namespace
+
+TEST(TypeOps, ATruthyErrorIsTheValueOfNotAndAndAsBoolAndRecordedAsDiscardedWhereItIsTheValueOfNothing) {
+  Types types;
+  struct Site {
+    const char * source;
+    bool discarded;
+  } sites[] = {
+    {"x = !e; [x];", false},
+    {"x = e && 1; [x];", false},
+    {"x = e as bool; [x];", false},
+    {"if (e) { 1; } 7;", true},
+    {"i = 0; while (e) { i += 1; if (i > 3) { break; } } 7;", true},
+    {"i = 0; do { i += 1; if (i > 3) { break; } } while (e); 7;", true},
+    {"x = e ? 1 : 2; [x];", true},
+    {"x = e || 5; [x];", true},
+  };
+  for (const Site & site : sites) {
+    Out o = run(std::string(PRELUDE "e = truthy(3); ") + site.source, types);
+    ASSERT_TRUE(o.finished) << site.source;
+    if (site.discarded) {
+      EXPECT_EQ(o.errors_listed, 1u) << site.source << ": the error is recorded as discarded";
+      if (o.errors_listed == 1u) {
+        EXPECT_EQ(o.hows[0], GLTANG_ERROR_HOW_DISCARDED) << site.source;
+        EXPECT_EQ(o.error_kinds[0], GLTANG_ERROR_DIVIDE_BY_ZERO) << site.source;
+      }
+    }
+    else {
+      EXPECT_EQ(o.errors_listed, 0u) << site.source << ": the error is a value, held by x";
+      EXPECT_NE(o.described.find("Divide by zero"), std::string::npos) << site.source << " gave " << o.described;
+    }
+  }
+}
+
+TEST(TypeOps, ACastAnswerOfTheWrongKindForItsTargetIsHostFunctionFailed) {
+  Types types;
+  for (const char * target : {"int", "float", "bool", "string"}) {
+    Out o = run(std::string(PRELUDE "c = caster(4); c as ") + target + ";", types);
+    ASSERT_TRUE(o.finished) << target;
+    EXPECT_EQ(o.kind, GLTANG_KIND_ERROR) << target << " gave " << o.described;
+    EXPECT_EQ(o.error, GLTANG_ERROR_HOST_FAILED) << target;
+  }
+  // The right kinds, and an error, still pass.
+  Out o = run(PRELUDE "[caster(0) as int, caster(0) as float, caster(0) as bool, caster(0) as string];", types);
+  EXPECT_EQ(o.described, "[41, 2.5, false, castS]");
+  o = run(PRELUDE "caster(3) as bool;", types);
+  EXPECT_EQ(o.error, GLTANG_ERROR_NOT_A_NUMBER);
+}
+
+TEST(TypeOps, AMarkedInstanceCastToBoolIsFalseWithoutAskingTheTypeAndOtherCastsAskIt) {
+  Types types;
+  Out o = run(PRELUDE "k = caster(0); mark(k); [k as bool, k as int, k as string, k ? 1 : 2];", types);
+  ASSERT_TRUE(o.finished);
+  EXPECT_EQ(o.described, "[false, 41, castS, 2]");
+  EXPECT_EQ(o.log, (Log{"caster cast 0", "caster cast 3"})) << "int and string asked, bool and the truth test not";
+}
+
+TEST(TypeOps, AMarkedInstanceIsAskedAsTheSourceOfAForTheCalleeOfACall) {
+  Types types;
+  Out o = run(PRELUDE "e = coll(3); mark(e); n = 0; for (x : e) { n += x; } n;", types);
+  ASSERT_TRUE(o.finished);
+  EXPECT_EQ(o.integer, 6) << "its iterator_begin and iterator_next ran";
+  o = run(PRELUDE "c = callee(0); mark(c); c(5);", types);
+  EXPECT_EQ(o.integer, 1005) << "its call ran";
+}
+
+TEST(TypeOps, ATruthyThatSetsAnErrorThroughTheCallObjectWithStatusOkIsTheError) {
+  Types types;
+  for (const char * source : {"x = !t; x;", "x = t && 1; x;", "x = t as bool; x;"}) {
+    Out o = run(std::string(PRELUDE "t = truthy(4); ") + source, types);
+    ASSERT_TRUE(o.finished) << source;
+    EXPECT_EQ(o.kind, GLTANG_KIND_ERROR) << source << " gave " << o.described;
+    EXPECT_EQ(o.error, GLTANG_ERROR_NOT_A_NUMBER) << source << ": not overwritten by the boolean";
+  }
+}
+
+TEST(TypeOps, ANextThatSetsAnErrorThroughTheCallObjectWithStatusOkEndsTheLoopAndIsNotAnItem) {
+  Types types;
+  Out o = run(PRELUDE "t = []; for (x : coll(5, 10)) { t += [x]; } t;", types);
+  ASSERT_TRUE(o.finished);
+  EXPECT_EQ(o.described, "[1]") << "the item before the error; the answer set with the error is not one";
+  o = run(PRELUDE "for (x : coll(5, 10)) { 1; }", types);
+  EXPECT_EQ(o.kind, GLTANG_KIND_ERROR);
+  EXPECT_EQ(o.error, GLTANG_ERROR_NOT_A_NUMBER) << "the loop's value";
+}
+
+TEST(TypeOps, ACastCallbackThatPollsIsStoppedByTheBudgetWithTheSamePositionInBothTiers) {
+  Types types;
+  for (const char * target : {"int", "float", "bool", "string"}) {
+    const std::string source = std::string(PRELUDE "p0 = pollcast(0); p1 = pollcast(1); function f(p) { return p as ") + target +
+        "; } i = 0; while (i < 20) { f(p0); i += 1; } f(p1); 7;";
+    Out reference;
+    bool first = true;
+    for (long threshold : {0L, 1L}) {
+      Config config;
+      config.fuel = 150000;
+      config.jit_threshold = threshold;
+      Out o = run(source, types, config);
+      EXPECT_FALSE(o.finished) << target << ": the budget ran out inside the cast (threshold " << threshold << ")";
+      EXPECT_NE(o.kind, GLTANG_KIND_INTEGER) << target;
+      if (first) {
+        reference = o;
+        first = false;
+        EXPECT_NE(reference.position, 0u);
+        EXPECT_EQ(reference.log.size(), 1u) << target << ": the callback saw the identity of its first poll";
+        continue;
+      }
+      EXPECT_COMPILED(o, target);
+      EXPECT_EQ(o.position, reference.position) << target << ": the position recorded where the run stopped";
+      EXPECT_EQ(o.log, reference.log) << target << ": the identity of the poll in the cast, as each tier writes it";
+      EXPECT_EQ(o.fuel, reference.fuel) << target;
+    }
+    // Without the budget the same program finishes, and the casts answer.
+    Out whole = run(std::string(PRELUDE "p = pollcast(0); function f(p) { return p as ") + target + "; } [f(p)];", types);
+    EXPECT_TRUE(whole.finished) << target;
+  }
+}
+
+TEST(TypeOps, ARefusedRecordIsTheRecursionLimitErrorInBothTiersAndLeaksAndLeavesNothing) {
+  Types types;
+  struct Case {
+    const char * name;
+    std::string source;
+    const char * answer;  // what the program gives when the budget has room
+  };
+  std::string twenty;
+  for (int i = 1; i <= 20; ++i) {
+    twenty += (i > 1 ? ", " : "") + std::to_string(i);
+  }
+  const std::vector<Case> cases = {
+    {"call (a heap copy of 21 operands)", "use reenter; function f(c) { return c(" + twenty + "); } reenter(f, callee(0));", "20001"},
+    {"cast", "use reenter; function f(c) { return c as int; } reenter(f, caster(0));", "41"},
+    {"to_string", "use reenter; function f(c) { return c as string; } reenter(f, texty(2));", "T<&>"},
+    {"for", "use reenter; function f(c) { t = []; for (x : c) { t += [x]; } return t; } reenter(f, coll(3));", "[1, 2, 3]"},
+  };
+  for (const Case & c : cases) {
+    for (uint64_t depth = 0; depth <= 4; ++depth) {
+      Out reference;
+      long reference_outstanding = 0;
+      bool first = true;
+      for (long threshold : {0L, 1L}) {
+        Config config;
+        config.native_depth = depth;
+        config.jit_threshold = threshold;
+        long outstanding = 0;
+        Out o = run_counted(std::string(PRELUDE) + c.source, types, config, [](Context & ctx, Types &) {
+          ctx.add_native_library();
+          ASSERT_EQ(gltang_execution_set_log_all_errors(ctx.execution, true), GLTANG_OK);
+        }, &outstanding);
+        const std::string where = std::string(c.name) + " at native depth " + std::to_string(depth) + ", threshold " + std::to_string(threshold);
+        ASSERT_TRUE(o.finished) << where;
+        EXPECT_EQ(outstanding, 0) << where << ": cutil blocks outstanding after the run";
+        EXPECT_EQ(o.native_depth, 0u) << where << ": the native depth is back where it started";
+        bool limited = false;
+        for (GLTANG_ErrorKind k : o.error_kinds) {
+          limited = limited || k == GLTANG_ERROR_RECURSION_LIMIT;
+        }
+        // reenter's nested run takes a unit of its own, so the operation inside needs a depth of 3.
+        if (depth <= 2) {
+          EXPECT_TRUE(limited) << where << ": a refused record is the recursion-limit error";
+          if (std::string(c.name) != "for") {
+            EXPECT_EQ(o.kind, GLTANG_KIND_ERROR) << where << " gave " << o.described;
+            EXPECT_EQ(o.error, GLTANG_ERROR_RECURSION_LIMIT) << where << ": the value, not Host function failed";
+          }
+          else if (depth == 2) {
+            EXPECT_EQ(o.described, "[]") << where << ": the loop did not run, and no error was an item";
+          }
+        }
+        else {
+          EXPECT_FALSE(limited) << where << ": the budget has room";
+          EXPECT_EQ(o.described, c.answer) << where;
+        }
+        if (first) {
+          reference = o;
+          reference_outstanding = outstanding;
+          first = false;
+          continue;
+        }
+        EXPECT_COMPILED(o, where);
+        EXPECT_EQ(o.described, reference.described) << where << ": the tiers agree";
+        EXPECT_EQ(o.error_kinds, reference.error_kinds) << where;
+        EXPECT_EQ(outstanding, reference_outstanding) << where;
+      }
+    }
+  }
+}
+
+TEST(TypeOps, AnAllocationThatFailsInsideAnOperationIsOutOfMemoryAndTheRunGoesOnWithNothingPartial) {
+  Types types;
+  struct Program {
+    const char * name;
+    std::string source;
+    std::function<bool(const Out &)> acceptable;  // an outcome that an allocation failure may leave
+    std::function<bool(const Out &)> failed;      // the failure was delivered to the operation under test
+  };
+  auto oom = [](const Out & o) { return o.finished && o.kind == GLTANG_KIND_ERROR && o.error == GLTANG_ERROR_OUT_OF_MEMORY; };
+  // Every whole print, in order, or none of it: a subsequence of the three prints.
+  auto whole_prints = [](const std::string & raw) {
+    static const char * const all[] = {"a", "<b>&</b>", "b"};
+    size_t at = 0;
+    for (const char * piece : all) {
+      if (raw.compare(at, std::strlen(piece), piece) == 0) {
+        at += std::strlen(piece);
+      }
+    }
+    return at == raw.size();
+  };
+  std::vector<Program> programs = {
+    {"print", PRELUDE "print(\"a\"); r = print(texty(0)); print(\"b\"); [r];",
+     [&](const Out & o) { return o.finished && whole_prints(o.raw) && (o.described == "[null]" || o.described == "[Error: Out of memory]" || oom(o)); },
+     // The print that failed appended nothing, and the print after it still ran. Its value reads as the
+     // out-of-memory error or, where the injection came before the run had made its error root, null.
+     [&](const Out & o) { return o.raw == "ab"; }},
+    {"to_string", PRELUDE "r = texty(2) as string; r;",
+     [&](const Out & o) { return o.finished && (o.described == "T<&>" || oom(o)); },
+     [&](const Out & o) { return oom(o); }},
+    {"cast to string", PRELUDE "c = caster(0); r = c as string; r;",
+     [&](const Out & o) { return o.finished && (o.described == "castS" || oom(o)); },
+     [&](const Out & o) { return oom(o); }},
+    {"cast to float", PRELUDE "c = caster(0); r = c as float; r;",
+     [&](const Out & o) { return o.finished && (o.described == "2.5" || oom(o)); },
+     [&](const Out & o) { return oom(o); }},
+    {"iterator step", PRELUDE "t = []; for (x : coll(3, 1)) { t += [x]; } t;",
+     [&](const Out & o) {
+       return o.finished && (o.described == "[]" || o.described == "[item1]" || o.described == "[item1, item2]" ||
+                             o.described == "[item1, item2, item3]" || oom(o));
+     },
+     [&](const Out & o) { return o.described == "[]" || o.described == "[item1]" || o.described == "[item1, item2]"; }},
+  };
+  for (const Program & program : programs) {
+    int delivered = 0;
+    int in_operation = 0;
+    for (long n = 1; n < 2000; ++n) {
+      Config config;
+      config.fail_at = n;
+      config.torture = 0;
+      config.verify = 0;
+      config.moving_stack = 0;
+      config.relocate = 0;
+      config.jit_threshold = 0;
+      g_injecting = true;
+      Out o = run(program.source, types, config);
+      g_injecting = false;
+      if (!o.fired) {
+        if (o.finished) {
+          break;  // past the last allocation of the run
+        }
+        continue;
+      }
+      ++delivered;
+      if ((!o.finished && o.kind == GLTANG_KIND_NULL && o.described.empty()) || (o.kind == GLTANG_KIND_ERROR && o.error == GLTANG_ERROR_NOT_IMPLEMENTED)) {
+        continue;  // the context could not be made, or the library of the setup could not (`use t` is Not implemented)
+      }
+      EXPECT_TRUE(program.acceptable(o)) << program.name << " with allocation " << n << " failed gave " << o.described << " / raw '" << o.raw << "'";
+      in_operation += program.failed(o) ? 1 : 0;
+    }
+    EXPECT_GT(delivered, 5) << program.name << ": the sweep delivered failures";
+    EXPECT_GT(in_operation, 0) << program.name << ": at least one failure landed inside the operation, with the exact error";
+  }
+}
+
+TEST(TypeOps, EveryBuiltInMemberNameWinsOverAHostAttributeOfTheSameName) {
+  // Every member name of the string, array and generator kinds is registered as a host attribute
+  // answering 999 and counting; none is reached for its own kind, and a name that is not a member is.
+  static std::atomic<int> hits;
+  hits = 0;
+  GLTANG_TypeRegistry * registry = nullptr;
+  ASSERT_EQ(gltang_type_registry_create(&registry), GLTANG_OK);
+  auto answer = [](GLTANG_NativeCall * call, void *, GLTANG_Handle) {
+    hits.fetch_add(1);
+    gltang_call_return_integer(call, 999);
+    return GLTANG_OP_OK;
+  };
+  for (const char * name : {"length", "byte_length", "html", "html_attribute", "percent", "javascript", "raw", "render", "shout"}) {
+    ASSERT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_STRING, name, answer, nullptr), GLTANG_OK) << name;
+  }
+  for (const char * name : {"size", "extra"}) {
+    ASSERT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_ARRAY, name, answer, nullptr), GLTANG_OK) << name;
+  }
+  for (const char * name : {"next_int", "next_float", "next_bool", "set_seed", "next_gaussian"}) {
+    ASSERT_EQ(gltang_type_registry_add_attribute(registry, GLTANG_KIND_RNG, name, answer, nullptr), GLTANG_OK) << name;
+  }
+  Compiled compiled(
+      "use random; s = \"a\"; a = [1]; r = random.seeded(1); "
+      "m = [s.length, s.byte_length, s.html, s.html_attribute, s.percent, s.javascript, s.raw, s.render, a.size, r.next_int, r.next_float, r.next_bool, r.set_seed]; "
+      "[m.size, s.shout, a.extra, r.next_gaussian];");
+  ASSERT_TRUE(compiled.ok());
+  Context context(compiled.program);
+  ASSERT_TRUE(context.ok());
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, registry), GLTANG_OK);
+  ASSERT_TRUE(context.execute());
+  EXPECT_EQ(context.describe(), "[13, 999, 999, 999]");
+  EXPECT_EQ(hits.load(), 3) << "the host attributes of names that are not members, and only those";
+  gltang_type_registry_release(registry);
 }
 
 int main(int argc, char ** argv) {

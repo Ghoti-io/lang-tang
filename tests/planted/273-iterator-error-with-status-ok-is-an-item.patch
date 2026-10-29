@@ -1,0 +1,16 @@
+# 273 an iterator step's error set with the status OK taken for an item
+# defect: the `errored` flag of an `iterator_next` ignores an error set through the call object, so the error value is yielded as an item
+# caught by: the next-sets-an-error-with-status-ok test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -393,7 +393,8 @@
+     const bool set_error = call.set == GLTANG_CALL_ERROR;
+     result = gltang_vm_call_settle(exec, &call, true);
+     if (oc->extra && oc->extra->errored) {
+-      *oc->extra->errored = status != GLTANG_OP_OK || set_error || call.scope_oom || call.scope_unwind;
++      (void)set_error;
++      *oc->extra->errored = status != GLTANG_OP_OK || call.scope_oom || call.scope_unwind;  /* planted */
+     }
+     if (gltang_v_is_kind(result, GLTANG_OBJ_STRING)) {
+       // A callback costs fuel in proportion to the bytes it answers, as a native does.

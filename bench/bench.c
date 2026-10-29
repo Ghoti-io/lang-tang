@@ -1344,7 +1344,7 @@ static uint64_t custom_make_run(uint64_t iterations, double * elapsed) {
 
 /*
  * The cases of spec-tang-host-extensibility story 6. The first four run on any
- * lang-tang (a build with GLTANG_BENCH_NO_STORY6 leaves out the rest): the
+ * lang-tang (a build with GLTANG_BENCH_NO_TYPE_OPERATIONS leaves out the rest): the
  * truth tests, an array's `for`, and a string's and an array's own attribute,
  * which are the paths the story's hooks sit beside and must leave level. The
  * others use the story's operations: a host collection's `for`, a callable
@@ -1382,7 +1382,7 @@ static uint64_t array_attr_run(uint64_t iterations, double * elapsed) {
   return sink;
 }
 
-#ifndef GLTANG_BENCH_NO_STORY6
+#ifndef GLTANG_BENCH_NO_TYPE_OPERATIONS
 static const GLTANG_Type * bench_coll;
 
 static bool bench_coll_read(GLTANG_NativeCall * call, GLTANG_Handle h, int64_t * state) {
@@ -1545,7 +1545,7 @@ static uint64_t host_string_attr_run(uint64_t iterations, double * elapsed) {
 static uint64_t builtin_string_attr_with_registry_run(uint64_t iterations, double * elapsed) {
   return coll_case("use coll; s = \"hello\"; n = 0; for (i = 0; i < 1000; i += 1) { n += s.length; } n;", 5000, iterations, elapsed);
 }
-#endif /* GLTANG_BENCH_NO_STORY6 */
+#endif /* GLTANG_BENCH_NO_TYPE_OPERATIONS */
 
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
@@ -2744,7 +2744,7 @@ static const Case cases[] = {
     {"array-for-1000", array_for_run, 3000u, 5u},
     {"string-attribute-read-1000", string_attr_run, 5000u, 5u},
     {"array-attribute-read-1000", array_attr_run, 5000u, 5u},
-#ifndef GLTANG_BENCH_NO_STORY6
+#ifndef GLTANG_BENCH_NO_TYPE_OPERATIONS
     {"custom-iterate-1000", custom_iterate_run, 2000u, 5u},
     {"custom-call-1000", custom_call_run, 2000u, 5u},
     {"custom-truth-1000", custom_truth_run, 2000u, 5u},

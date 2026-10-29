@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -715,10 +715,9 @@
+@@ -734,10 +734,9 @@
  
  /** The answer of a `print` or `to_string`: a string, or the failure; anything else is `Host function failed`. */
  static GLTANG_Value text_answer(GLTANG_Execution * exec, GLTANG_Value r, bool errored) {

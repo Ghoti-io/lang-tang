@@ -4,7 +4,7 @@
 #
 --- a/src/vm/ops.c
 +++ b/src/vm/ops.c
-@@ -524,6 +524,7 @@
+@@ -528,6 +528,7 @@
    if (!declined) {
      return r;
    }

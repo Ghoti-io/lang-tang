@@ -195,18 +195,22 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
  *     errorlist.c gltang_vm_error_swallowed  - reads the object's flags and kind, lists it
  *     errorlist.c gltang_vm_set_result       - reads the object's flags: a result that is lost is listed
  *     execution.c result_text / result_error - read the kind, the message and the origin
- *     interp.c DISCARD, jit/helpers.c gltang_jit_discard - swallow: a discarded value is logged,
+ *     interp.c's DISCARD, jit/helpers.c gltang_jit_discard - swallow: a discarded value is logged,
  *                                              and a marked instance is never logged (both tiers agree)
- *     ops.c 195, 814, 858, 908               - a deep copy or a stored value that FAILED (an engine
+ *     ops.c append_copies, gltang_vm_op_slice, map_store, gltang_vm_op_set_index - a deep copy or a stored value that FAILED (an engine
  *                                              error made by the engine, or the out-of-memory value);
  *                                              an instance is stored by reference, never copied
+ *     custom.c gltang_vm_custom_iterator_begin and gltang_vm_custom_cast - the error a callback ANSWERED
+ *                                              (made by the engine from its status): engine errors only
+ *     interp.c's truth sites (JMP_FALSE, JMP_TRUE, OR) - an error a `truthy` answered is recorded with
+ *                                              gltang_vm_error_swallowed, which is engine-only
  *   gltang_vm_stands_for_error (engine errors and marked instances), because the caller propagates
  *   the value as the operation's own:
  *     custom.c gltang_vm_custom_binary and the `!=` fallback - an operand or an `equal` answer that
  *                                              stands for an error is the value
  *     container.c equal_rec                  - an element's `equal` answering one is the comparison's value
  *   gltang_vm_is_error, kept, in one more place:
- *     ops.c 356 (a string's `+` with an error operand) - a custom operand (a marked instance too) is
+ *     ops.c gltang_vm_op_binary (a string's `+` with an error operand) - a custom operand (a marked instance too) is
  *                                              dispatched to custom_binary on the line before, which
  *                                              uses the predicate above, so the engine-only test is
  *                                              reached only by an engine error

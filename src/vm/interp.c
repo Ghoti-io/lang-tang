@@ -165,8 +165,14 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
 // The truth of the custom value on top of the operand stack: its type's `truthy`, a GC point where a
 // host callback runs (and may poll). The value stays on the stack during the call, as an operation's
 // operands do; the result is `truth_r` (GLTANG_V_TRUE, GLTANG_V_FALSE, or an error value, which is
-// falsy and the expression's own value). A test of any other kind is gltang_vm_truthy, a pure
+// falsy: the value of `!` and `&&`, and recorded as discarded where it is the value of nothing). A test of any other kind is gltang_vm_truthy, a pure
 // function, and pays only the kind test above.
+#define CUSTOM_TRUTH_DISCARDED() \
+  do { \
+    if (truth_r != GLTANG_V_TRUE && truth_r != GLTANG_V_FALSE) { \
+      gltang_vm_error_swallowed(exec, GLTANG_ERROR_HOW_DISCARDED, truth_r, exec->act); \
+    } \
+  } while (0)
 #define CUSTOM_TRUTH() \
   do { \
     SYNC(); \
@@ -488,6 +494,9 @@ resume_loop:
         if (gltang_v_is_custom(S[sp - 1u])) {
           CUSTOM_TRUTH();
           S[--sp] = 0;
+          // An error the type answered is falsy here and is not the value of anything: it is
+          // recorded as discarded, as an expression statement's error value is.
+          CUSTOM_TRUTH_DISCARDED();
           if (truth_r != GLTANG_V_TRUE) {
             pc = a;
           }
@@ -504,6 +513,7 @@ resume_loop:
         if (gltang_v_is_custom(S[sp - 1u])) {
           CUSTOM_TRUTH();
           S[--sp] = 0;
+          CUSTOM_TRUTH_DISCARDED();  // falsy and the value of nothing, as in JMP_FALSE
           if (truth_r == GLTANG_V_TRUE) {
             pc = a;
           }
@@ -546,6 +556,7 @@ resume_loop:
           }
           else {
             S[--sp] = 0;
+            CUSTOM_TRUTH_DISCARDED();  // falsy: the right side is the value, and the error is the value of nothing
           }
           break;
         }
@@ -560,9 +571,10 @@ resume_loop:
       case GLTANG_OP_CAST: {
         GLTANG_Value v = S[sp - 1u];
         SYNC();
-        if (a == GLTANG_CAST_TYPE_STRING) {
-          // A cast to string renders its operand, paced by the bytes it renders: stand at the
-          // cast, as compiled code's helper does. The other casts poll nowhere and stand nowhere.
+        if (a == GLTANG_CAST_TYPE_STRING || gltang_v_is_custom(v)) {
+          // A cast to string renders its operand, paced by the bytes it renders, and a cast of a
+          // host-defined value runs its type's callback, which may poll: stand at the cast, as
+          // compiled code's helper does. The other casts of other values poll nowhere and stand nowhere.
           SAVE_AT_OP();
           STAND_AT_OP();
         }
@@ -1184,6 +1196,7 @@ unwound:
 #undef STOOD
 #undef PUSH
 #undef CUSTOM_TRUTH
+#undef CUSTOM_TRUTH_DISCARDED
 #undef DROP
 }
 

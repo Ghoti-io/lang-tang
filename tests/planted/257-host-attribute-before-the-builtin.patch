@@ -4,7 +4,7 @@
 #
 --- a/src/vm/ops.c
 +++ b/src/vm/ops.c
-@@ -650,6 +650,13 @@
+@@ -654,6 +654,13 @@
  static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, GLTANG_Value name_value) {
    switch (gltang_vm_kind(container)) {
      case GLTANG_KIND_STRING:

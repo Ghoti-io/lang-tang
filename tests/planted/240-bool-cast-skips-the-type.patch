@@ -4,8 +4,8 @@
 #
 --- a/src/vm/ops.c
 +++ b/src/vm/ops.c
-@@ -520,7 +520,8 @@
-     case GLTANG_CAST_TYPE_STRING: target = GLTANG_CAST_TARGET_STRING; break;
+@@ -524,7 +524,8 @@
+     return GLTANG_V_FALSE;
    }
    bool declined;
 -  GLTANG_Value r = gltang_vm_custom_cast(exec, v, target, &declined);

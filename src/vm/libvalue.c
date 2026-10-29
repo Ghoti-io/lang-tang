@@ -150,29 +150,52 @@ static GLTANG_RngObject * rng_of(GLTANG_Value v) {
   return gltang_object(v);
 }
 
-bool gltang_vm_rng_has_member(const char * name, size_t length) {
-  // The names gltang_vm_rng_attr answers: one list, written twice for speed (a draw is a hot read).
-  return (length == 8 && (!memcmp(name, "next_int", 8) || !memcmp(name, "set_seed", 8))) ||
-         (length == 10 && !memcmp(name, "next_float", 10)) ||
-         (length == 9 && !memcmp(name, "next_bool", 9));
+/** The generator's own members: the one list, read by the attribute rule and by the test that asks whether a name is one. */
+typedef enum { RNG_NEXT_INT, RNG_NEXT_FLOAT, RNG_NEXT_BOOL, RNG_SET_SEED, RNG_NONE } RngMember;
+
+static RngMember rng_member(const char * name, size_t length) {
+  static const struct {
+    const char * name;
+    size_t length;
+  } members[RNG_NONE] = {
+    [RNG_NEXT_INT] = {"next_int", 8},
+    [RNG_NEXT_FLOAT] = {"next_float", 10},
+    [RNG_NEXT_BOOL] = {"next_bool", 9},
+    [RNG_SET_SEED] = {"set_seed", 8},
+  };
+  for (int m = 0; m < RNG_NONE; ++m) {
+    if (members[m].length == length && !memcmp(name, members[m].name, length)) {
+      return (RngMember)m;
+    }
+  }
+  return RNG_NONE;
+}
+
+GLTANG_Value gltang_vm_rng_try_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length, bool * found) {
+  GLTANG_RngObject * state = rng_of(rng);
+  *found = true;
+  switch (rng_member(name, length)) {
+    case RNG_NEXT_INT:
+      return gltang_vm_make_int(exec, (int64_t)gcu_random_mt64_next(&state->state));
+    case RNG_NEXT_FLOAT: {
+      uint64_t word = gcu_random_mt64_next(&state->state);
+      return gltang_vm_make_float(exec, (double)(word >> 11) * (1.0 / 9007199254740992.0));
+    }
+    case RNG_NEXT_BOOL:
+      return gltang_v_from_bool((gcu_random_mt64_next(&state->state) & 1u) != 0);
+    case RNG_SET_SEED:
+      return native_value(exec, NULL, GLTANG_BUILTIN_RNG_SET_SEED, rng);
+    case RNG_NONE:
+      break;
+  }
+  *found = false;
+  return GLTANG_V_NULL;
 }
 
 GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length) {
-  GLTANG_RngObject * state = rng_of(rng);
-  if (length == 8 && !memcmp(name, "next_int", 8)) {
-    return gltang_vm_make_int(exec, (int64_t)gcu_random_mt64_next(&state->state));
-  }
-  if (length == 10 && !memcmp(name, "next_float", 10)) {
-    uint64_t word = gcu_random_mt64_next(&state->state);
-    return gltang_vm_make_float(exec, (double)(word >> 11) * (1.0 / 9007199254740992.0));
-  }
-  if (length == 9 && !memcmp(name, "next_bool", 9)) {
-    return gltang_v_from_bool((gcu_random_mt64_next(&state->state) & 1u) != 0);
-  }
-  if (length == 8 && !memcmp(name, "set_seed", 8)) {
-    return native_value(exec, NULL, GLTANG_BUILTIN_RNG_SET_SEED, rng);
-  }
-  return gltang_vm_make_error(exec, GLTANG_ERROR_NOT_IMPLEMENTED);
+  bool found;
+  GLTANG_Value r = gltang_vm_rng_try_attr(exec, rng, name, length, &found);
+  return found ? r : gltang_vm_make_error(exec, GLTANG_ERROR_NOT_IMPLEMENTED);
 }
 
 // ---------------------------------------------------------------------------

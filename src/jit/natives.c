@@ -311,7 +311,8 @@ static GRJIT_NativeResult thunk_cast(void * context, uint64_t execution, uint64_
   ++exec->jit_stats.value_calls;
   // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
   // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.
-  if (type == GLTANG_CAST_TYPE_STRING) {
+  // The cast of a host-defined value runs its type's callback, which may poll too.
+  if (type == GLTANG_CAST_TYPE_STRING || gltang_v_is_custom(value)) {
     exec->standing = true;
   }
   GLTANG_Value result = gltang_vm_op_cast(exec, value, (GLTANG_Cast_Type)type);

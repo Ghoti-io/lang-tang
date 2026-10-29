@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -649,7 +649,7 @@
+@@ -654,7 +654,7 @@
    bool errored = false;
    if (!declined) {
      OpCall oc = OPCALL(type, GLTANG_TYPE_OP_ITERATOR_NEXT, 1, true, false);

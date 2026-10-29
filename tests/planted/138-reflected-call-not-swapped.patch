@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -456,7 +456,7 @@
+@@ -461,7 +461,7 @@
      const GLTANG_Type * type = gltang_vm_custom(b)->type;
      if (gltang_type_has(type, op)) {
        OpCall oc = OPCALL(type, op, 2, false, is_assignment);

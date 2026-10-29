@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1071,7 +1071,6 @@
+@@ -1083,7 +1083,6 @@
              if (step == GLTANG_ITER_ERROR) {
                // The error ends the loop and is its value, as an ITER_INIT error is (13.12): the
                // statement after the loop that clears the result is stepped over.

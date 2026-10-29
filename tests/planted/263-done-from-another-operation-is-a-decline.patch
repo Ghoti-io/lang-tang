@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -358,7 +358,7 @@
+@@ -360,7 +360,7 @@
    GLTANG_Value result;
    bool settle = true;
    if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {

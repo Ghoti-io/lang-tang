@@ -1,0 +1,15 @@
+# 271 a cast to bool of an instance marked as an error that asks the type
+# defect: `v as bool` of an instance marked as standing for an error calls the type's `cast`, where `if (v)` is false without asking
+# caught by: the marked-instance-cast test: the log of calls (testCustom_ops)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -519,7 +519,7 @@
+     case GLTANG_CAST_TYPE_BOOLEAN: target = GLTANG_CAST_TARGET_BOOL; break;
+     case GLTANG_CAST_TYPE_STRING: target = GLTANG_CAST_TARGET_STRING; break;
+   }
+-  if (type == GLTANG_CAST_TYPE_BOOLEAN && (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_ERROR)) {
++  if (false && type == GLTANG_CAST_TYPE_BOOLEAN && (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_ERROR)) {  /* planted */
+     // An instance that stands for an error is false, and its type is not asked, as for `if (v)`.
+     return GLTANG_V_FALSE;
+   }

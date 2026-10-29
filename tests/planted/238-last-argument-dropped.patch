@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -242,7 +242,7 @@
+@@ -243,7 +243,7 @@
      case GLTANG_TYPE_OP_SLICE: return d->slice(call, user, h[0], h[1], h[2], h[3]);
      case GLTANG_TYPE_OP_ITERATOR_BEGIN: return d->iterator_begin(call, user, h[0]);
      case GLTANG_TYPE_OP_ITERATOR_NEXT: return d->iterator_next(call, user, h[0]);

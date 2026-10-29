@@ -1,0 +1,15 @@
+# 272 a truthy's error set through the call object overwritten by the boolean
+# defect: the boolean a `truthy` left in its out parameter replaces an error the callback set through the call object with the status OK
+# caught by: the truthy-error-through-the-call-object test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -248,7 +248,7 @@
+     case GLTANG_TYPE_OP_TRUTHY: {
+       bool truthy = true;
+       GLTANG_OpStatus status = d->truthy(call, user, h[0], &truthy);
+-      if (status == GLTANG_OP_OK && call->set != GLTANG_CALL_ERROR) {
++      if (status == GLTANG_OP_OK) {  /* planted: the error is overwritten */
+         // The answer is the boolean the callback left in its out parameter, unless it set an
+         // error through the call object, which is the call's value whatever it returned.
+         gltang_call_return_bool(call, truthy);

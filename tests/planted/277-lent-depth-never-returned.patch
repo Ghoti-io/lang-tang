@@ -1,0 +1,20 @@
+# 277 the native-depth units lent for a callback never taken back
+# defect: after a callback that was reached from a compiled helper, the native depth stays down by the units lent, so a later budget check passes where it should refuse (and the depth is not where it started)
+# caught by: the refused-record test: the native depth after the run (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -401,12 +401,7 @@
+     }
+   }
+   (void)grcore_activation_leave(stack, record);
+-#ifdef GLTANG_WITH_JIT
+-  if (lent) {
+-    gltang_jit_return_depth(exec, lent);
+-  }
+-#endif
+-  if (held != held_small) {
++  if (held != held_small) {  /* planted: the lent depth is not returned */
+     gcu_free(held);
+     gcu_free(h);
+   }

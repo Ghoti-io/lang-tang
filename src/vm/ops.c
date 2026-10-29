@@ -519,6 +519,10 @@ static GLTANG_Value custom_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTANG_
     case GLTANG_CAST_TYPE_BOOLEAN: target = GLTANG_CAST_TARGET_BOOL; break;
     case GLTANG_CAST_TYPE_STRING: target = GLTANG_CAST_TARGET_STRING; break;
   }
+  if (type == GLTANG_CAST_TYPE_BOOLEAN && (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_ERROR)) {
+    // An instance that stands for an error is false, and its type is not asked, as for `if (v)`.
+    return GLTANG_V_FALSE;
+  }
   bool declined;
   GLTANG_Value r = gltang_vm_custom_cast(exec, v, target, &declined);
   if (!declined) {
@@ -689,10 +693,11 @@ static GLTANG_Value attr(GLTANG_Execution * exec, GLTANG_Value container, const 
     case GLTANG_KIND_LIBRARY:
       return gltang_vm_library_attr(exec, container, name, length);
     case GLTANG_KIND_RNG:
-      if (!gltang_vm_rng_has_member(name, length)) {
-        return missing_attr(exec, container, name, length);
-      }
-      return gltang_vm_rng_attr(exec, container, name, length);
+    {
+      bool found;
+      GLTANG_Value member = gltang_vm_rng_try_attr(exec, container, name, length, &found);
+      return found ? member : missing_attr(exec, container, name, length);
+    }
     case GLTANG_KIND_CUSTOM:  // in the default arm, so the switch is the one it was
     default: {
       if (!gltang_v_is_custom(container)) {

@@ -46,7 +46,15 @@ if [ -z "$TA" ]; then
   exit 2
 fi
 
+# How many tests a run reports having run, from gtest's "[==========] N tests from ... ran." line;
+# 0 when there is none. A filter that matches no test must not read as a clean control.
+tests_run() {
+  printf '%s\n' "$1" | sed -n 's/^\[==========\] \([0-9][0-9]*\) tests\{0,1\} from .* ran\..*/\1/p' | tail -1 | awk '{print ($1 == "" ? 0 : $1)}'
+}
+
 # plant NAME PATCH SOURCE-FILE TEST FILTER
+# A failure of one defect (a patch that does not apply, a build that fails) is counted in rc and
+# the next defect is still tried.
 plant() {
   name="$1"; patch_file="$ROOT/tests/planted/$2"; source_file="$3"; test_name="$4"; filter="$5"
   build() {
@@ -59,17 +67,24 @@ plant() {
   }
   cp "$WORK/$source_file" "$WORK/original.orig"
   if ! (cd "$WORK" && patch -p1 --fuzz=0 --quiet <"$patch_file") >>"$LOG" 2>&1; then
-    printf 'check-planted-tsan: the patch %s does not apply (see %s)\n' "$2" "$LOG" >&2
-    exit 2
+    printf 'planted %s\n  FAIL: the patch does not apply (see %s)\n' "$name" "$LOG" >&2
+    rc=1
+    return
   fi
   if ! build; then
-    printf '  FAIL: the patched copy did not build (see %s)\n' "$LOG" >&2
-    exit 1
+    printf 'planted %s\n  FAIL: the patched copy did not build (see %s)\n' "$name" "$LOG" >&2
+    rc=1
+    cp "$WORK/original.orig" "$WORK/$source_file"
+    return
   fi
   out="$(run)"
   status=$?
+  # A reported race stops the run before gtest's summary (halt_on_error), so the race is looked for first.
   if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -q 'ThreadSanitizer: data race'; then
     printf 'planted %s\n  caught by ThreadSanitizer (exit %s)\n' "$name" "$status"
+  elif [ "$(tests_run "$out")" -lt 1 ]; then
+    printf 'planted %s\n  FAIL: the filter %s ran no test, so nothing was measured\n' "$name" "$filter" >&2
+    rc=1
   else
     printf 'planted %s\n  NOT CAUGHT: the threaded test did not report a race with the defect planted (exit %s)\n' "$name" "$status" >&2
     rc=1
@@ -77,11 +92,15 @@ plant() {
   cp "$WORK/original.orig" "$WORK/$source_file"
   if ! build; then
     printf '  FAIL: the control did not build (see %s)\n' "$LOG" >&2
-    exit 1
+    rc=1
+    return
   fi
   out="$(run)"
   status=$?
-  if [ "$status" -eq 0 ] && ! printf '%s' "$out" | grep -q 'ThreadSanitizer'; then
+  if [ "$(tests_run "$out")" -lt 1 ]; then
+    printf '  CONTROL FAILED: the filter %s ran no test\n' "$filter" >&2
+    rc=1
+  elif [ "$status" -eq 0 ] && ! printf '%s' "$out" | grep -q 'ThreadSanitizer'; then
     printf '  control is clean\n'
   else
     printf '  CONTROL FAILED: the unpatched threaded test under ThreadSanitizer exits %s\n' "$status" >&2

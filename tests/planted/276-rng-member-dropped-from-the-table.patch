@@ -1,0 +1,15 @@
+# 276 a generator member missing from the one table
+# defect: `set_seed` is not in the table of the generator's members, so the attribute rule falls through to the host's attributes and a host `set_seed` shadows it
+# caught by: the every-built-in-member-name test (testCustom_ops)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -161,7 +161,7 @@
+     [RNG_NEXT_INT] = {"next_int", 8},
+     [RNG_NEXT_FLOAT] = {"next_float", 10},
+     [RNG_NEXT_BOOL] = {"next_bool", 9},
+-    [RNG_SET_SEED] = {"set_seed", 8},
++    [RNG_SET_SEED] = {"set_seed", 0},  /* planted */
+   };
+   for (int m = 0; m < RNG_NONE; ++m) {
+     if (members[m].length == length && !memcmp(name, members[m].name, length)) {

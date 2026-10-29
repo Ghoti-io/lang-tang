@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -768,7 +768,7 @@
+@@ -787,7 +787,7 @@
      GLTANG_Value args[1] = {container};
      bool declined;
      GLTANG_Value r = invoke(exec, &oc, args, &declined);

@@ -7,11 +7,11 @@
 #
 --- a/src/jit/natives.c
 +++ b/src/jit/natives.c
-@@ -291,9 +291,7 @@
-   ++exec->jit_stats.value_calls;
+@@ -312,9 +312,7 @@
    // A cast to string renders its operand, paced by the bytes it renders (gltang_vm_to_string),
    // so it polls inside, at the `CAST`; the other casts neither poll nor stand, on either tier.
--  if (type == GLTANG_CAST_TYPE_STRING) {
+   // The cast of a host-defined value runs its type's callback, which may poll too.
+-  if (type == GLTANG_CAST_TYPE_STRING || gltang_v_is_custom(value)) {
 -    exec->standing = true;
 -  }
 +  /* planted: the cast to string does not stand */

@@ -1,0 +1,15 @@
+# 274 a cast of a host-defined value that does not stand at the operation
+# defect: the interpreter stands at a cast only for a cast to string, so a poll inside a custom value's `cast` to another target is recorded elsewhere than in compiled code
+# caught by: the cast-callback-that-polls test: the position and fuel in both tiers (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -571,7 +571,7 @@
+       case GLTANG_OP_CAST: {
+         GLTANG_Value v = S[sp - 1u];
+         SYNC();
+-        if (a == GLTANG_CAST_TYPE_STRING || gltang_v_is_custom(v)) {
++        if (a == GLTANG_CAST_TYPE_STRING) {  /* planted */
+           // A cast to string renders its operand, paced by the bytes it renders, and a cast of a
+           // host-defined value runs its type's callback, which may poll: stand at the cast, as
+           // compiled code's helper does. The other casts of other values poll nowhere and stand nowhere.

@@ -1,0 +1,16 @@
+# 269 a truthy's error dropped without a trace
+# defect: the error a `truthy` answered is treated as false in `if`, `while`, `?:` and the left of `||` and recorded nowhere, though the engine tracks every error it discards
+# caught by: the truthy-error test: the error list of each site (testCustom_ops)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -496,8 +496,7 @@
+           S[--sp] = 0;
+           // An error the type answered is falsy here and is not the value of anything: it is
+           // recorded as discarded, as an expression statement's error value is.
+-          CUSTOM_TRUTH_DISCARDED();
+-          if (truth_r != GLTANG_V_TRUE) {
++          if (truth_r != GLTANG_V_TRUE) {  /* planted: the error is not recorded */
+             pc = a;
+           }
+           break;

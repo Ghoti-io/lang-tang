@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -539,7 +539,7 @@
+@@ -549,7 +549,7 @@
          }
          break;
        case GLTANG_OP_OR:

@@ -1,0 +1,16 @@
+# 270 a cast answer of the wrong kind accepted
+# defect: an OK answer of `cast` is the value whatever its kind, so `as bool` can answer an integer and `as int` a string
+# caught by: the wrong-kind-cast test (testCustom_ops)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -729,7 +729,8 @@
+     case GLTANG_CAST_TARGET_BOOL: want = GLTANG_KIND_BOOL; break;
+     case GLTANG_CAST_TARGET_STRING: want = GLTANG_KIND_STRING; break;
+   }
+-  return gltang_vm_kind(r) == want ? r : MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
++  (void)want;
++  return r;  /* planted: any kind */
+ }
+ 
+ /** The answer of a `print` or `to_string`: a string, or the failure; anything else is `Host function failed`. */

@@ -7,13 +7,14 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -486,12 +486,7 @@
+@@ -571,13 +571,7 @@
        case GLTANG_OP_CAST: {
          GLTANG_Value v = S[sp - 1u];
          SYNC();
--        if (a == GLTANG_CAST_TYPE_STRING) {
--          // A cast to string renders its operand, paced by the bytes it renders: stand at the
--          // cast, as compiled code's helper does. The other casts poll nowhere and stand nowhere.
+-        if (a == GLTANG_CAST_TYPE_STRING || gltang_v_is_custom(v)) {
+-          // A cast to string renders its operand, paced by the bytes it renders, and a cast of a
+-          // host-defined value runs its type's callback, which may poll: stand at the cast, as
+-          // compiled code's helper does. The other casts of other values poll nowhere and stand nowhere.
 -          SAVE_AT_OP();
 -          STAND_AT_OP();
 -        }

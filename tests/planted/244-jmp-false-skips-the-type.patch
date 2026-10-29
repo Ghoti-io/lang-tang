@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -485,7 +485,7 @@
+@@ -491,7 +491,7 @@
          pc = a;
          break;
        case GLTANG_OP_JMP_FALSE: {
@@ -12,4 +12,4 @@
 +        if (false && gltang_v_is_custom(S[sp - 1u])) { /* planted */
            CUSTOM_TRUTH();
            S[--sp] = 0;
-           if (truth_r != GLTANG_V_TRUE) {
+           // An error the type answered is falsy here and is not the value of anything: it is

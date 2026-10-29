@@ -1074,8 +1074,9 @@ GLTANG_Value gltang_vm_custom_call(GLTANG_Execution * exec, const GLTANG_Value *
 
 /**
  * @brief The truth of custom `v`: GLTANG_V_TRUE or GLTANG_V_FALSE, or an error
- *   value (its type's `truthy` answered an error: falsy, and the value of the
- *   expression), or GLTANG_V_UNWIND. A marked instance is false and its type is
+ *   value (its type's `truthy` answered an error: falsy), or GLTANG_V_UNWIND. The caller decides
+ *   what an error is: the value of `!`, `&&` and `as bool`, and recorded as discarded (the
+ *   GLTANG_ERROR_HOW_DISCARDED swallow) in JMP_FALSE, JMP_TRUE and the left side of `||`. A marked instance is false and its type is
  *   not asked; an instance with no entry, or a decline, is true. A GC point.
  */
 GLTANG_Value gltang_vm_custom_truth(GLTANG_Execution * exec, GLTANG_Value v);
@@ -1126,8 +1127,11 @@ GLTANG_Value gltang_vm_member_value(GLTANG_Execution * exec, const GLTANG_Librar
 GLTANG_Value gltang_vm_library_attr(GLTANG_Execution * exec, GLTANG_Value library, const char * name, size_t length);
 /** @brief `rng.name`: `next_int`, `next_float`, `next_bool` draw; `set_seed` is a method. */
 GLTANG_Value gltang_vm_rng_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length);
-/** @brief Whether `rng.name` is one of the generator's own members (the names gltang_vm_rng_attr answers). */
-bool gltang_vm_rng_has_member(const char * name, size_t length);
+/**
+ * @brief `rng.name` for one of the generator's own members; `*found` is false, and nothing is made,
+ *   for any other name (the attribute rule then asks the host's attributes, and the error is its).
+ */
+GLTANG_Value gltang_vm_rng_try_attr(GLTANG_Execution * exec, GLTANG_Value rng, const char * name, size_t length, bool * found);
 /**
  * @brief Calls a native function value (a host's, or one of the engine's): the
  *   one place a native is entered, from the interpreter's `CALL` and from

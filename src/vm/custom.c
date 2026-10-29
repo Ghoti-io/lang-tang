@@ -168,6 +168,7 @@ GLTANG_Value gltang_vm_make_custom(GLTANG_Execution * exec, const GLTANG_Type * 
   // The heap zero-fills a payload: every slot is null and every byte zero.
   GLTANG_CustomObject * custom = object;
   custom->kind = GLTANG_OBJ_CUSTOM;
+  _Static_assert(GLTANG_TYPE_SLOTS_MAX <= UINT16_MAX, "an instance's slot count is kept in 16 bits");
   custom->slot_count = (uint16_t)slots;
   custom->type = type;
   return gltang_value_of(custom);
@@ -247,8 +248,9 @@ static GLTANG_OpStatus run_callback(GLTANG_NativeCall * call, const OpCall * oc,
     case GLTANG_TYPE_OP_TRUTHY: {
       bool truthy = true;
       GLTANG_OpStatus status = d->truthy(call, user, h[0], &truthy);
-      if (status == GLTANG_OP_OK) {
-        // The answer is the boolean the callback left in its out parameter.
+      if (status == GLTANG_OP_OK && call->set != GLTANG_CALL_ERROR) {
+        // The answer is the boolean the callback left in its out parameter, unless it set an
+        // error through the call object, which is the call's value whatever it returned.
         gltang_call_return_bool(call, truthy);
       }
       return status;
@@ -386,9 +388,12 @@ static GLTANG_Value invoke(GLTANG_Execution * exec, const OpCall * oc, const GLT
       // from an iterator's `iterator_next` only (above), whatever kind it set.
       gltang_call_return_error(&call, GLTANG_ERROR_HOST_FAILED);
     }
+    // Read before the call settles: an error set through the call object is the value whatever the
+    // status was, and the caller must not take that value for an answer.
+    const bool set_error = call.set == GLTANG_CALL_ERROR;
     result = gltang_vm_call_settle(exec, &call, true);
     if (oc->extra && oc->extra->errored) {
-      *oc->extra->errored = status != GLTANG_OP_OK || call.scope_oom || call.scope_unwind;
+      *oc->extra->errored = status != GLTANG_OP_OK || set_error || call.scope_oom || call.scope_unwind;
     }
     if (gltang_v_is_kind(result, GLTANG_OBJ_STRING)) {
       // A callback costs fuel in proportion to the bytes it answers, as a native does.
@@ -706,11 +711,25 @@ GLTANG_Value gltang_vm_custom_cast(GLTANG_Execution * exec, GLTANG_Value v, GLTA
     *declined = true;
     return GLTANG_V_NULL;
   }
+  bool errored = false;
   OpCall oc = OPCALL(type, GLTANG_TYPE_OP_CAST, 1, true, false);
-  OpExtra extra = {target, NULL, NULL, NULL};
+  OpExtra extra = {target, NULL, NULL, &errored};
   oc.extra = &extra;
   GLTANG_Value args[1] = {v};
-  return invoke(exec, &oc, args, declined);
+  GLTANG_Value r = invoke(exec, &oc, args, declined);
+  if (*declined || errored || r == GLTANG_V_UNWIND || gltang_vm_is_error(r)) {
+    return r;
+  }
+  // An answer is of the target's kind (a type answering an integer to `as bool` is wrong, as an
+  // answer of `print` that is not a string is): else the call failed.
+  GLTANG_ValueKind want = GLTANG_KIND_INTEGER;
+  switch (target) {
+    case GLTANG_CAST_TARGET_INT: want = GLTANG_KIND_INTEGER; break;
+    case GLTANG_CAST_TARGET_FLOAT: want = GLTANG_KIND_FLOAT; break;
+    case GLTANG_CAST_TARGET_BOOL: want = GLTANG_KIND_BOOL; break;
+    case GLTANG_CAST_TARGET_STRING: want = GLTANG_KIND_STRING; break;
+  }
+  return gltang_vm_kind(r) == want ? r : MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
 }
 
 /** The answer of a `print` or `to_string`: a string, or the failure; anything else is `Host function failed`. */

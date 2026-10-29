@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -681,7 +681,7 @@
+@@ -686,7 +686,7 @@
    OpCall oc = OPCALL(type, GLTANG_TYPE_OP_CALL, argc + 1u, true, false);
    bool declined;
    GLTANG_Value r = invoke(exec, &oc, callee_and_args, &declined);

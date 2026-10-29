@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -501,7 +501,7 @@
+@@ -510,7 +510,7 @@
          break;
        }
        case GLTANG_OP_JMP_TRUE: {
@@ -12,4 +12,4 @@
 +        if (false && gltang_v_is_custom(S[sp - 1u])) { /* planted */
            CUSTOM_TRUTH();
            S[--sp] = 0;
-           if (truth_r == GLTANG_V_TRUE) {
+           CUSTOM_TRUTH_DISCARDED();  // falsy and the value of nothing, as in JMP_FALSE

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -659,9 +659,7 @@
+@@ -664,9 +664,7 @@
    }
    if (declined) {
      // The language's error, made now that the type has nothing to say.
