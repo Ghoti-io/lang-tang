@@ -678,6 +678,35 @@ GLTANG_OpStatus sort_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle state,
 
 const GLTANG_Continuation kSortTable[] = {{"sort_cont", sort_cont}};
 
+// bind(f): a resumable native bound to f; called with x it asks for f(x), and its continuation adds 1000.
+bool bound_call(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle f, x;
+  if (gltang_call_bound(call, &f) != GLTANG_OK || gltang_call_arg(call, 0, &x) != GLTANG_OK) {
+    return false;
+  }
+  return gltang_call_guest(call, f, &x, 1, 0, GLTANG_Handle{0, 0}) == GLTANG_OK;
+}
+
+GLTANG_OpStatus bound_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle result) {
+  if (gltang_handle_kind(call, result) != GLTANG_KIND_INTEGER) {
+    gltang_call_return_handle(call, result);
+    return GLTANG_OP_OK;
+  }
+  gltang_call_return_integer(call, gltang_handle_integer(call, result) + 1000);
+  return GLTANG_OP_OK;
+}
+
+const GLTANG_Continuation kBoundTable[] = {{"bound_cont", bound_cont}};
+
+bool bind(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle f, h;
+  if (gltang_call_arg(call, 0, &f) != GLTANG_OK || gltang_handle_make_resumable_native(call, bound_call, nullptr, kBoundTable, 1, f, &h) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
 // A host attribute of a built-in kind (`s.apply(f)`) is never resumable itself; it answers a bound resumable native.
 bool apply_native(GLTANG_NativeCall * call, void *) {
   GLTANG_Handle f, bound;
@@ -826,10 +855,6 @@ bool log_note(GLTANG_NativeCall * call, void * user) {
   return true;
 }
 
-struct Reading {
-  std::string text;
-};
-
 /// Attaches the types and the natives to a context.
 void install(Context & context, Types & t) {
   context.add_native_library();
@@ -844,6 +869,7 @@ void install(Context & context, Types & t) {
   EXPECT_EQ(gltang_library_add_native(lib, "view", make_instance<&Types::view>, &t), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "emb", make_instance<&Types::emb>, &t), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "note", log_note, &t), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "bind", bind, nullptr), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "mapn", mapn, nullptr), GLTANG_OK);
   EXPECT_EQ(gltang_library_mark_resumable(lib, "mapn", kMapTable, 1), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "each", each, nullptr), GLTANG_OK);
@@ -1111,6 +1137,46 @@ TEST(Reentry, AHostAttributeOfAStringAnswersABoundResumableNativeThatCallsGuestC
   t.verify = 1;
   t.moving = 1;
   EXPECT_EQ(go(t, 0).out.raw, r.out.raw);
+}
+
+TEST(Reentry, ACalleeThatItselfAsksChainsThroughAResumableNativeAndThroughACallableObject) {
+  Compiled tplsrc("print(\"<i>\"); print(\"x\"); print(\"</i>\");", tt::Mode::Script, "tpl.tang");
+  ASSERT_TRUE(tplsrc.ok());
+  Scenario sc = scenario("use t; use tpl; function sq(x) { return x * x; } b = t.bind(sq); v = t.view(tpl);\n"
+                         "r = t.mapn(3, b); q = t.mapn(2, v); print(r[0]); print(\",\"); print(r[1]); print(\",\"); print(r[2]); print(\"|\"); print(q);\n");
+  sc.before = [&](Context & c) {
+    EXPECT_EQ(gltang_library_add_template(c.library(), "tpl", tplsrc.program, 100000, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+  };
+  Result r = go(sc, 0);
+  EXPECT_EQ(r.out.raw, "1000,1001,1004|<i>x</i>") << "mapn ends on a callee value that is not an integer, and answers it";
+  EXPECT_EQ(r.pending_depth, 0u);
+  // Three requests of mapn's, each chaining the bound native's own; one of mapn's, chaining the view's.
+  EXPECT_EQ(r.suspended, 3u + 3u + 1u + 1u);
+  EXPECT_EQ(r.nested, 0u);
+  Result j = go(sc, 1);
+  EXPECT_EQ(j.out.raw, r.out.raw);
+  Scenario t = sc;
+  t.torture = 1;
+  t.verify = 1;
+  t.moving = 1;
+  EXPECT_EQ(go(t, 0).out.raw, r.out.raw);
+  // Pausing anywhere in the chain of the bound native gives the same output. (A pause at a template's entry poll is a
+  // pause inside the template's own budget scope, which the harness's raising of the total fuel does not satisfy; the
+  // template part of this program is left out of the sweep, as it is for an ordinary template call.)
+  Scenario chain = scenario("use t; function sq(x) { return x * x; } b = t.bind(sq); r = t.mapn(4, b); print(r[1]); print(\",\"); print(r[3]);\n");
+  Result whole = go(chain, 0);
+  EXPECT_EQ(whole.out.raw, "1001,1009");
+  for (uint64_t step : {2u, 3u, 5u, 7u, 11u, 29u}) {
+    for (long threshold : {0l, 1l}) {
+      Scenario p = chain;
+      p.fuel = step;
+      p.step = step;
+      Result paused = go(p, threshold);
+      EXPECT_EQ(paused.out.raw, whole.out.raw) << "step " << step;
+      EXPECT_EQ(paused.out.fuel, whole.out.fuel) << "step " << step;
+      EXPECT_GE(paused.out.pauses.size(), 1u);
+    }
+  }
 }
 
 TEST(Reentry, ACallableObjectRunsATemplateAndAnswersItsOutput) {
@@ -1437,9 +1503,6 @@ GLTANG_OpStatus opaque_request(GLTANG_NativeCall * call, void *, GLTANG_Handle s
   const GLTANG_Result r = gltang_call_guest(call, f, nullptr, 0, 0, GLTANG_Handle{0, 0});
   gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 11 : 12);
   return GLTANG_OP_OK;
-}
-GLTANG_OpStatus misuse_text_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle) {
-  return answer(call, GLTANG_TYPE_OP_TO_STRING, 0, 1) == GLTANG_OP_OK ? GLTANG_OP_DECLINE : GLTANG_OP_ERROR;
 }
 GLTANG_OpStatus declining_native_cont(GLTANG_NativeCall *, void *, GLTANG_Handle, GLTANG_Handle) { return GLTANG_OP_DECLINE; }
 GLTANG_OpStatus done_native_cont(GLTANG_NativeCall *, void *, GLTANG_Handle, GLTANG_Handle) { return GLTANG_OP_DONE; }
