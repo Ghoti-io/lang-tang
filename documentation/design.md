@@ -1205,9 +1205,9 @@ the header: not resumable, a second request, a bad index, a stale handle, a call
 accepts, too many arguments; each returns `GLTANG_ERR_INVALID` and sets `Host function failed`, and a
 `PENDING` with no request, or a request followed by another status, is `Host function failed` too and
 runs nothing. The values are read out of the handles at the request into one `GLTANG_GuestRequest`
-(in the handle state, so the execution struct did not grow), and out of there into words the
-callback's activation record still covers while the pending record is made, so a collection there
-cannot move them.
+(in the handle state, so the execution struct did not grow), and out of there into the execution's
+temporaries (which the collector updates) while the pending record is made, so a collection there
+cannot lose or move them; a native's frame, which is a heap block its record covers, holds them for it.
 
 **What a suspension holds.** The bracket (the activation record, the unit of native depth, the
 handle scope, `in_host`) closes at the return of `PENDING`. What stays is one heap object, the
@@ -1229,16 +1229,18 @@ either; `grcore_boundary_*` is the cross-engine record of a later story): the `d
 and `scopes` test natives read the same inside the callee as before the callback, and a test holds
 it.
 
-**Making the call, delivering the value.** `unwound:` in `src/vm/interp.c` first asks
-`exec->request_made`: the callback's request is returned up the C frames as `GLTANG_V_UNWIND`
-(every caller already hands that up unchanged, so no intermediate function changed) with that flag,
-and the loop's `pending:` path starts the callee exactly as a `CALL` does for its kind: a function
+**Making the call, delivering the value.** `unwound_or_request:` in `src/vm/interp.c`, reached only from the
+instructions that can reach a type's operation, first asks `exec->request_made`: the callback's request is
+returned up the C frames as `GLTANG_V_UNWIND` (every caller already hands that up unchanged, so no
+intermediate function changed) with that flag, and `pending_step` (a function of its own, so that the loop's
+code and registers are what they were) starts the callee exactly as a `CALL` does for its kind: a function
 (arity, depth and frame checks; a callee that cannot be entered is the *error value* as the
 callee's result, not a failure of the request), a template (its activation and budget scope), a
 native (marked as the call a record waits for, so a resumable native that asks again chains), a
 callable instance (the same), anything else `Invalid function call`. A value with no frame to run
-in is delivered at once. `deliver:` hands the value to the innermost record and *runs the
-instruction again*, from the saved frame, skipping its fuel (it was charged the first time); if the
+in is delivered at once. The return that finds the callee's frame (`RET`, a template's `HALT`, a compiled function's return) calls
+`pending_step` with the value: it hands the value to the innermost record and *runs the
+instruction again*, from the saved frame, taking back its fuel (it was charged the first time, and the loop adds it again); if the
 record belongs to a chained call, that call is run again instead and its value goes on to the record
 below. Running the instruction again is what makes the stack effect of every instruction (the drop
 count, the push, the jump target of `ITER_NEXT`, a setter's value) the instruction's own and not a
@@ -1290,10 +1292,11 @@ does with a request:
 | `gltang_vm_host_attribute` | an attribute a host added to a built-in kind | never resumable |
 
 The mark is one byte of the execution, `suspend_mode`: the interpreter sets it to 1 around a helper call
-whose primary operand is host-defined (so a built-in pair pays a kind test on the path that already
-tested for a string or a float, and nothing more), `gltang_vm_call_native` sets it for a resumable native the
-interpreter calls (`!compiled`), and the `pending:`/`deliver:` paths set it to 2 around a call a record
-waits for; anywhere else it is 0, which is the safe default, and a request at a 0 site is run as a nested
+whose primary operand can reach a callback (for `NEG`, `INDEX`, `ATTR`, `SLICE` and the two stores that is any
+operand, since a built-in one reaches no callback that can ask; for the binary operators, a cast, a print, an
+iterator and a call it is a test of the operand, so that a container holding instances stays a site that cannot
+suspend), the resumable entry of `gltang_vm_call_native` sets it for a resumable native the interpreter calls
+(`!compiled`), and `pending_step` sets it to 2 around a call a record waits for; anywhere else it is 0, which is the safe default, and a request at a 0 site is run as a nested
 activation (`gltang_vm_call_guest`): a Tang function callee only (anything else, and any callee while the
 program is not running, is `Host function failed`), a pause inside is an unwind that stops at the record, and
 a statistic (`nested_requests`) counts them. The corpus test asserts it is zero at every instruction site
@@ -1310,12 +1313,14 @@ differential of the fixtures (JIT on against off) gives identical answers, outpu
 by name and version needs a by-name mechanism for host types, which does not exist yet. The pending heap type's
 snapshot hook refuses the same way. The criterion that a pause round-trips is dropped until then.
 
-**The cost of the return test.** `RET`, `HALT` and the return of a compiled function each gained the one
-load and compare above. The standing call-heavy cases (`run-fib-15`, `run-native-call-1000`,
-`run-template-call-200`, `fib-15-jit-default`, `steady-template-compiled-warm-call`) are measured
-before and after in callgrind instructions and in wall clock, and the figures are in the benchmark
-history; compiled code does not return through the interpreter's `RET`, so the compiled cases are
-level by construction.
+**The cost of a callback that asks for nothing.** `RET`, `HALT` and the return of a compiled function each
+gained the one load and compare above. The operation bracket gained a load of the request flag and a few
+tests; the native entry gained one bit test of the native object, and a resumable native has an entry of its
+own (`call_resumable_native`, `run_resumable_native`) so that no other native pays for the mechanism. The
+call object, which was cleared whole on every native call and every operation, now clears only its first
+sixty-four bytes (the fields that are read whether or not they were set; the rest is set before it is read),
+which is cheaper than the machinery added and is what keeps these paths level. A new field of the call
+object that is read without being set must go in that part (a static assertion bounds its size).
 
 ### The seed sequence and the generator per context
 
