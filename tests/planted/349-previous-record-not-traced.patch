@@ -1,0 +1,17 @@
+# 349 a pending record's link to the record below is not traced
+# defect: only the innermost record is reachable: the ones below it in a chain are collected while the chain's callee runs
+# caught by: the chained-request tests that force torture on themselves (testCustom_reentry)
+#
+--- a/src/vm/pending.c
++++ b/src/vm/pending.c
+@@ -48,7 +48,9 @@
+ static void pending_trace(GRHEAP_Tracer * tracer, void * payload) {
+   GLTANG_PendingObject * object = payload;
+   for (uint32_t i = 0; i < object->slot_count; ++i) {
+-    grheap_trace_word(tracer, &object->slots[i]);
++    if (i != GLTANG_PENDING_PREVIOUS) {
++      grheap_trace_word(tracer, &object->slots[i]);
++    }
+   }
+ }
+ 

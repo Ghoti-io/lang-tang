@@ -1,0 +1,16 @@
+# 347 the guest depth is not checked for a requested callee
+# defect: a requested function is pushed past the guest depth, so the push itself refuses and the callee's value is not the recursion-limit error
+# caught by: the callee-at-the-guest-depth test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -126,9 +126,6 @@
+         }
+         else if (program->functions[target].parameter_count != argc) {
+           value = gltang_vm_make_error(exec, GLTANG_ERROR_ARGUMENT_COUNT_MISMATCH);
+-        }
+-        else if (grcore_context_depth(context, GRCORE_DEPTH_GUEST) >= grcore_context_guest_depth(context)) {
+-          value = gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+         }
+         else {
+           const GLTANG_Function * cf = &program->functions[target];

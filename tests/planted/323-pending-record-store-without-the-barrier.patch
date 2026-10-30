@@ -4,7 +4,7 @@
 #
 --- a/src/vm/pending.c
 +++ b/src/vm/pending.c
-@@ -103,7 +103,7 @@
+@@ -107,7 +107,7 @@
    // does not move.
    const GLTANG_Value state = spec->in_temps ? gltang_vm_temp_at(exec, spec->temp_base) : spec->state;
    const GLTANG_Value callee = spec->in_temps ? gltang_vm_temp_at(exec, spec->temp_base + 1u) : spec->callee;

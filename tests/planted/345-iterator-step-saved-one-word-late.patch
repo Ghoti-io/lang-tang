@@ -1,0 +1,15 @@
+# 345 ITER_NEXT is saved at its jump target
+# defect: the place an iterator step suspends at is the word after the instruction (its jump target), so the step run again is not ITER_NEXT
+# caught by: the iterator tests (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1283,7 +1283,7 @@
+           // A custom iterator (ITER_INIT left a non-integer here): one step of its type's
+           // `iterator_next`, a GC point. The instruction is at pc - 2 (its jump target follows it).
+           exec->current_function = fidx;
+-          exec->current_offset = (uint32_t)(pc - 2u);
++          exec->current_offset = (uint32_t)(pc - 1u);
+           S[GLTANG_F_PC] = pc - 2u;
+           S[GLTANG_F_SP] = sp;
+           STAND_AT_OP();

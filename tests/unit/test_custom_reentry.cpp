@@ -1273,20 +1273,29 @@ TEST(Reentry, ACalleeThatCannotBeEnteredIsTheCalleesValueNotAFailureOfTheRequest
 }
 
 TEST(Reentry, TheCalleeKindsAnyCallAccepts) {
-  // A template, a non-resumable native, a resumable native (which chains) and a callable instance.
-  const std::string source = std::string(kPrelude) +
+  // mapn calls its callee with one argument, as CALL would: a native, a Tang function, a resumable native (which
+  // chains), a callable instance (whose `call` asks for the template in its slot) and a template, which takes no
+  // argument, so its value is the argument-count error, which mapn's continuation answers.
+  const std::string source =
       "use t; use tpl; use inc; use resumable; v = t.view(tpl);\n"
-      "function g() { return 5; }\n"
-      "a = t.mapn(1, inc); print(a[0]); print(\"|\");\n"          // a native, called with 0
-      "b = t.mapn(1, tpl); print(b);\n";                          // a template with an argument: argument count mismatch
+      "function g(i) { return i + 5; } function seven() { return 7; }\n"
+      "a = t.mapn(1, inc); c = t.mapn(2, g); d = t.mapn(1, t.bind(g)); e = t.mapn(1, v);\n"
+      "print(a[0]); print(\"|\"); print(c[0]); print(\",\"); print(c[1]); print(\"|\"); print(d[0]); print(\"|\"); print(e); print(\"|\");\n"
+      "print(resumable(seven)); print(\"|\");\n"
+      "b = t.mapn(1, tpl); b;\n";
   Scenario sc = scenario(source);
   Compiled tplsrc("print(\"T\");", tt::Mode::Script, "tpl.tang");
   ASSERT_TRUE(tplsrc.ok());
   sc.before = [&](Context & c) {
     EXPECT_EQ(gltang_library_add_template(c.library(), "tpl", tplsrc.program, 100000, GLTANG_SCOPE_EMPTY), GLTANG_OK);
   };
-  Result r = go(sc, 0);
-  EXPECT_EQ(r.out.raw.substr(0, 2), "1|") << r.out.raw;
+  for (long threshold : {0l, 1l}) {
+    Result r = go(sc, threshold);
+    EXPECT_EQ(r.out.raw, "1|5,6|1005|T|21|") << "threshold " << threshold;
+    EXPECT_NE(r.out.result.find("Argument Count Mismatch"), std::string::npos) << r.out.result;
+    EXPECT_EQ(r.pending_depth, 0u);
+    EXPECT_EQ(r.nested, 0u);
+  }
 }
 
 TEST(Reentry, AHostAttributeOfAStringAnswersABoundResumableNativeThatCallsGuestCode) {
@@ -1425,6 +1434,14 @@ TEST(Reentry, EveryEligibleOperationGivesTheSameAnswerAsTheOperationAnsweredWith
       EXPECT_EQ(j.out.raw, a.out.raw) << p.name << " mode " << mode << " (compiled)";
       EXPECT_EQ(j.out.result, a.out.result) << p.name << " mode " << mode << " (compiled)";
       EXPECT_EQ(j.out.errors, a.out.errors) << p.name << " mode " << mode << " (compiled)";
+      // No exit of a new kind: every exit compiled code took is one the statistics already classify (the invariant
+      // execution.h states for a run with no rebuild failure), and no hook was handed what it refuses.
+      const GLTANG_JitStats & st = j.out.stats;
+      EXPECT_EQ(st.rebuild_failures, 0u) << p.name << " mode " << mode;
+      EXPECT_EQ(st.deopts, st.exits_expected + st.exits_counted + st.call_exits_native_stack + st.call_exits_push_refused + st.call_exits_remembered + st.native_exits_stack)
+          << p.name << " mode " << mode << ": an exit no statistic classifies";
+      EXPECT_EQ(st.hook_argument_errors, 0u) << p.name << " mode " << mode;
+      EXPECT_EQ(st.conversion_errors, 0u) << p.name << " mode " << mode;
       ++compared;
     }
   }
@@ -1483,6 +1500,43 @@ TEST(Reentry, TheTextOfAPlanZeroInstanceIsPrintedWithItsTags) {
   Scenario sc = scenario(std::string(kPrelude) + "use t; function f2() { return 2; } a = t.rxtext(f2, 0, 3); print(a); print(\"|\"); s = a as string; print(s);\n");
   Result r = go(sc, 0);
   EXPECT_EQ(r.out.raw, "3009|3009");
+  EXPECT_EQ(r.out.rendered, "3009|3009") << "a continuation's string answer is trusted text";
+}
+
+TEST(Reentry, APrintThatAsksForATemplatePrintsItsTextWithEachSegmentsTag) {
+  // The template prints a run tagged HTML and a trusted one; `print` of the instance asks for it, and the text it
+  // answers is appended segment by segment, as the template's own value is when printed directly.
+  // The print of the instance is in a function, which threshold 1 compiles: compiled code leaves before it.
+  Compiled tplsrc("print(\"<i>\".html); print(\"&\");", tt::Mode::Script, "tpl.tang");
+  ASSERT_TRUE(tplsrc.ok());
+  Scenario sc = scenario("use t; use tpl; function show(x) { print(x); return 0; } p = t.tprint(tpl); v = t.view(tpl); show(p); print(\"|\"); print(v()); print(\"|\"); print(tpl());\n");
+  sc.before = [&](Context & c) {
+    EXPECT_EQ(gltang_library_add_template(c.library(), "tpl", tplsrc.program, 100000, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+  };
+  for (long threshold : {0l, 1l}) {
+    Result r = go(sc, threshold);
+    EXPECT_EQ(r.out.raw, "<i>&|<i>&|<i>&") << "threshold " << threshold;
+    const std::string direct = r.out.rendered.substr(r.out.rendered.rfind('|') + 1u);
+    EXPECT_NE(direct, "<i>&") << "the HTML run is escaped on output: the tags reach the sink";
+    EXPECT_EQ(r.out.rendered, direct + "|" + direct + "|" + direct) << "threshold " << threshold;
+    EXPECT_EQ(r.suspended, 2u);
+    EXPECT_EQ(r.pending_depth, 0u);
+  }
+}
+
+TEST(Reentry, APrintOrToStringWhoseContinuationAnswersANonStringIsHostFunctionFailed) {
+  // Mode 6 answers an integer from every continuation: `print` and a cast to string want a string.
+  for (const char * expr : {"print(x); 1", "s = x as string; s"}) {
+    Result a = go(scenario(std::string(kPrelude) + "x = ops(f, 6); " + expr + ";\n"), 0);
+    Result b = go(scenario(std::string(kPrelude) + "x = ref(f, 6); " + expr + ";\n"), 0);
+    EXPECT_NE((a.out.errors + a.out.result).find("Host function failed"), std::string::npos) << expr << ": " << a.out.errors << " / " << a.out.result;
+    EXPECT_EQ(a.out.errors, b.out.errors) << expr;
+    EXPECT_EQ(a.out.result, b.out.result) << expr;
+    EXPECT_EQ(a.out.raw, b.out.raw) << expr;
+    EXPECT_EQ(a.out.raw, "") << expr << ": nothing is printed for a failed text";
+    EXPECT_EQ(a.suspended, 1u) << expr;
+    EXPECT_EQ(a.pending_depth, 0u) << expr;
+  }
 }
 
 TEST(Reentry, ACallbackThatMakesNoRequestAllocatesWhatItDidBeforeWhetherOrNotItsTypeIsResumable) {
@@ -1988,36 +2042,93 @@ TEST(ReentryPause, AResumeOnAnotherThreadAtEveryPauseGivesTheSameOutput) {
 
 TEST(ReentryPause, ALimitThatUnwindsTheRunInsideTheCalleeNeverCallsTheContinuationAndLeaksNothing) {
   // Terminate at each poll in turn: the run ends, the continuation is called for no request that was unwound, and no
-  // record survives.
+  // record survives. The callee logs its start and, with no poll after it, its return (`t.note(x + 100)`), so the
+  // continuations that may run are those of the callees that returned.
+  const std::string source =
+      "use t; function slow(x) { use t; t.note(x); k = 0; while (k < 8) { k = k + 1; } t.note(x + 100); return x; } r = t.mapn(4, slow); print(\"done\"); r;\n";
+  auto returned = [](const Result & r) {
+    size_t n = 0;
+    for (const std::string & line : r.log) {
+      n += std::stoll(line.substr(2)) >= 100 ? 1u : 0u;
+    }
+    return n;
+  };
   for (uint64_t at : {2u, 5u, 9u, 14u, 20u}) {
-    Types types;
-    Scenario sc = scenario("use t; use note; function slow(x) { note(x); k = 0; while (k < 8) { k = k + 1; } return x; } r = t.mapn(4, slow); print(\"done\"); r;\n");
+    Scenario sc = scenario(source);
     sc.on_poll = [at](Script & s, GRCORE_Context *, uint64_t n) {
       if (n == at) {
         s.post(GRCORE_REQUEST_TERMINATE);
       }
     };
-    uint64_t collected = 0;
-    sc.after = [&](Context & c) {
-      EXPECT_EQ(grheap_collect(c.heap), GRHEAP_OK);
-      GRHEAP_Stats stats;
-      EXPECT_EQ(grheap_stats(c.heap, &stats), GRHEAP_OK);
-      collected = stats.collections;
-    };
+    g_map_conts = 0;
     Result r = go(sc, 0);
     EXPECT_EQ(r.out.raw.find("done"), std::string::npos) << "poll " << at << ": the run ended";
     EXPECT_FALSE(r.out.finished);
     EXPECT_EQ(r.pending_depth, 0u) << "poll " << at;
     EXPECT_EQ(r.out.native_depth, 0u);
-    EXPECT_GT(collected, 0u);
+    EXPECT_LT(returned(r), 4u) << "poll " << at << ": the run stopped inside mapn";
+    EXPECT_EQ(static_cast<size_t>(g_map_conts.load()), returned(r)) << "poll " << at << ": the unwound request's continuation never ran";
+  }
+  // What survives: heavy's request holds 64 KiB of state. Stopped inside its callee, the heap holds no more once
+  // collected than when the run is stopped after heavy has finished (in the loop that follows it), where no record
+  // can be left; a record that survived, with its state, would be the 64 KiB more.
+  const std::string weighed =
+      "use t; function slow(x) { k = 0; while (k < 30) { k = k + 1; } return x; } r = t.heavy(slow);\n"
+      "j = 0; while (j < 1000) { j = j + 1; } r;\n";
+  auto bytes_at = [&](uint64_t at, Result * out) {
+    uint64_t live = 0;
+    Scenario sc = scenario(weighed);
+    sc.on_poll = [at](Script & s, GRCORE_Context *, uint64_t n) {
+      if (n == at) {
+        s.post(GRCORE_REQUEST_TERMINATE);
+      }
+    };
+    sc.after = [&live](Context & c) {
+      EXPECT_EQ(grheap_collect(c.heap), GRHEAP_OK);
+      GRHEAP_Stats stats;
+      EXPECT_EQ(grheap_stats(c.heap, &stats), GRHEAP_OK);
+      live = stats.live_bytes;
+    };
+    g_heavy_conts = 0;
+    *out = go(sc, 0);
+    return live;
+  };
+  Result control;
+  const uint64_t after = bytes_at(200, &control);
+  ASSERT_FALSE(control.out.finished) << "the control stops in the loop after heavy";
+  ASSERT_EQ(g_heavy_conts.load(), 1);
+  for (uint64_t at : {3u, 10u, 20u}) {
+    Result r;
+    const uint64_t live = bytes_at(at, &r);
+    EXPECT_FALSE(r.out.finished) << "poll " << at;
+    EXPECT_EQ(g_heavy_conts.load(), 0) << "poll " << at << ": the run stopped inside heavy's callee, whose continuation never runs";
+    EXPECT_EQ(r.pending_depth, 0u) << "poll " << at;
+    EXPECT_LT(live, after + 32768u) << "poll " << at << ": nothing of the unwound request survives a collection";
   }
 }
 
 TEST(ReentryPause, ACalleeAtTheGuestDepthIsTheRecursionLimitErrorForTheContinuation) {
   Scenario sc = scenario("use t; function deep(x) { use t; return t.mapn(1, deep); } r = t.mapn(1, deep); r;\n");
+  g_map_conts = 0;
   Result r = go(sc, 0);
   EXPECT_NE(r.out.result.find("Recursion"), std::string::npos) << r.out.result;
   EXPECT_EQ(r.pending_depth, 0u);
+  // Every level asked once, and each continuation ran once: the innermost with the error, every other with it too.
+  EXPECT_GT(r.suspended, 10u);
+  EXPECT_EQ(static_cast<uint64_t>(g_map_conts.load()), r.suspended) << "each request's continuation runs exactly once";
+}
+
+TEST(ReentryPause, ANestedRequestFollowedByAnOrdinaryCallDeliversOnlyToItsOwnRecord) {
+  // inner, mapn's callee, makes a request of its own and then an ordinary call, whose frame is where the inner
+  // request's callee ran: its return is an ordinary return, and inner's return is what the outer record waits for.
+  Scenario sc = scenario("use t; function sq(x) { return x * x; } function k() { return 5; }\n"
+                         "function inner(x) { use t; a = t.mapn(2, sq); return a[1] + k() + x; } r = t.mapn(3, inner); r;\n");
+  for (long threshold : {0l, 1l}) {
+    Result r = go(sc, threshold);
+    EXPECT_EQ(r.out.result, "[6, 7, 8]") << "threshold " << threshold;
+    EXPECT_EQ(r.pending_depth, 0u);
+    EXPECT_EQ(r.suspended, 3u + 3u * 2u);
+  }
 }
 
 TEST(ReentryPause, ASnapshotAtAPauseInsideACalleeIsRefusedAndNamesTheType) {
@@ -2253,6 +2364,60 @@ TEST(ReentryMisuse, ARequestWhoseValuesAreDroppedByTheCallbackAfterItAskedSurviv
     EXPECT_EQ(r.pending_depth, 0u);
     EXPECT_EQ(r.out.heap_invalid_pointers, 0u);
   }
+}
+
+TEST(ReentryMisuse, ARecordThatCannotBeMadeIsOutOfMemoryAndNoCalleeRuns) {
+  // A native's request, an operation's, and the second request of a chain (the bound native's own), each refused.
+  struct Case {
+    const char * source;
+    uint32_t at;
+  };
+  const Case cases[] = {
+    {"use t; function f(x) { print(\"RAN\"); return 1; } r = t.mapn(2, f); print(\"|\"); r;\n", 1},
+    {"use t; function f() { print(\"RAN\"); return 41; } x = t.ops(f, 0); r = x + 1; print(\"|\"); r;\n", 1},
+    {"use t; function f(x) { print(\"RAN\"); return 1; } r = t.mapn(1, t.bind(f)); print(\"|\"); r;\n", 2},
+  };
+  for (const Case & k : cases) {
+    Scenario sc = scenario(k.source);
+    sc.before = [&](Context & c) { gltang_vm_test_fail_pending_at(c.execution, k.at); };
+    Result r = go(sc, 0);
+    EXPECT_EQ(r.out.raw, "|") << k.source << ": no callee runs";
+    EXPECT_NE(r.out.result.find("Out of memory"), std::string::npos) << k.source << ": " << r.out.result;
+    EXPECT_EQ(r.pending_depth, 0u) << k.source;
+    EXPECT_EQ(r.out.native_depth, 0u) << k.source;
+    EXPECT_EQ(r.suspended, k.at - 1u) << k.source;
+  }
+}
+
+TEST(ReentryEmbedded, TheTextOfAContainerInAConcatenationRunsItsRequestNested) {
+  Result r = go(scenario("use t; function f() { return 41; } a = t.emb(f); s = \"v:\" + [a]; print(s);\n"), 0);
+  EXPECT_EQ(r.out.raw, "v:[42]");
+  EXPECT_GE(r.nested, 1u);
+  EXPECT_EQ(r.suspended, 0u);
+  EXPECT_EQ(r.pending_depth, 0u);
+}
+
+TEST(ReentryEmbedded, TheEqualityOfNestedArraysRunsTheElementsRequestNestedAndMapsAreNoSite) {
+  // An element two arrays deep is compared from inside the same C loop, one level down.
+  Result r = go(scenario("use t; function f() { return 41; } a = t.emb(f); b = t.emb(f); print([[a]] == [[b]]);\n"), 0);
+  EXPECT_EQ(r.out.raw, "true");
+  EXPECT_GE(r.nested, 1u);
+  EXPECT_EQ(r.suspended, 0u);
+  EXPECT_EQ(r.pending_depth, 0u);
+  // `==` of two maps is `Not supported` in the language, so it reaches no element's `equal`: no site.
+  r = go(scenario("use t; function f() { return 41; } a = t.emb(f); b = t.emb(f); r = {k: a} == {k: b}; r;\n"), 0);
+  EXPECT_NE(r.out.result.find("Not supported"), std::string::npos) << r.out.result;
+  EXPECT_EQ(r.nested, 0u);
+}
+
+TEST(ReentryEmbedded, AnAttributeReadByAUsePathRunsItsRequestNested) {
+  // `use t.kept.name` reads `name` of the instance the factory answers with the engine's attribute rule, from inside
+  // the `use`'s own walk of the path (a C loop): ops' `attribute_get` asks for f, nested, and answers 41 + 1.
+  Result r = go(scenario("use t; function f() { return 41; } x = t.ops(f, 0); t.keep(x); use t.kept.name as n; print(n);\n"), 0);
+  EXPECT_EQ(r.out.raw, "42");
+  EXPECT_GE(r.nested, 1u);
+  EXPECT_EQ(r.suspended, 0u);
+  EXPECT_EQ(r.pending_depth, 0u);
 }
 
 int main(int argc, char ** argv) {

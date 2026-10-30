@@ -632,6 +632,8 @@ struct GLTANG_Execution {
   uint8_t suspend_mode;         ///< 0: a request is run as a nested activation (a site inside a C loop, or compiled code); 1: made at an instruction; 2: made by the call a record in the chain waits for.
   bool request_made;            ///< A callback's request was recorded and GLTANG_V_UNWIND returned for it: the run loop starts the callee instead of unwinding.
   bool resume_active;           ///< The innermost record's value has been delivered, and the instruction (or call) is being run again to continue from it.
+  uint32_t test_fail_pending_at; ///< Tests only (gltang_vm_test_fail_pending_at): the record made at this count is refused; 0 never.
+  uint32_t test_pending_made;   ///< Records made since the seam was set.
   uint64_t frames_unwound;
   uint64_t native_polls[GLTANG_NATIVE_COUNT]; ///< Polls made for each native.
 

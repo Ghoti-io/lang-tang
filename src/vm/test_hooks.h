@@ -71,6 +71,9 @@ uint64_t gltang_vm_test_pending_depth(const GLTANG_Execution * execution);
 /** Requests that were run as a nested activation (a site inside a C loop), and requests that suspended (a pending record). */
 void gltang_vm_test_request_counts(const GLTANG_Execution * execution, uint64_t * nested, uint64_t * suspended);
 
+/** The `at`th pending record made from now on (1 for the next; 0 for none) is refused as an exhausted memory would refuse it. */
+void gltang_vm_test_fail_pending_at(GLTANG_Execution * execution, uint32_t at);
+
 /** How many natives the execution has entered through the shared wrapper, from either tier. */
 uint64_t gltang_vm_test_natives_called(const GLTANG_Execution * execution);
 

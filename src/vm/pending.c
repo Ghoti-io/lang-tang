@@ -77,8 +77,12 @@ size_t gltang_vm_pending_depth(const GLTANG_Execution * exec) {
 
 GLTANG_Value gltang_vm_pending_push(GLTANG_Execution * exec, const GLTANG_PendingSpec * spec) {
   const size_t slots = GLTANG_PENDING_ARGS + spec->argc + spec->operand_count;
-  void * object;
-  GLTANG_Status st = gltang_vm_alloc(exec, &gltang_type_pending, sizeof(GLTANG_PendingObject) + slots * sizeof(GLTANG_Value), &object);
+  void * object = NULL;
+  GLTANG_Status st = GLTANG_ST_OOM;
+  if (exec->test_fail_pending_at == 0 || ++exec->test_pending_made != exec->test_fail_pending_at) {
+    // (Else the tests' seam, gltang_vm_test_fail_pending_at: this record is refused as exhausted memory refuses one.)
+    st = gltang_vm_alloc(exec, &gltang_type_pending, sizeof(GLTANG_PendingObject) + slots * sizeof(GLTANG_Value), &object);
+  }
   if (st != GLTANG_ST_OK) {
     return gltang_vm_failure_value(exec, st);
   }
@@ -160,6 +164,13 @@ void gltang_vm_pending_deliver(GLTANG_Execution * exec, GLTANG_Value result) {
  */
 uint64_t gltang_vm_test_pending_depth(const GLTANG_Execution * execution) {
   return execution ? gltang_vm_pending_depth(execution) : 0;
+}
+
+void gltang_vm_test_fail_pending_at(GLTANG_Execution * execution, uint32_t at) {
+  if (execution) {
+    execution->test_fail_pending_at = at;
+    execution->test_pending_made = 0;
+  }
 }
 
 void gltang_vm_test_request_counts(const GLTANG_Execution * execution, uint64_t * nested, uint64_t * suspended) {

@@ -1,0 +1,14 @@
+# 344 the delivery mark outlives its record
+# defect: a record let go leaves `deliver_frame` naming its callee's frame, so the next ordinary return from a frame at that place is delivered to the record below
+# caught by: the nested-request-then-an-ordinary-call test (testCustom_reentry)
+#
+--- a/src/vm/pending.c
++++ b/src/vm/pending.c
+@@ -130,7 +130,6 @@
+   const GLTANG_PendingObject * record = record_of(exec->pending_top);
+   GLTANG_Value previous = record->slots[GLTANG_PENDING_PREVIOUS];
+   exec->pending_top = previous;
+-  exec->deliver_frame = previous ? record_of(previous)->callee_frame : 0;
+ }
+ 
+ void gltang_vm_pending_unconsumed(GLTANG_Execution * exec) {
