@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -778,9 +778,7 @@
+@@ -1009,9 +1009,7 @@
    if (!hs) {
      return;
    }

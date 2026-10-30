@@ -8,7 +8,8 @@
 // The fixtures:
 //   ops       a type whose every eligible operation asks for a function (`f()`, which answers 41) and
 //             whose continuation answers by the instance's `mode`: 0 an integer, 1 a decline, 2 an
-//             error, 3 DONE, 4 another request (the chain), 5 OK with no answer set. `ref` is the same
+//             error, 3 DONE, 4 another request (the chain), 5 OK with no answer set, 6 an integer even
+//             where a string is wanted (not in the generated test). `ref` is the same
 //             type that answers what the request would have without asking: the generated test
 //             compares the two for every operation and mode.
 //   rx        a type that logs every callback and continuation with the dispatch step it was called at.
@@ -16,6 +17,11 @@
 //   view      a callable object whose `call` runs a template.
 //   emb       a type whose `equal` and `to_string` ask, reached from inside a container (a C loop).
 //   mapn, sortc, each   resumable natives: `mapn(n, f)`, `sortc(a, cmp)` and `each(a, f)`.
+//   fwd       a callable object whose `call` asks for the callee in its slot with the arguments it was given.
+//   tprint    a type whose `print` asks for the callee in its slot (a template) and prints what it answers.
+//   seterr, failnext, keep/kept, peek, framed   natives that mark an instance as an error, fail the next
+//             allocation, hold an instance for a `use` path, inspect a value as a debugger would, and ask for a
+//             call and then misbehave (below, with the review's tests).
 // Each test that depends on the collector forces its arm on inside the test.
 
 #define GLTANG_HARNESS_RUN  // run() in the JIT=no arm too: the differential then compares the interpreter with itself
@@ -74,6 +80,11 @@ void note(Fx * fx, const std::string & text) {
   }
 }
 
+std::atomic<int> g_map_conts{0};    ///< How many times mapn's continuation was called.
+std::atomic<int> g_bound_conts{0};  ///< How many times a bound native's continuation was called.
+std::atomic<int> g_heavy_conts{0};  ///< How many times heavy's continuation was called.
+GRCORE_Context * g_ctx = nullptr;   ///< The context install() was last given (peek inspects through it).
+
 // ---------------------------------------------------------------------------
 // ops: every eligible operation, requesting
 // ---------------------------------------------------------------------------
@@ -126,6 +137,7 @@ GLTANG_OpStatus finish(GLTANG_NativeCall * call, GLTANG_TypeOp op, int target, i
     case 2: gltang_call_return_error(call, GLTANG_ERROR_DIVIDE_BY_ZERO); return GLTANG_OP_ERROR;
     case 3: return GLTANG_OP_DONE;
     case 4: return answer(call, op, target, value + 2);
+    case 6: gltang_call_return_integer(call, value); return GLTANG_OP_OK;  // an integer, whatever the operation wants
     default: return GLTANG_OP_OK;  // 5: OK with no answer set
   }
 }
@@ -523,6 +535,7 @@ bool mapn(GLTANG_NativeCall * call, void *) {
 }
 
 GLTANG_OpStatus mapn_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle state, GLTANG_Handle result) {
+  ++g_map_conts;
   std::vector<int64_t> results;
   GLTANG_Handle f;
   if (!read_state(call, state, &results) || gltang_call_arg(call, 1, &f) != GLTANG_OK) {
@@ -691,6 +704,7 @@ bool bound_call(GLTANG_NativeCall * call, void *) {
 }
 
 GLTANG_OpStatus bound_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle result) {
+  ++g_bound_conts;
   if (gltang_handle_kind(call, result) != GLTANG_KIND_INTEGER) {
     gltang_call_return_handle(call, result);
     return GLTANG_OP_OK;
@@ -736,6 +750,121 @@ GLTANG_OpStatus attr_apply(GLTANG_NativeCall * call, void *, GLTANG_Handle self)
 }
 
 // ---------------------------------------------------------------------------
+// fwd, tprint and the natives the review's tests use
+// ---------------------------------------------------------------------------
+
+GLTANG_OpStatus fwd_call(GLTANG_NativeCall * call, void *, GLTANG_Handle self, const GLTANG_Handle * args, size_t argc) {
+  GLTANG_Handle f;
+  if (gltang_handle_custom_slot_get(call, self, 0, &f) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  return gltang_call_guest(call, f, args, argc, 0, GLTANG_Handle{0, 0}) == GLTANG_OK ? GLTANG_OP_PENDING : GLTANG_OP_ERROR;
+}
+
+GLTANG_OpStatus tprint_print(GLTANG_NativeCall * call, void *, GLTANG_Handle self) {
+  GLTANG_Handle t;
+  if (gltang_handle_custom_slot_get(call, self, 0, &t) != GLTANG_OK) {
+    return GLTANG_OP_ERROR;
+  }
+  return gltang_call_guest(call, t, nullptr, 0, 0, GLTANG_Handle{0, 0}) == GLTANG_OK ? GLTANG_OP_PENDING : GLTANG_OP_ERROR;
+}
+
+/// seterr(x): x, an instance, stands for an error from now on (null).
+bool seterr(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle x;
+  return gltang_call_arg(call, 0, &x) == GLTANG_OK && gltang_handle_custom_set_error(call, x, true) == GLTANG_OK;
+}
+
+/// failnext(n): the nth allocation the process makes from now on fails (the library's own through cutil included).
+bool failnext(GLTANG_NativeCall * call, void *) {
+  alloc_sweep::arm(static_cast<long>(gltang_call_integer(call, 0)));
+  return true;
+}
+
+/// keep(x): x is held in a persistent handle, which the handle factory `kept` answers (a `use t.kept.name` path).
+GLTANG_Persistent g_kept = {0, 0};
+
+bool keep(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle x;
+  return gltang_call_arg(call, 0, &x) == GLTANG_OK && gltang_handle_promote(call, x, &g_kept) == GLTANG_OK;
+}
+
+bool kept(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle h;
+  if (gltang_persistent_get(call, g_kept, &h) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
+/// peek(x): the text the engine's inspector gives for x, asked from inside a native as a debugger at a poll would ask.
+bool peek(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle x;
+  if (gltang_call_arg(call, 0, &x) != GLTANG_OK) {
+    return false;
+  }
+  void * object = gltang_vm_test_handle_object(call, x);
+  char text[256] = {0};
+  size_t length = 0;
+  GRCORE_Stack * stack = grcore_context_stack(g_ctx);
+  GRCORE_EngineId engine;
+  if (!object || grcore_stack_engine(stack, grcore_stack_top(stack), &engine) != GRCORE_OK ||
+      grcore_engine_inspect(g_ctx, engine, GRCORE_SLOT_VALUE, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(object)), text, sizeof text, &length) != GRCORE_OK) {
+    return false;
+  }
+  text[sizeof text - 1u] = '\0';
+  gltang_call_return_string(call, text, std::strlen(text), GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+  return true;
+}
+
+/// framed(f): asks for f(a) with a state, both arrays made in a handle frame that it pops after asking, and then makes
+/// forty arrays. A callback must touch nothing but its return after asking; one that does must not see what it asked
+/// for collected under it.
+bool framed(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle f, a, s;
+  if (gltang_call_arg(call, 0, &f) != GLTANG_OK || gltang_handle_push_frame(call) != GLTANG_OK || !make_state(call, {1, 2, 3}, &a) ||
+      !make_state(call, {7, 8, 9}, &s) || gltang_call_guest(call, f, &a, 1, 0, s) != GLTANG_OK || gltang_handle_pop_frame(call) != GLTANG_OK) {
+    return false;
+  }
+  for (int64_t i = 0; i < 40; ++i) {
+    GLTANG_Handle junk;
+    if (!make_state(call, {i, i + 1, i + 2}, &junk)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+GLTANG_OpStatus framed_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle state, GLTANG_Handle result) {
+  std::vector<int64_t> s;
+  if (!read_state(call, state, &s) || s.size() != 3u || gltang_handle_kind(call, result) != GLTANG_KIND_INTEGER) {
+    return GLTANG_OP_ERROR;
+  }
+  gltang_call_return_integer(call, gltang_handle_integer(call, result) * 100 + s[0] + s[1] + s[2]);
+  return GLTANG_OP_OK;
+}
+
+const GLTANG_Continuation kFramedTable[] = {{"framed_cont", framed_cont}};
+
+/// heavy(f): asks for f(1) with a state of 64 KiB (a string), so that a record that survives its run is seen in the
+/// bytes the heap holds; its continuation answers the callee's value.
+bool heavy(GLTANG_NativeCall * call, void *) {
+  static const std::string big(65536, 'x');
+  GLTANG_Handle f, s, x;
+  return gltang_call_arg(call, 0, &f) == GLTANG_OK && gltang_handle_make_string(call, big.data(), big.size(), GLTANG_UNICODE_STRING_TYPE_TRUSTED, &s) == GLTANG_OK &&
+         gltang_handle_make_integer(call, 1, &x) == GLTANG_OK && gltang_call_guest(call, f, &x, 1, 0, s) == GLTANG_OK;
+}
+
+GLTANG_OpStatus heavy_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle, GLTANG_Handle result) {
+  ++g_heavy_conts;
+  gltang_call_return_handle(call, result);
+  return GLTANG_OP_OK;
+}
+
+const GLTANG_Continuation kHeavyTable[] = {{"heavy_cont", heavy_cont}};
+
+// ---------------------------------------------------------------------------
 // The fixture a test builds: the types, the natives and what they log
 // ---------------------------------------------------------------------------
 
@@ -749,6 +878,8 @@ struct Types {
   const GLTANG_Type * gen = nullptr;
   const GLTANG_Type * view = nullptr;
   const GLTANG_Type * emb = nullptr;
+  const GLTANG_Type * fwd = nullptr;
+  const GLTANG_Type * tprint = nullptr;
   Fx fx_req, fx_ref, fx_log;
   std::vector<std::string> log;
   Types() {
@@ -821,6 +952,24 @@ struct Types {
     d.continuations = kEmbTable;
     d.continuation_count = 2;
     EXPECT_EQ(gltang_type_registry_add(registry, &d, &emb), GLTANG_OK);
+
+    d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "fwd";
+    d.slot_count = 1;
+    d.call = fwd_call;
+    d.resumable_ops = 1u << GLTANG_TYPE_OP_CALL;
+    d.continuations = kViewTable;
+    d.continuation_count = 1;
+    EXPECT_EQ(gltang_type_registry_add(registry, &d, &fwd), GLTANG_OK);
+
+    d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "tprint";
+    d.slot_count = 1;
+    d.print = tprint_print;
+    d.resumable_ops = 1u << GLTANG_TYPE_OP_PRINT;
+    d.continuations = kViewTable;
+    d.continuation_count = 1;
+    EXPECT_EQ(gltang_type_registry_add(registry, &d, &tprint), GLTANG_OK);
   }
   ~Types() { gltang_type_registry_release(registry); }
   Types(const Types &) = delete;
@@ -860,6 +1009,7 @@ bool log_note(GLTANG_NativeCall * call, void * user) {
 
 /// Attaches the types and the natives to a context.
 void install(Context & context, Types & t) {
+  g_ctx = context.context;
   context.add_native_library();
   GLTANG_Library * lib = nullptr;
   EXPECT_EQ(gltang_library_create("t", &lib), GLTANG_OK);
@@ -871,6 +1021,19 @@ void install(Context & context, Types & t) {
   EXPECT_EQ(gltang_library_add_native(lib, "gen", make_instance<&Types::gen>, &t), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "view", make_instance<&Types::view>, &t), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "emb", make_instance<&Types::emb>, &t), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "fwd", make_instance<&Types::fwd>, &t), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "tprint", make_instance<&Types::tprint>, &t), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "seterr", seterr, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "failnext", failnext, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "keep", keep, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_handle_factory(lib, "kept", kept, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "peek", peek, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_mark_resumable(lib, "peek", kViewTable, 1), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "peekplain", peek, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "framed", framed, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_mark_resumable(lib, "framed", kFramedTable, 1), GLTANG_OK);
+  EXPECT_EQ(gltang_library_add_native(lib, "heavy", heavy, nullptr), GLTANG_OK);
+  EXPECT_EQ(gltang_library_mark_resumable(lib, "heavy", kHeavyTable, 1), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "note", log_note, &t), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "bind", bind, nullptr), GLTANG_OK);
   EXPECT_EQ(gltang_library_add_native(lib, "mapn", mapn, nullptr), GLTANG_OK);
@@ -1300,6 +1463,7 @@ TEST(Reentry, ARequestFromTheRightOnlyAndAPrintThenToStringFallThroughTheirSteps
   EXPECT_EQ(r.out.result, "2007");
   const std::vector<std::string> want = {"add left 1 entry step 0", "add right 2 entry step 0", "cont 2 step 1 result 2", "cont 2 step 1 result 2"};
   EXPECT_EQ(r.log, want);
+  EXPECT_EQ(r.pending_depth, 0u) << "each record of the chain was let go when its continuation was called";
 }
 
 TEST(Reentry, PrintAsksPrintThenToStringWhenPrintDeclines) {
@@ -1404,6 +1568,7 @@ namespace {
 bool misuse_native(GLTANG_NativeCall * call, void * user);
 
 GLTANG_Handle g_stale = {0, 0};
+int g_refused = 0;  ///< The misuse case whose request gltang_call_guest refused (GLTANG_ERR_INVALID), or 0.
 
 GLTANG_OpStatus misuse_cont(GLTANG_NativeCall * call, void *, GLTANG_Handle state, GLTANG_Handle) {
   // A handle of the entry's scope is not valid in this one; a state that is an array carries what the entry learned.
@@ -1447,19 +1612,22 @@ bool misuse_native(GLTANG_NativeCall * call, void *) {
       return gltang_call_guest(call, f, nullptr, 0, 0, zero) == GLTANG_OK;
     case 3:
       r = gltang_call_guest(call, f, nullptr, 0, 1, zero);  // the table has one entry: index 1 is one past it
-      gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 3 : 0);
+      g_refused = r == GLTANG_ERR_INVALID ? 3 : 0;
+      gltang_call_return_integer(call, 3);  // an answer after the refusal does not clear it
       return true;
     case 9:
       g_stale = f;  // a handle of this call, stale in the next
       return true;
     case 4:
       r = gltang_call_guest(call, f, nullptr, 0, 0, g_stale);
-      gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 4 : 0);
+      g_refused = r == GLTANG_ERR_INVALID ? 4 : 0;
+      gltang_call_return_integer(call, 4);
       return true;
     case 5: {
       GLTANG_Handle n;
       r = gltang_handle_make_integer(call, 5, &n) == GLTANG_OK ? gltang_call_guest(call, n, nullptr, 0, 0, zero) : GLTANG_OK;
-      gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 5 : 0);
+      g_refused = r == GLTANG_ERR_INVALID ? 5 : 0;
+      gltang_call_return_integer(call, 5);
       return true;
     }
     case 6: {
@@ -1468,7 +1636,8 @@ bool misuse_native(GLTANG_NativeCall * call, void *) {
         a = f;
       }
       r = gltang_call_guest(call, f, args, GLTANG_GUEST_CALL_ARGS_MAX + 1u, 0, zero);
-      gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 6 : 0);
+      g_refused = r == GLTANG_ERR_INVALID ? 6 : 0;
+      gltang_call_return_integer(call, 6);
       return true;
     }
     case 7:
@@ -1484,7 +1653,8 @@ bool misuse_plain(GLTANG_NativeCall * call, void *) {
     return false;
   }
   GLTANG_Result r = gltang_call_guest(call, f, nullptr, 0, 0, zero);
-  gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 8 : 0);
+  g_refused = r == GLTANG_ERR_INVALID ? 8 : 0;
+  gltang_call_return_integer(call, 8);
   return true;
 }
 
@@ -1504,7 +1674,8 @@ GLTANG_OpStatus opaque_request(GLTANG_NativeCall * call, void *, GLTANG_Handle s
     return GLTANG_OP_ERROR;
   }
   const GLTANG_Result r = gltang_call_guest(call, f, nullptr, 0, 0, GLTANG_Handle{0, 0});
-  gltang_call_return_integer(call, r == GLTANG_ERR_INVALID ? 11 : 12);
+  g_refused = r == GLTANG_ERR_INVALID ? 11 : 0;
+  gltang_call_return_integer(call, 11);  // an answer after the refusal does not clear it
   return GLTANG_OP_OK;
 }
 GLTANG_OpStatus declining_native_cont(GLTANG_NativeCall *, void *, GLTANG_Handle, GLTANG_Handle) { return GLTANG_OP_DECLINE; }
@@ -1921,6 +2092,85 @@ TEST(ReentryEngine, TheTestNativeThatSumsThreeCallsStillWorksOnThePublicProtocol
   EXPECT_EQ(r.suspended, 3u);
   Result j = go(sc, 1);
   EXPECT_EQ(j.out.raw, "21");
+}
+
+// ---------------------------------------------------------------------------
+// The review of story 9: a replay that answers early, a refused re-entry, the template budget, a reader, a
+// callback that misbehaves after asking, the record that cannot be made, and the embedded sites not yet covered
+// ---------------------------------------------------------------------------
+
+TEST(ReentryReplay, ACastToBoolOfAnInstanceItsCalleeMarkedAsAnErrorLetsTheRecordGo) {
+  // `m as bool` asks the type's cast, which asks for f; f marks m as standing for an error, so when the cast runs
+  // again the language's own rule answers (false) before the type is asked. The record has nothing to continue: it
+  // must go, or its delivery mark takes the return of the next call made from this frame (k's).
+  Scenario sc = scenario("use t; m = 0; function f() { global m; use t; t.seterr(m); return 41; } function k() { return 5; }\n"
+                         "m = t.ops(f, 0); b = m as bool; q = k(); print(b); print(\"|\"); print(q + 1); q;\n");
+  Result r = go(sc, 0);
+  EXPECT_EQ(r.out.raw, "false|6");
+  EXPECT_EQ(r.out.result, "5");
+  EXPECT_EQ(r.pending_depth, 0u);
+  EXPECT_EQ(r.suspended, 1u);
+  // The same through an operator: the error operand is the value of `+`, and the record goes all the same.
+  Scenario add = scenario("use t; m = 0; function f() { global m; use t; t.seterr(m); return 41; } function k() { return 5; }\n"
+                          "m = t.ops(f, 0); b = m + 1; q = k(); print(q + 1); q;\n");
+  r = go(add, 0);
+  EXPECT_EQ(r.out.raw, "6");
+  EXPECT_EQ(r.pending_depth, 0u);
+}
+
+TEST(ReentryReplay, AResumableNativeRefusedWhenItIsRunAgainLetsItsRecordGo) {
+  // g fails the next allocation the process makes, which is the copy of the resumable native's arguments when the
+  // CALL runs again to give it g's value: the native's value is Out of memory, and its record goes with it.
+  if (!alloc_sweep::available()) {
+    GTEST_SKIP() << "no allocation can be failed on this platform";
+  }
+  Scenario sc = scenario("use t; function g(x) { use t; t.failnext(1); return 7; } function k() { return 5; }\n"
+                         "r = t.mapn(1, g); q = k(); print(q + 1); print(\"|\"); r;\n");
+  sc.torture = 0;
+  sc.moving = 0;
+  Result r = go(sc, 0);
+  const bool fired = alloc_sweep::fired();
+  alloc_sweep::disarm();
+  EXPECT_TRUE(fired);
+  EXPECT_EQ(r.out.raw, "6|");
+  EXPECT_NE(r.out.result.find("Out of memory"), std::string::npos) << r.out.result;
+  EXPECT_EQ(r.pending_depth, 0u);
+  EXPECT_EQ(r.out.native_depth, 0u);
+}
+
+TEST(ReentryReplay, ACallableObjectCalledWithSeventeenArgumentsWhoseCopyIsRefusedIsOutOfMemory) {
+  // `self` and sixteen operands are held in the bracket's frame; a seventeenth argument sends the copy to the heap.
+  // Refused at a first entry (no record) and at a continuation (whose record goes), the call's value is the failure.
+  if (!alloc_sweep::available()) {
+    GTEST_SKIP() << "no allocation can be failed on this platform";
+  }
+  std::string args;
+  for (int i = 1; i <= 17; ++i) {
+    args += (i > 1 ? ", " : "") + std::to_string(i);
+  }
+  Scenario first = scenario("use t; function h() { return 3; } v = t.view(h); t.failnext(1); a = v(" + args + "); a;\n");
+  first.torture = 0;
+  first.moving = 0;
+  Result r = go(first, 0);
+  bool fired = alloc_sweep::fired();
+  alloc_sweep::disarm();
+  EXPECT_TRUE(fired);
+  EXPECT_NE(r.out.result.find("Out of memory"), std::string::npos) << r.out.result;
+  EXPECT_EQ(r.suspended, 0u);
+  EXPECT_EQ(r.pending_depth, 0u);
+  Scenario again = scenario("use t; function h() { use t; t.failnext(1); return 3; } v = t.view(h); a = v(" + args + "); a;\n");
+  again.torture = 0;
+  again.moving = 0;
+  r = go(again, 0);
+  fired = alloc_sweep::fired();
+  alloc_sweep::disarm();
+  EXPECT_TRUE(fired);
+  EXPECT_NE(r.out.result.find("Out of memory"), std::string::npos) << r.out.result;
+  EXPECT_EQ(r.suspended, 1u);
+  EXPECT_EQ(r.pending_depth, 0u);
+  // And with nothing refused, seventeen arguments are an ordinary call.
+  r = go(scenario("use t; function h() { return 3; } v = t.view(h); a = v(" + args + "); a;\n"), 0);
+  EXPECT_EQ(r.out.result, "3");
 }
 
 int main(int argc, char ** argv) {

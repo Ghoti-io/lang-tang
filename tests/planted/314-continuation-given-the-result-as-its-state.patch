@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -672,8 +672,8 @@
+@@ -673,8 +673,8 @@
    }
    stage->pop = true;
    stage->index = record->continuation;

@@ -1,10 +1,10 @@
 # 312 the record a continuation was called from stays on the chain
 # defect: the continuation runs and the record is not unlinked, so the next return is delivered to it again
-# caught by: the pending-depth check after every run (testCustom_reentry)
+# caught by: the pending-depth checks of the generated operation test and the chained-request log test (only those run: a record left on the chain can loop for ever elsewhere) (testCustom_reentry)
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -670,7 +670,7 @@
+@@ -671,7 +671,7 @@
      *early = MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
      return true;
    }

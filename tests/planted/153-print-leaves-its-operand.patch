@@ -4,7 +4,7 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1648,7 +1648,7 @@
+@@ -1851,7 +1851,7 @@
    emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_fast, args, 1);
    branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
    new_block(c, &join);

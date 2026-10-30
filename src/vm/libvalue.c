@@ -868,6 +868,9 @@ static GLTANG_Value __attribute__((noinline)) call_resumable_native(GLTANG_Execu
   const size_t held_count = 1u + argc + N_EXTRA;
   GLTANG_Value * held = gcu_calloc(held_count, sizeof(GLTANG_Value));
   if (!held) {
+    if (exec->resume_active) {
+      gltang_vm_pending_unconsumed(exec);  // as at the end, below
+    }
     return exec->roots[GLTANG_ROOT_OOM];
   }
   held[0] = callee;
@@ -908,6 +911,11 @@ static GLTANG_Value __attribute__((noinline)) call_resumable_native(GLTANG_Execu
   gltang_jit_return_depth(exec, lent);
 #endif
   gcu_free(held);
+  if (__builtin_expect(exec->resume_active, 0)) {
+    // Run again to continue from a pending record and refused before run_resumable_native took it (the copy or the
+    // record could not be made): the record goes, with the refusal as the call's value.
+    gltang_vm_pending_unconsumed(exec);
+  }
   return result;
 }
 

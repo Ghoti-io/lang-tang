@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -468,7 +468,7 @@
+@@ -484,7 +484,7 @@
                  goto halted;
                }
                {

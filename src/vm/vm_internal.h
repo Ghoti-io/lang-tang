@@ -1204,6 +1204,8 @@ typedef struct GLTANG_PendingSpec {
 GLTANG_Value gltang_vm_pending_push(GLTANG_Execution * exec, const GLTANG_PendingSpec * spec);
 /** @brief Unlinks the innermost record. */
 void gltang_vm_pending_pop(GLTANG_Execution * exec);
+/** @brief Lets go of the innermost record after an instruction (or a chained call) run again to continue from it answered before it reached the record's step, and ends the delivery. */
+void gltang_vm_pending_unconsumed(GLTANG_Execution * exec);
 /** @brief Unlinks records until `depth` are left, and ends any delivery or request in flight (an unwind). */
 void gltang_vm_pending_drop_to(GLTANG_Execution * exec, size_t depth);
 /** @brief The number of records. */

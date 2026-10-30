@@ -1,6 +1,6 @@
 # 323 a pointer is stored into the pending record without the barrier
 # defect: the state slot is written directly, which barrier-verify sees
-# caught by: the collection-while-the-callee-runs tests under torture and verify (testCustom_reentry)
+# caught by: the collection-while-the-callee-runs tests, which force torture and verify on themselves (the runner runs the binary as it is) (testCustom_reentry)
 #
 --- a/src/vm/pending.c
 +++ b/src/vm/pending.c

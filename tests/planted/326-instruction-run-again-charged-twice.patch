@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -266,7 +266,7 @@
+@@ -270,7 +270,7 @@
        continue;  // the value goes on to the record below
      }
      const GLTANG_Opcode op = GLTANG_INSTRUCTION_OP(program->functions[GLTANG_FN_INDEX(fword)].code[pc]);

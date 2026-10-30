@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -404,7 +404,7 @@
+@@ -420,7 +420,7 @@
  #endif
          halt_text = GLTANG_V_NULL;
          {

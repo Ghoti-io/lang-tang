@@ -4,7 +4,7 @@
 #
 --- a/src/vm/execution.c
 +++ b/src/vm/execution.c
-@@ -184,6 +184,14 @@
+@@ -243,6 +243,14 @@
    // Printed as an element would be, a few levels deep: a debugger shows a
    // summary, not a megabyte.
    (void)gltang_vm_render(&sink, value, GLTANG_RENDER_ELEMENT, GLTANG_MAX_VALUE_DEPTH - 3, &too_deep);

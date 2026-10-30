@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1150,7 +1150,7 @@
+@@ -1166,7 +1166,7 @@
          GLTANG_Value v = S[sp - 1u];
          S[sp - 1u] = 0;
          // The one word a return tests for a guest call a host callback asked for: is this the callee's frame?

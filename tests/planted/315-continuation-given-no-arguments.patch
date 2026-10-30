@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -502,7 +502,7 @@
+@@ -503,7 +503,7 @@
    memset(&call, 0, GLTANG_CALL_ZEROED);
    call.exec = exec;
    call.args = held;

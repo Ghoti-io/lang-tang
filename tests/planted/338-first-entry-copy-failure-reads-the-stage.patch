@@ -1,0 +1,15 @@
+# 338 a first entry whose operand copy is refused reads a stage it was not given
+# defect: the refused heap copy of more than seventeen operands asks the stage of a continuation whether to let a record go, and a first entry has none (a null pointer)
+# caught by: the callable-object-with-seventeen-arguments test (testCustom_reentry)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -416,7 +416,7 @@
+       if (oc->extra && oc->extra->errored) {
+         *oc->extra->errored = true;
+       }
+-      if (continuing && stage->pop) {
++      if (stage->pop) {
+         // A first entry (bracket_entry) has no stage: only a continuation took a record.
+         gltang_vm_pending_pop(exec);
+         exec->resume_active = false;

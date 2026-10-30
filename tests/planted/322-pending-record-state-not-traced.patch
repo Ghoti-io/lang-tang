@@ -1,6 +1,6 @@
 # 322 the pending record's state slot is not traced
 # defect: the state a callback named is collected while the callee runs
-# caught by: the collection-while-the-callee-runs tests under torture (testCustom_reentry)
+# caught by: the collection-while-the-callee-runs tests, which force torture on themselves (the runner runs the binary as it is) (testCustom_reentry)
 #
 --- a/src/vm/pending.c
 +++ b/src/vm/pending.c

@@ -416,7 +416,8 @@ static inline __attribute__((always_inline)) GLTANG_Value bracket_impl(GLTANG_Ex
       if (oc->extra && oc->extra->errored) {
         *oc->extra->errored = true;
       }
-      if (stage->pop) {
+      if (continuing && stage->pop) {
+        // A first entry (bracket_entry) has no stage: only a continuation took a record.
         gltang_vm_pending_pop(exec);
         exec->resume_active = false;
       }

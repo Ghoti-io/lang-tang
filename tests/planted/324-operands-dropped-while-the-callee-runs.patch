@@ -4,7 +4,7 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -276,7 +276,7 @@
+@@ -280,7 +280,7 @@
    GRCORE_Stack * stack = grcore_context_stack(context);
    uint64_t * S = grcore_stack_slots(stack, grcore_stack_top(stack));
    S[GLTANG_F_PC] = exec->current_offset;

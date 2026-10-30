@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -612,7 +612,7 @@
+@@ -613,7 +613,7 @@
    size_t mark = SIZE_MAX;
    for (;;) {
      ++exec->handles->nested_requests;

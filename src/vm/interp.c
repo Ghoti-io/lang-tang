@@ -256,6 +256,10 @@ static bool __attribute__((noinline)) pending_step(GLTANG_Execution * exec, GRCO
         value = gltang_vm_call_native(exec, record->slots[operands], record->operand_count - 1u, &record->slots[operands + 1u], false);
       }
       exec->suspend_mode = 0;
+      if (__builtin_expect(exec->resume_active, 0)) {
+        // Answered before its continuation was reached (SUSPEND_END in the loop says when): the record goes.
+        gltang_vm_pending_unconsumed(exec);
+      }
       if (value == GLTANG_V_UNWIND) {
         if (exec->request_made) {
           have_value = false;
@@ -383,6 +387,18 @@ GRCORE_Step gltang_vm_run(GLTANG_Execution * exec, GRCORE_Context * context) {
   do { \
     for (size_t drop_i = 0; drop_i < (n); ++drop_i) { \
       S[--sp] = 0; \
+    } \
+  } while (0)
+// The end of an operation an instruction ran with `suspend_mode` 1 (a site that suspends). When the instruction was
+// run again to continue from a pending record and the operation answered before it reached the record's step (a rule
+// of its own answers first: an instance the callee marked as an error is false to `as bool`, an error operand is the
+// value of `+`), the record still holds a value it was given and will never be asked for: it is let go here
+// (gltang_vm_pending_unconsumed), the one place, so that no early answer of any operation can leave it on the chain.
+#define SUSPEND_END() \
+  do { \
+    exec->suspend_mode = 0; \
+    if (__builtin_expect(exec->resume_active, 0)) { \
+      gltang_vm_pending_unconsumed(exec); \
     } \
   } while (0)
 
@@ -620,7 +636,7 @@ resume_loop:
         SYNC();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_neg(exec, v);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
         }
@@ -694,7 +710,7 @@ resume_loop:
             // instruction then continues from (pending:).
             exec->suspend_mode = 1;
             binary_r = gltang_vm_op_binary(exec, op, x, y);
-            exec->suspend_mode = 0;
+            SUSPEND_END();
           }
           else {
             binary_r = gltang_vm_op_binary(exec, op, x, y);
@@ -810,7 +826,7 @@ resume_loop:
         if (gltang_v_is_custom(v)) {
           exec->suspend_mode = 1;
           r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
-          exec->suspend_mode = 0;
+          SUSPEND_END();
         }
         else {
           r = gltang_vm_op_cast(exec, v, (GLTANG_Cast_Type)a);
@@ -833,7 +849,7 @@ resume_loop:
         STAND_AT_OP();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_index(exec, c, i);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
@@ -856,7 +872,7 @@ resume_loop:
         RELOAD();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_attr(exec, S[sp - 1u], name);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
@@ -874,7 +890,7 @@ resume_loop:
         STAND_AT_OP();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_slice(exec, S[sp - 1u - parts], a, &S[sp - parts]);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         STOOD();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
@@ -892,7 +908,7 @@ resume_loop:
         SYNC();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_set_index(exec, c, i, v, (a & 1u) != 0);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
         }
@@ -911,7 +927,7 @@ resume_loop:
         RELOAD();
         exec->suspend_mode = 1;
         GLTANG_Value r = gltang_vm_op_set_attr(exec, S[sp - 2u], name, S[sp - 1u], (a & 1u) != 0);
-        exec->suspend_mode = 0;
+        SUSPEND_END();
         if (r == GLTANG_V_UNWIND) {
           goto unwound_or_request;
         }
@@ -1069,7 +1085,7 @@ resume_loop:
             STAND_AT_OP();
             exec->suspend_mode = 1;
             r = gltang_vm_custom_call(exec, &S[sp - 1u - argc], argc);
-            exec->suspend_mode = 0;
+            SUSPEND_END();
             STOOD();
           }
           else {
@@ -1181,7 +1197,7 @@ resume_loop:
         if (gltang_v_is_custom(S[sp - 1u])) {
           exec->suspend_mode = 1;
           r = gltang_vm_op_print(exec, S[sp - 1u]);
-          exec->suspend_mode = 0;
+          SUSPEND_END();
         }
         else {
           r = gltang_vm_op_print(exec, S[sp - 1u]);
@@ -1223,7 +1239,7 @@ resume_loop:
           STAND_AT_OP();
           exec->suspend_mode = 1;
           GLTANG_Value it = gltang_vm_custom_iterator_begin(exec, v);
-          exec->suspend_mode = 0;
+          SUSPEND_END();
           STOOD();
           if (it == GLTANG_V_UNWIND) {
             goto unwound_or_request;
@@ -1274,7 +1290,7 @@ resume_loop:
           GLTANG_Value item = GLTANG_V_NULL;
           exec->suspend_mode = 1;
           GLTANG_IterStep step = gltang_vm_custom_iterator_next(exec, S[H + a], &item);
-          exec->suspend_mode = 0;
+          SUSPEND_END();
           STOOD();
           if (step == GLTANG_ITER_UNWIND) {
             goto unwound_or_request;
@@ -1437,6 +1453,7 @@ unwound:
 #undef CUSTOM_TRUTH
 #undef CUSTOM_TRUTH_DISCARDED
 #undef DROP
+#undef SUSPEND_END
 }
 
 GRCORE_Step gltang_execution_entry(GRCORE_Context * context, void * state) {

@@ -1,0 +1,16 @@
+# 336 an instruction run again that answers before its record's step keeps the record
+# defect: the end of a suspending site does not let go of a record whose value was delivered and never asked for (an instance the callee marked as an error is false to `as bool`), so a later return delivers to it
+# caught by: the cast-to-bool-of-a-marked-instance test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -397,9 +397,6 @@
+ #define SUSPEND_END() \
+   do { \
+     exec->suspend_mode = 0; \
+-    if (__builtin_expect(exec->resume_active, 0)) { \
+-      gltang_vm_pending_unconsumed(exec); \
+-    } \
+   } while (0)
+ 
+   LOAD_FRAME();

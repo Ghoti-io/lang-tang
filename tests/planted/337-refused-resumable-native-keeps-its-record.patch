@@ -1,0 +1,25 @@
+# 337 a resumable native refused when it is run again keeps its record
+# defect: the copy of the arguments (or the activation record) is refused before run_resumable_native takes the record, and nothing else lets it go
+# caught by: the resumable-native-refused-when-run-again test (testCustom_reentry)
+#
+--- a/src/vm/libvalue.c
++++ b/src/vm/libvalue.c
+@@ -868,9 +868,6 @@
+   const size_t held_count = 1u + argc + N_EXTRA;
+   GLTANG_Value * held = gcu_calloc(held_count, sizeof(GLTANG_Value));
+   if (!held) {
+-    if (exec->resume_active) {
+-      gltang_vm_pending_unconsumed(exec);  // as at the end, below
+-    }
+     return exec->roots[GLTANG_ROOT_OOM];
+   }
+   held[0] = callee;
+@@ -911,7 +908,7 @@
+   gltang_jit_return_depth(exec, lent);
+ #endif
+   gcu_free(held);
+-  if (__builtin_expect(exec->resume_active, 0)) {
++  if (false) {
+     // Run again to continue from a pending record and refused before run_resumable_native took it (the copy or the
+     // record could not be made): the record goes, with the refusal as the call's value.
+     gltang_vm_pending_unconsumed(exec);

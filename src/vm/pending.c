@@ -113,6 +113,8 @@ GLTANG_Value gltang_vm_pending_push(GLTANG_Execution * exec, const GLTANG_Pendin
     (void)grheap_store_word(heap, record, &record->slots[GLTANG_PENDING_ARGS + spec->argc + i], spec->operands[i]);
   }
   exec->pending_top = gltang_value_of(record);
+  // A new record ends any delivery: the record delivered was let go before its continuation could ask again.
+  exec->resume_active = false;
   return exec->pending_top;
 }
 
@@ -124,6 +126,12 @@ void gltang_vm_pending_pop(GLTANG_Execution * exec) {
   GLTANG_Value previous = record->slots[GLTANG_PENDING_PREVIOUS];
   exec->pending_top = previous;
   exec->deliver_frame = previous ? record_of(previous)->callee_frame : 0;
+}
+
+void gltang_vm_pending_unconsumed(GLTANG_Execution * exec) {
+  // The value was delivered (resume_active) and no continuation took it: nothing is left to continue.
+  gltang_vm_pending_pop(exec);
+  exec->resume_active = false;
 }
 
 void gltang_vm_pending_drop_to(GLTANG_Execution * exec, size_t depth) {
