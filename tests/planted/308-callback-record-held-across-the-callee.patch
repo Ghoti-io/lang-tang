@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -584,7 +584,9 @@
+@@ -583,7 +583,9 @@
        exec->pending_fuel += gltang_vm_string(result)->byte_length / GLTANG_WORK_BYTES_PER_FUEL;
      }
    }

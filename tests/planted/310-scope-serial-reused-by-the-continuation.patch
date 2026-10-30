@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -351,6 +351,7 @@
+@@ -350,6 +350,7 @@
    }
    request->made = false;
    gltang_vm_call_abandon(call);

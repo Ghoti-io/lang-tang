@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -566,7 +566,7 @@
+@@ -565,7 +565,7 @@
          call.value = held[2];
        }
      }

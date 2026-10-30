@@ -2172,8 +2172,8 @@ static void emit_add_fused(Ctx * c, uint32_t i, uint32_t d, uint32_t end) {
  * would hand it to its type themselves; the reason is what that is: the type's operation is a
  * host callback (an activation record, a handle scope, `in_host`, and a callback that may later
  * re-enter guest code), which spec-template-compiled does not run from inside a compiled
- * helper. Compiling that dispatch is spec-tang-host-extensibility story 10's
- * (planning/specs/spec-tang-host-extensibility/stories.yaml, id "10"). The word must
+ * helper. Compiling that dispatch is later work; until it is done the interpreter is the only
+ * tier that runs a type's callback. The word must
  * be a non-null pointer (tag 0) before its kind is read; any other word goes on. The exit is
  * a real one and counts toward the discard limit (the deopt hook reads the refusal).
  *

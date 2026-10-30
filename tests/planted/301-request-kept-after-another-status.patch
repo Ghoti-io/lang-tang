@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -328,7 +328,7 @@
+@@ -327,7 +327,7 @@
      *status = GLTANG_OP_ERROR;
      return false;
    }

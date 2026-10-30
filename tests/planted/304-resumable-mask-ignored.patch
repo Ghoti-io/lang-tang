@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -515,7 +515,7 @@
+@@ -514,7 +514,7 @@
    // What decides whether this callback may ask for a guest call (gltang_call_guest): the type's list. The attribute
    // of a built-in kind has no type, and never may.
    call.owner = oc->type;

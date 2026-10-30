@@ -23,8 +23,7 @@
  *
  * Custom values (type.h): the registries an execution attaches, making an
  * instance, and the dispatch every operation of the language falls through to
- * for a custom operand, with ctang's reflection rule (planning section 5.3,
- * spine AD-29).
+ * for a custom operand, with ctang's reflection rule (type.h states it).
  *
  * **One bracket for every operation.** A type's operation is a host callback
  * (AD-23), entered the way `gltang_vm_call_native` enters a native: its

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -350,7 +350,6 @@
+@@ -349,7 +349,6 @@
      values[2u + i] = request->args[i];
    }
    request->made = false;
