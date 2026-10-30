@@ -578,6 +578,23 @@ $(OBJ_DIR)/%.o: src/%.c $(FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
+# The interpreter's dispatch (the top of its loop, through the indirect jump of
+# the switch) is about 56 bytes that every instruction runs. Where it lands
+# relative to a 64-byte line is otherwise an accident of the code before it:
+# on a 16-thread x86-64 build host, the same loop ran 12% to 19% faster when it
+# sat in one line than when it straddled two, and an unrelated change to the
+# file moved it from one to the other. Aligning loops pins it to the start of a
+# line. The padding is placed before the loop and reached only on entry, so
+# the instructions executed are the same. Measured with GCC only. `private`
+# keeps the flag off the object's prerequisites (the flags stamp would otherwise
+# record whichever value reached it first); the stamp names it on its own.
+ifeq ($(findstring clang,$(shell $(CC) --version 2>/dev/null)),)
+INTERP_CFLAGS := -falign-loops=64
+else
+INTERP_CFLAGS :=
+endif
+$(OBJ_DIR)/vm/interp.o: private LIB_CFLAGS += $(INTERP_CFLAGS)
+
 $(OBJ_DIR)/ast/%.o: src/ast/%.c $(FLAGS_STAMP) | $(GEN_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(LIB_CFLAGS) $(AST_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1708,7 +1725,7 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CORELIBRARY) $(DEP_LIBS) $(RHEAP_LIBS) $(RCORE_LIBS) $(UNICODE_LIBS) $(CUTIL_LIBS) $(TESTFLAGS) $(TEST_LDFLAGS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(SUITE) $(PROJECT) $(BRANCH) $(AST_CFLAGS) $(GENERATED_CFLAGS) $(ORACLE_CFLAGS) $(ORACLE_LIBS) $(ORACLE_RPATH) $(HOST_CFLAGS) $(HOST_LIBS) $(INTERP_CFLAGS) JIT=$(JIT) $(RJIT_CFLAGS) $(RJIT_LIBS) $(JIT_CFLAGS)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(TSAN_FLAGS_STAMP): force-flags
