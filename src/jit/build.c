@@ -1839,11 +1839,14 @@ static void branch_fast_or_slow(Ctx * c, GRJIT_Operand taken, GRJIT_BlockId * fa
   set_block(c, *slow);
 }
 
+static void guard_not_custom(Ctx * c, uint32_t i, uint32_t d, uint32_t pos);
+
 /**
  * `PRINT`: the interpreter's print of the operand in slot `d - 1`, which its value (null,
  * or the error a failed print makes) replaces. The operand is a value word: a raw float
  * is the designed exit before this (`reads_raw`). A short string whose print cannot poll,
- * allocate or deliver is the fast path, and its value is null as the interpreter's is.
+ * allocate or deliver is the fast path, and its value is null as the interpreter's is. A
+ * host-defined operand leaves on the slow path, before the call (guard_not_custom).
  */
 static void emit_print(Ctx * c, uint32_t i, uint32_t d) {
   GRJIT_Operand args[1] = {V(c->stack[d - 1u])};
@@ -1851,6 +1854,7 @@ static void emit_print(Ctx * c, uint32_t i, uint32_t d) {
   emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_fast, args, 1);
   branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
   new_block(c, &join);
+  guard_not_custom(c, i, d, d - 1u);
   emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d, false);
   branch_to(c, join);
   set_block(c, fast);
@@ -2172,6 +2176,11 @@ static void emit_add_fused(Ctx * c, uint32_t i, uint32_t d, uint32_t end) {
  * (planning/specs/spec-tang-host-extensibility/stories.yaml, id "10"). The word must
  * be a non-null pointer (tag 0) before its kind is read; any other word goes on. The exit is
  * a real one and counts toward the discard limit (the deopt hook reads the refusal).
+ *
+ * A cast's call of the interpreter (to bool, to string, and to int of what is not a number)
+ * and a print test it too: their type's callbacks may ask for a guest call, which only the
+ * interpreter can make and come back from (it runs the instruction again), so a pause in the
+ * callee pauses on both tiers.
  */
 static void guard_not_custom(Ctx * c, uint32_t i, uint32_t d, uint32_t pos) {
   GRJIT_VReg * t = c->tmp;
@@ -2306,8 +2315,9 @@ static void end_add_slow_path(Ctx * c, uint32_t i, uint32_t d, GRJIT_BlockId slo
 // The value-building operations (spec-template-compiled story 4)
 // ---------------------------------------------------------------------------
 
-/** A `CAST` the inline path does not do: the interpreter's cast of the operand in slot `d - 1`, which the result replaces. */
+/** A `CAST` the inline path does not do: the interpreter's cast of the operand in slot `d - 1`, which the result replaces. A host-defined operand leaves first. */
 static void emit_cast_call(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
+  guard_not_custom(c, i, d, d - 1u);
   GRJIT_Operand args[2] = {V(c->stack[d - 1u]), I((int64_t)a)};
   emit_native(c, i, d, GLTANG_JIT_NATIVE_CAST, args, 2, c->stack[d - 1u], d);
 }

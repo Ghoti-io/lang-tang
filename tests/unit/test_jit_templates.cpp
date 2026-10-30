@@ -407,8 +407,10 @@ TEST(JitTemplates, APrintOfAHostDefinedValueAppendsNothingAsInterpreted) {
   expect_same(sc, &plain, &jit);
   ASSERT_FALSE(HasFailure());
   EXPECT_EQ(jit.raw, "|");
-  EXPECT_EQ(jit.stats.output_calls, 2u);
-  EXPECT_EQ(jit.stats.deopts, 0u);
+  // The print of a host-defined value leaves compiled code before the call (its type's `print` may ask for a guest
+  // call, which only the interpreter can make and come back from), and the rest of f is the interpreter's.
+  EXPECT_EQ(jit.stats.output_calls, 0u);
+  EXPECT_EQ(jit.stats.deopts, 1u);
 }
 
 TEST(JitTemplates, WhereNativesCannotBeCalledAPrintStaysAnExitAndTheOutputIsTheSame) {
@@ -1723,12 +1725,13 @@ TEST(JitTemplates, ARawFloatInALiteralOrCastToBoolIsTheDesignedBoxExit) {
   }
 }
 
-TEST(JitTemplates, CastErrorsAndAHostDefinedOperandOfACastAreTheInterpretersWithNoExit) {
+TEST(JitTemplates, CastErrorsAreTheInterpretersWithNoExitAndACastOfAHostDefinedOperandLeaves) {
   GLTANG_REQUIRE_JIT_BACKEND();
   // A cast of an error (`Not implemented`), of a function, of an array to int and of a host-defined value
-  // (`Not supported`, the interpreter's answer: a cast never asks the host type, host-extensibility
-  // story 6), each on a line of its own so each error's origin names it. A host-defined value stored
-  // into a literal is a reference (ADOPT copies only arrays and maps).
+  // (`Not supported`, the interpreter's answer: the type has no `cast`), each on a line of its own so each
+  // error's origin names it. A host-defined value stored into a literal is a reference (ADOPT copies only
+  // arrays and maps). The cast of the host-defined value to string leaves compiled code first, since its
+  // type's callback may ask for a guest call (host-extensibility story 9): once in each of the two calls.
   Boxes boxes;
   Scenario sc = scenario(
       "function f(e, b) {\n"
@@ -1762,7 +1765,7 @@ TEST(JitTemplates, CastErrorsAndAHostDefinedOperandOfACastAreTheInterpretersWith
   for (int line = 2; line <= 6; ++line) {
     EXPECT_NE(jit.errors.find("page:" + std::to_string(line) + "["), std::string::npos) << "line " << line << ": " << jit.errors;
   }
-  EXPECT_EQ(jit.stats.deopts, 0u) << "every cast was the interpreter's own, called from compiled code";
+  EXPECT_EQ(jit.stats.deopts, 2u) << "every other cast was the interpreter's own, called from compiled code";
 }
 
 TEST(JitTemplates, TheTopLevelExitOfTheOtherSuitesIsNowAtItsLoopAfterACompiledEmptyArray) {

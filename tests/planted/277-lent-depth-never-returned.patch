@@ -1,6 +1,6 @@
 # 277 the native-depth units lent for a callback never taken back
 # defect: after a callback that was reached from a compiled helper, the native depth stays down by the units lent, so a later budget check passes where it should refuse (and the depth is not where it started)
-# caught by: the refused-record test: the native depth after the run (testCustom_ops)
+# caught by: the units still lent at the end of the tight native-depth differential and of the refused-record test (gltang_vm_jit_test_depth_lent; a host attribute of a string is the callback since compiled casts and prints of host-defined values leave) (testCustom_ops)
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c

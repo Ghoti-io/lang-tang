@@ -124,6 +124,9 @@ GRCORE_EngineId gltang_vm_test_engine_id(const GLTANG_Execution * execution);
 bool gltang_vm_jit_test_extend(GLTANG_Execution * execution, size_t cells);
 void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution);
 
+/** The native-depth units lent to callbacks that compiled code's helpers called and not taken back yet: 0 between callbacks (JIT builds only). */
+size_t gltang_vm_jit_test_depth_lent(const GLTANG_Execution * execution);
+
 /** What the JIT compiler's kind tables say about an opcode (bit 0: reads a raw operand, bit 1: known effect on kinds). */
 unsigned gltang_vm_jit_test_opcode_policy(unsigned op);
 

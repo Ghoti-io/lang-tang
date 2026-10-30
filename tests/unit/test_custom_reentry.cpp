@@ -2117,11 +2117,17 @@ TEST(ReentryReplay, ACastToBoolOfAnInstanceItsCalleeMarkedAsAnErrorLetsTheRecord
   // must go, or its delivery mark takes the return of the next call made from this frame (k's).
   Scenario sc = scenario("use t; m = 0; function f() { global m; use t; t.seterr(m); return 41; } function k() { return 5; }\n"
                          "m = t.ops(f, 0); b = m as bool; q = k(); print(b); print(\"|\"); print(q + 1); q;\n");
-  Result r = go(sc, 0);
-  EXPECT_EQ(r.out.raw, "false|6");
-  EXPECT_EQ(r.out.result, "5");
-  EXPECT_EQ(r.pending_depth, 0u);
-  EXPECT_EQ(r.suspended, 1u);
+  // Compiled code leaves before a cast of a host-defined value (it would otherwise ask the type from a helper, nested,
+  // where nothing is run again to see the mark f made): both tiers answer false.
+  Result r;
+  for (long threshold : {0l, 1l}) {
+    r = go(sc, threshold);
+    EXPECT_EQ(r.out.raw, "false|6") << "threshold " << threshold;
+    EXPECT_EQ(r.out.result, "5");
+    EXPECT_EQ(r.pending_depth, 0u) << "threshold " << threshold;
+    EXPECT_EQ(r.suspended, 1u) << "threshold " << threshold;
+    EXPECT_EQ(r.nested, 0u) << "threshold " << threshold;
+  }
   // The same through an operator: the error operand is the value of `+`, and the record goes all the same.
   Scenario add = scenario("use t; m = 0; function f() { global m; use t; t.seterr(m); return 41; } function k() { return 5; }\n"
                           "m = t.ops(f, 0); b = m + 1; q = k(); print(q + 1); q;\n");

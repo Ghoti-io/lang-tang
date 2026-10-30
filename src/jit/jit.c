@@ -833,6 +833,11 @@ void gltang_vm_jit_test_retract_all(GLTANG_Execution * execution) {
   }
 }
 
+/* For the tests only: the native-depth units lent to callbacks and not yet taken back (0 when none is running). Declared in vm/test_hooks.h. */
+size_t gltang_vm_jit_test_depth_lent(const GLTANG_Execution * execution) {
+  return execution && execution->jit ? execution->jit->depth_lent : 0;
+}
+
 /*
  * For the tests only: offers the compiled code of one function of the main
  * program to the entry slot of another, with the token and the parameter count

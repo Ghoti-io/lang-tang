@@ -656,6 +656,7 @@ struct Out {
   uint64_t fuel = 0;
   uint64_t position = 0;
   uint64_t native_depth = 0;
+  uint64_t depth_lent = 0;     ///< The native-depth units lent to callbacks and not taken back at the end (JIT builds; 0 otherwise).
   bool fired = false;
   std::vector<GLTANG_ErrorHow> hows;
   std::vector<GLTANG_ErrorKind> error_kinds;
@@ -730,6 +731,9 @@ Out run(const std::string & source, Types & types, const Config & config = Confi
   out.fuel = grcore_context_fuel_used(context.context);
   out.position = gltang_vm_test_position(context.execution);
   out.native_depth = grcore_context_depth(context.context, GRCORE_DEPTH_NATIVE);
+#ifdef GLTANG_WITH_JIT
+  out.depth_lent = gltang_vm_jit_test_depth_lent(context.execution);
+#endif
   out.fired = context.tracker.fired;
   for (size_t i = 0; i < out.errors_listed; ++i) {
     out.hows.push_back(context.error(i).e.how);
@@ -1589,8 +1593,10 @@ TEST(TypeOps, CompiledAndInterpretedRunsAgreeUnderATightNativeDepthBudget) {
   Types types;
   // One unit of native depth: a native runs at the top level. From a helper that compiled code
   // called, the units its open records hold are handed back for the callback (as for a native),
-  // so the callback is refused in neither tier.
-  for (const char * source : {kDifferentialPrograms[2], kDifferentialPrograms[3], kDifferentialPrograms[4]}) {
+  // so the callback is refused in neither tier. Compiled code leaves before a cast or a print of a
+  // host-defined value (story 9), so the attribute a host added to strings, which compiled code
+  // reads through the interpreter's attribute rule, is the callback a helper reaches.
+  for (const char * source : {kDifferentialPrograms[2], kDifferentialPrograms[3], kDifferentialPrograms[4], kDifferentialPrograms[6]}) {
     Out reference;
     bool first = true;
     for (long threshold : {0L, 1L}) {
@@ -1609,6 +1615,7 @@ TEST(TypeOps, CompiledAndInterpretedRunsAgreeUnderATightNativeDepthBudget) {
       EXPECT_EQ(o.described, reference.described) << source;
       EXPECT_EQ(o.raw, reference.raw) << source;
       EXPECT_EQ(o.fuel, reference.fuel) << source;
+      EXPECT_EQ(o.depth_lent, 0u) << source << ": every unit lent to a callback was taken back";
     }
   }
 }
@@ -1922,6 +1929,11 @@ TEST(TypeOps, ANextThatSetsAnErrorThroughTheCallObjectWithStatusOkEndsTheLoopAnd
 
 TEST(TypeOps, ACastCallbackThatPollsIsStoppedByTheBudgetWithTheSamePositionInBothTiers) {
   Types types;
+  // The identity the callback's first poll read, per target. f's code is the same for every target but the
+  // cast's operand, so the cast is at the same place in each, and each stands at it: since compiled code leaves
+  // before a cast of a host-defined value (story 9), both tiers run the interpreter's cast, and only this
+  // comparison of the targets with each other sees a cast that does not stand.
+  std::vector<std::vector<std::string>> logs;
   for (const char * target : {"int", "float", "bool", "string"}) {
     const std::string source = std::string(PRELUDE "p0 = pollcast(0); p1 = pollcast(1); function f(p) { return p as ") + target +
         "; } i = 0; while (i < 20) { f(p0); i += 1; } f(p1); 7;";
@@ -1939,6 +1951,7 @@ TEST(TypeOps, ACastCallbackThatPollsIsStoppedByTheBudgetWithTheSamePositionInBot
         first = false;
         EXPECT_NE(reference.position, 0u);
         EXPECT_EQ(reference.log.size(), 1u) << target << ": the callback saw the identity of its first poll";
+        logs.push_back(reference.log);
         continue;
       }
       EXPECT_COMPILED(o, target);
@@ -1949,6 +1962,10 @@ TEST(TypeOps, ACastCallbackThatPollsIsStoppedByTheBudgetWithTheSamePositionInBot
     // Without the budget the same program finishes, and the casts answer.
     Out whole = run(std::string(PRELUDE "p = pollcast(0); function f(p) { return p as ") + target + "; } [f(p)];", types);
     EXPECT_TRUE(whole.finished) << target;
+  }
+  ASSERT_EQ(logs.size(), 4u);
+  for (size_t k = 0; k < 3u; ++k) {
+    EXPECT_EQ(logs[k], logs[3]) << "target " << k << ": the cast stands at itself, as the cast to string does";
   }
 }
 
@@ -1968,6 +1985,8 @@ TEST(TypeOps, ARefusedRecordIsTheRecursionLimitErrorInBothTiersAndLeaksAndLeaves
     {"cast", "use reenter; function f(c) { return c as int; } reenter(f, caster(0));", "41"},
     {"to_string", "use reenter; function f(c) { return c as string; } reenter(f, texty(2));", "T<&>"},
     {"for", "use reenter; function f(c) { t = []; for (x : c) { t += [x]; } return t; } reenter(f, coll(3));", "[1, 2, 3]"},
+    // A host attribute of a string: the callback compiled code's attribute helper reaches (the depth it lends).
+    {"host attribute", "use reenter; function f(s) { return s.slug; } reenter(f, \"ab\");", "slug:ab"},
   };
   for (const Case & c : cases) {
     for (uint64_t depth = 0; depth <= 4; ++depth) {
@@ -1987,6 +2006,7 @@ TEST(TypeOps, ARefusedRecordIsTheRecursionLimitErrorInBothTiersAndLeaksAndLeaves
         ASSERT_TRUE(o.finished) << where;
         EXPECT_EQ(outstanding, 0) << where << ": cutil blocks outstanding after the run";
         EXPECT_EQ(o.native_depth, 0u) << where << ": the native depth is back where it started";
+        EXPECT_EQ(o.depth_lent, 0u) << where << ": every unit lent to a callback was taken back";
         bool limited = false;
         for (GLTANG_ErrorKind k : o.error_kinds) {
           limited = limited || k == GLTANG_ERROR_RECURSION_LIMIT;

@@ -1,0 +1,14 @@
+# 350 a compiled print of a host-defined value is not an exit
+# defect: compiled code calls the interpreter's print with the instance, so its type's request runs nested, where a template callee is refused
+# caught by: the print-that-asks-for-a-template test at threshold 1 (testCustom_reentry)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -1854,7 +1854,6 @@
+   emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_fast, args, 1);
+   branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
+   new_block(c, &join);
+-  guard_not_custom(c, i, d, d - 1u);
+   emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d, false);
+   branch_to(c, join);
+   set_block(c, fast);

@@ -1,6 +1,6 @@
 # 274 a cast of a host-defined value that does not stand at the operation
-# defect: the interpreter stands at a cast only for a cast to string, so a poll inside a custom value's `cast` to another target is recorded elsewhere than in compiled code
-# caught by: the cast-callback-that-polls test: the position and fuel in both tiers (testCustom_ops)
+# defect: the interpreter stands at a cast only for a cast to string, so a poll inside a custom value's `cast` to another target is recorded elsewhere than the cast
+# caught by: the cast-callback-that-polls test: the identity each target's poll reads, against the cast to string's (compiled code leaves before a cast of a host-defined value since story 9's review, so both tiers are the interpreter's there) (testCustom_ops)
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c

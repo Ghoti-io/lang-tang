@@ -4,10 +4,10 @@
 #
 --- a/src/jit/build.c
 +++ b/src/jit/build.c
-@@ -1851,7 +1851,7 @@
-   emit_fast_call(c, i, (uint64_t)(uintptr_t)gltang_jit_print_fast, args, 1);
+@@ -1855,7 +1855,7 @@
    branch_fast_or_slow(c, V(c->tmp[TMP_R]), &fast, &slow);
    new_block(c, &join);
+   guard_not_custom(c, i, d, d - 1u);
 -  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, c->stack[d - 1u], d, false);
 +  emit_native_at(c, i, d, GLTANG_JIT_NATIVE_PRINT, args, 1, GRJIT_NO_VREG, d, false);  /* planted: the value is not the result */
    branch_to(c, join);
