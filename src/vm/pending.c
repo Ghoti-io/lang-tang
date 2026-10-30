@@ -94,6 +94,7 @@ GLTANG_Value gltang_vm_pending_push(GLTANG_Execution * exec, const GLTANG_Pendin
   record->type = spec->type;
   record->member = spec->member;
   record->callee_frame = 0;
+  record->frame = grcore_stack_top(grcore_context_stack(exec->context)).offset;
   // The previous record is read after the allocation: the execution holds it, and a collection
   // rewrote that.
   record->depth = exec->pending_top ? record_of(exec->pending_top)->depth + 1u : 1u;

@@ -2173,6 +2173,31 @@ TEST(ReentryReplay, ACallableObjectCalledWithSeventeenArgumentsWhoseCopyIsRefuse
   EXPECT_EQ(r.out.result, "3");
 }
 
+TEST(ReentryUnwind, ATemplatesOwnBudgetEndingInsideAChainLetsGoOfEveryRecordWhoseInstructionWasInIt) {
+  // P's `a + 1` asks for h; h calls the template spin, which has a budget of its own; in spin, `o(1)` is a callable
+  // object whose `call` asks for a bound resumable native N, and N asks for g, which loops until spin's budget is
+  // spent. The records of `o(1)` and of N were made by an instruction of spin's frame, so they go with it, although
+  // N, a native, never had a frame of its own. h gets spin's limit error as its value and returns; P's instruction
+  // continues once, from its own record, and N's continuation never runs.
+  Compiled spin("use t; function g(x) { k = 0; while (true) { k = k + 1; } return k; } o = t.fwd(t.bind(g)); o(1);", tt::Mode::Script, "spin.tang");
+  ASSERT_TRUE(spin.ok());
+  Scenario sc = scenario("use t; use spin; function h() { use spin; x = spin(); return 2; } a = t.rx(h, 0, 1); r = a + 1; print(r); r;\n");
+  sc.before = [&](Context & c) {
+    EXPECT_EQ(gltang_library_add_template(c.library(), "spin", spin.program, 400, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+  };
+  for (long threshold : {0l, 1l}) {
+    g_bound_conts = 0;
+    Result r = go(sc, threshold);
+    EXPECT_TRUE(r.out.finished) << "threshold " << threshold;
+    EXPECT_EQ(r.out.raw, "1007") << "threshold " << threshold;
+    const std::vector<std::string> want = {"add left 1 entry step 0", "cont 1 step 0 result 2"};
+    EXPECT_EQ(r.log, want) << "threshold " << threshold;
+    EXPECT_EQ(r.pending_depth, 0u) << "threshold " << threshold;
+    EXPECT_EQ(g_bound_conts.load(), 0) << "N's callee went with spin's frames: its continuation never runs";
+    EXPECT_EQ(r.suspended, 3u);
+  }
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   tt::install_watchdog(240);

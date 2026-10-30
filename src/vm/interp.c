@@ -1355,13 +1355,15 @@ unwound:
     gltang_vm_error_scope_limit(exec, stopped);
     size_t popped = 0;
     if (grcore_budget_scope_unwind(stack, (GRCORE_BudgetScope){stopped->scope_id}, &popped) == GRCORE_OK) {
-      // A host callback's call that ran in the frames just gone is over with them; the one whose
-      // callee is the template itself takes the limit error as the callee's value.
+      // A host callback's call whose instruction ran in the frames just gone is over with them (every record
+      // of a chain names the frame of the instruction it continues, whether or not its callee had a frame of
+      // its own); the one whose callee is the template itself takes the limit error as the callee's value.
       bool to_record = false;
       exec->resume_active = false;
-      while (exec->pending_top && ((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame >= stopped->call_frame) {
-        if (((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame == stopped->call_frame) {
-          to_record = true;
+      while (exec->pending_top) {
+        const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+        if (record->frame < stopped->call_frame) {
+          to_record = record->callee_frame == stopped->call_frame;
           break;
         }
         gltang_vm_pending_pop(exec);

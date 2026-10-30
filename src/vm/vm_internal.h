@@ -311,7 +311,8 @@ typedef struct GLTANG_PendingObject {
   uint32_t continuation;        ///< Index into the owner's continuation table.
   uint32_t operand_count;       ///< CHAINED only: the callee and arguments of the call this one continues, replayed on delivery.
   uint32_t depth;               ///< 1 for the oldest record; the record under this one has depth - 1.
-  size_t callee_frame;          ///< The offset of the frame the callee runs in; 0 while it has none.
+  size_t callee_frame;          ///< The offset of the frame the callee runs in; 0 while it has none (a native's or an instance's call has no frame: 0 is never a callee's, whose frame is above `frame`).
+  size_t frame;                 ///< The offset of the frame whose instruction the record continues: the top frame when it was made (the caller's guest frame, for a chained record too). The record goes when that frame does (a template's budget unwind, interp.c).
   const GLTANG_Type * type;     ///< The type that asked, or NULL for a native. Held by a registry the execution retains.
   const GLTANG_LibraryMember * member;  ///< The native that asked, or NULL for a type.
   GLTANG_Value slots[];         ///< state, previous record, result, requested callee, its arguments, then the operands.

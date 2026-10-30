@@ -4,11 +4,12 @@
 #
 --- a/src/vm/interp.c
 +++ b/src/vm/interp.c
-@@ -1361,7 +1361,6 @@
-       exec->resume_active = false;
-       while (exec->pending_top && ((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame >= stopped->call_frame) {
-         if (((const GLTANG_PendingObject *)gltang_object(exec->pending_top))->callee_frame == stopped->call_frame) {
--          to_record = true;
+@@ -1363,7 +1363,7 @@
+       while (exec->pending_top) {
+         const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+         if (record->frame < stopped->call_frame) {
+-          to_record = record->callee_frame == stopped->call_frame;
++          to_record = false;
            break;
          }
          gltang_vm_pending_pop(exec);

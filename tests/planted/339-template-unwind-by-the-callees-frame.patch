@@ -1,0 +1,15 @@
+# 339 a template's budget unwind tells a record's place by its callee's frame
+# defect: a record whose callee is a native or an instance has no callee frame (0): the unwind stops at it, though the frame of the instruction it continues is gone
+# caught by: the template-budget-inside-a-chain test (testCustom_reentry)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -1362,7 +1362,7 @@
+       exec->resume_active = false;
+       while (exec->pending_top) {
+         const GLTANG_PendingObject * record = gltang_object(exec->pending_top);
+-        if (record->frame < stopped->call_frame) {
++        if (record->callee_frame < stopped->call_frame) {
+           to_record = record->callee_frame == stopped->call_frame;
+           break;
+         }
