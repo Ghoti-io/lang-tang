@@ -1,0 +1,15 @@
+# 341 a request is not a root between gltang_call_guest and the callback's return
+# defect: a callback that pops the frame of its request's values and allocates has them collected: the call it asked for names freed objects
+# caught by: the request-whose-values-the-callback-dropped test, which forces torture and verify on itself (testCustom_reentry)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -1016,7 +1016,7 @@
+   for (size_t i = 0; i < hs->persistent_used; ++i) {
+     visitor->slot(visitor->user, &hs->persistent[i]);
+   }
+-  if (hs->request.made) {
++  if (false) {
+     // A request, from gltang_call_guest to the callback's return. A callback should do nothing in between, but one
+     // that allocates (or pops the handle frame the values were in) must not see the call it asked for collected or
+     // moved: the request holds them, and the collector keeps it up to date.

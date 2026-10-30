@@ -2234,6 +2234,21 @@ TEST(ReentryReader, AnInspectorReadingAValueFromInsideACallbackRunsNoCallbackOfI
   EXPECT_EQ(c.suspended, 1u);
 }
 
+TEST(ReentryMisuse, ARequestWhoseValuesAreDroppedByTheCallbackAfterItAskedSurvivesCollections) {
+  // framed asks with an argument and a state made in a handle frame it then pops, and allocates forty arrays before it
+  // returns: under torture each is a collection, and the request alone holds what it named.
+  Scenario sc = scenario("use t; function sum(a) { return a[0] + a[1] + a[2]; } r = t.framed(sum); r;\n");
+  sc.torture = 1;
+  sc.verify = 1;
+  sc.moving = 1;
+  for (long threshold : {0l, 1l}) {
+    Result r = go(sc, threshold);
+    EXPECT_EQ(r.out.result, "624") << "threshold " << threshold;
+    EXPECT_EQ(r.pending_depth, 0u);
+    EXPECT_EQ(r.out.heap_invalid_pointers, 0u);
+  }
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   tt::install_watchdog(240);

@@ -12,5 +12,5 @@
 +    GLTANG_Value shown = hs->persistent[i]; /* planted: a copy is reported */
 +    visitor->slot(visitor->user, &shown);
    }
- }
- 
+   if (hs->request.made) {
+     // A request, from gltang_call_guest to the callback's return. A callback should do nothing in between, but one

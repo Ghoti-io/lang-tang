@@ -1009,12 +1009,23 @@ GLTANG_Result gltang_persistent_release(GLTANG_NativeCall * call, GLTANG_Persist
 }
 
 void gltang_vm_handles_enumerate(GLTANG_Execution * exec, const GRCORE_RootVisitor * visitor) {
-  const GLTANG_HandleState * hs = exec->handles;
+  GLTANG_HandleState * hs = exec->handles;
   if (!hs) {
     return;
   }
   for (size_t i = 0; i < hs->persistent_used; ++i) {
     visitor->slot(visitor->user, &hs->persistent[i]);
+  }
+  if (hs->request.made) {
+    // A request, from gltang_call_guest to the callback's return. A callback should do nothing in between, but one
+    // that allocates (or pops the handle frame the values were in) must not see the call it asked for collected or
+    // moved: the request holds them, and the collector keeps it up to date.
+    GLTANG_GuestRequest * request = &hs->request;
+    visitor->slot(visitor->user, &request->state);
+    visitor->slot(visitor->user, &request->callee);
+    for (uint32_t i = 0; i < request->argc; ++i) {
+      visitor->slot(visitor->user, &request->args[i]);
+    }
   }
 }
 

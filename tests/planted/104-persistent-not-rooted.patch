@@ -12,6 +12,6 @@
 -    visitor->slot(visitor->user, &hs->persistent[i]);
 -  }
 +  (void)hs; (void)visitor; /* planted: the persistent values are not roots */
- }
- 
- void gltang_vm_handles_destroy(GLTANG_Execution * exec) {
+   if (hs->request.made) {
+     // A request, from gltang_call_guest to the callback's return. A callback should do nothing in between, but one
+     // that allocates (or pops the handle frame the values were in) must not see the call it asked for collected or
