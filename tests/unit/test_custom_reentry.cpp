@@ -2198,6 +2198,30 @@ TEST(ReentryUnwind, ATemplatesOwnBudgetEndingInsideAChainLetsGoOfEveryRecordWhos
   }
 }
 
+TEST(ReentryReader, AnInspectorReadingAValueFromInsideACallbackRunsNoCallbackOfItsType) {
+  // A debugger at a poll inside a callback reads a value through the engine's inspector. emb's `to_string` would ask
+  // for f, which no instruction could continue; the inspector renders into a buffer sink, which never runs a type's
+  // callback (it shows the type's name), so nothing is asked, nested or suspended, from a resumable native (whose body
+  // runs at an instruction that suspends) or an opaque one.
+  for (const char * native : {"peek", "peekplain"}) {
+    Scenario sc = scenario(std::string("use t; function f() { print(\"RAN\"); return 41; } a = t.emb(f); r = t.") + native + "(a); print(\"|\"); r;\n");
+    Result r = go(sc, 0);
+    EXPECT_EQ(r.out.raw, "|") << native << ": f never ran";
+    EXPECT_EQ(r.out.result, "Custom: emb") << native;
+    EXPECT_EQ(r.pending_depth, 0u) << native;
+    EXPECT_EQ(r.suspended, 0u) << native;
+    EXPECT_EQ(r.nested, 0u) << native;
+    EXPECT_EQ(r.out.native_depth, 0u) << native;
+  }
+  // The controls: the inspector reads a value of a built-in kind from inside the native, and the instance printed by
+  // the program itself asks, suspends and prints 42.
+  Result s = go(scenario("use t; r = t.peek(\"hey\"); r;\n"), 0);
+  EXPECT_NE(s.out.result.find("hey"), std::string::npos) << s.out.result;
+  Result c = go(scenario("use t; function f() { return 41; } a = t.emb(f); print(a);\n"), 0);
+  EXPECT_EQ(c.out.raw, "42");
+  EXPECT_EQ(c.suspended, 1u);
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   tt::install_watchdog(240);
