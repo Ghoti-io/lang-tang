@@ -255,7 +255,8 @@ GLTANG_API GLTANG_Result gltang_library_add_native(GLTANG_Library * library,
  * ::GLTANG_OP_ERROR, or chains with ::GLTANG_OP_PENDING. Compiled code does not
  * call a resumable native: the call is an exit to the interpreter. An attribute
  * function of a built-in kind and a factory are never resumable (answer a
- * resumable native bound with ::gltang_handle_make_native instead).
+ * resumable native bound with ::gltang_handle_make_resumable_native
+ * instead).
  *
  * @param library An unsealed library.
  * @param name A native member already added.

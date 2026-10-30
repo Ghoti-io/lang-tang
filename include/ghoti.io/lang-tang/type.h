@@ -313,8 +313,10 @@ typedef enum GLTANG_TypeOp {
  * @param result The callee's value, in this scope: an error value if the callee
  *   could not be entered or answered one.
  * @return What the original callback may return, including ::GLTANG_OP_PENDING
- *   with a new request. For a native: ::GLTANG_OP_OK answers, ::GLTANG_OP_ERROR
- *   fails with the kind set, anything else is `Host function failed`.
+ *   with a new request. For a native: ::GLTANG_OP_OK answers,
+ *   ::GLTANG_OP_ERROR fails with the kind set, and ::GLTANG_OP_PENDING after a
+ *   new ::gltang_call_guest chains; ::GLTANG_OP_DECLINE, ::GLTANG_OP_DONE and a
+ *   ::GLTANG_OP_PENDING that asked for nothing are `Host function failed`.
  */
 typedef GLTANG_OpStatus (*GLTANG_ContinuationFn)(GLTANG_NativeCall * call,
     void * user, GLTANG_Handle state, GLTANG_Handle result);
