@@ -558,6 +558,10 @@ static GLTANG_Value call_result_general(GLTANG_Execution * exec, GLTANG_NativeCa
     // A handle or a value could not be made: the callback's own out-of-memory result.
     result = exec->roots[GLTANG_ROOT_OOM];
   }
+  else if (call->guest_refused) {
+    // gltang_call_guest refused a request: the call failed, whatever it answered after.
+    result = gltang_vm_make_error(exec, GLTANG_ERROR_HOST_FAILED);
+  }
   else if (call->set == GLTANG_CALL_ERROR) {
     GLTANG_ErrorKind kind = (unsigned)call->error < (unsigned)GLTANG_ERROR_KIND_COUNT ? call->error : GLTANG_ERROR_HOST_FAILED;
     result = gltang_vm_make_error(exec, kind);
@@ -616,7 +620,7 @@ void gltang_vm_call_abandon(GLTANG_NativeCall * call) {
  * here, inline; everything else is the general function's.
  */
 static inline GLTANG_Value call_result(GLTANG_Execution * exec, GLTANG_NativeCall * call, bool worked) {
-  if (worked && !call->scope && !call->scope_oom && !call->scope_unwind && !call->failed_to_copy) {
+  if (worked && !call->scope && !call->scope_oom && !call->scope_unwind && !call->failed_to_copy && !call->guest_refused) {
     GLTANG_Value result;
     switch (call->set) {
       case GLTANG_CALL_NONE:
@@ -717,7 +721,7 @@ static GLTANG_Value run_resumable_native(GLTANG_Execution * exec, GLTANG_Value c
     GLTANG_HandleState * hs = exec->handles;
     const bool requested = hs && hs->request.made;
     const bool wants = continuing ? status == GLTANG_OP_PENDING : worked;
-    const bool asked = requested && wants && !call.scope_unwind && !call.scope_oom && call.set != GLTANG_CALL_ERROR;
+    const bool asked = requested && wants && !call.guest_refused && !call.scope_unwind && !call.scope_oom && call.set != GLTANG_CALL_ERROR;
     if (requested && !asked) {
       // A request followed by anything else is a failure, and runs nothing.
       hs->request.made = false;

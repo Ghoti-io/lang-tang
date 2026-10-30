@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -342,7 +342,6 @@
+@@ -350,7 +350,6 @@
      values[2u + i] = request->args[i];
    }
    request->made = false;
@@ -14,7 +14,7 @@
    bool held_request = true;
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -741,7 +741,6 @@
+@@ -745,7 +745,6 @@
      const uint32_t request_argc = request->argc;
      const uint32_t request_index = request->continuation;
      hs->request.made = false;

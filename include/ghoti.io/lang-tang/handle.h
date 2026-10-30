@@ -247,10 +247,12 @@ GLTANG_API GLTANG_Result gltang_call_poll(GLTANG_NativeCall * call, uint64_t wor
  * @param continuation An index into the continuation table of the type (or of
  *   the native's member).
  * @param state A handle of this call, or a null handle (all zero) for none.
- * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID, with the call's error set to
- *   `Host function failed`, when the callback may not ask, has asked already,
- *   `continuation` is outside the table, a handle is stale or another scope's,
- *   the callee is not a value a `CALL` accepts, or `argc` is too large.
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID when the callback may not ask, has
+ *   asked already, `continuation` is outside the table, a handle is stale or
+ *   another scope's, the callee is not a value a `CALL` accepts, or `argc` is
+ *   too large. A refusal fails the whole call with `Host
+ *   function failed`, and nothing the callback does after it (an answer, a
+ *   decline, any status) changes that; a request made before it does not run.
  */
 GLTANG_API GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call,
     GLTANG_Handle callee, const GLTANG_Handle * args, size_t argc,

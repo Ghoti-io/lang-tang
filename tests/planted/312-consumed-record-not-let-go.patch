@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -671,7 +671,7 @@
+@@ -679,7 +679,7 @@
      *early = MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
      return true;
    }

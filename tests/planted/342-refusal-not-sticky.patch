@@ -1,0 +1,14 @@
+# 342 an answer after a refused request clears the refusal
+# defect: gltang_call_guest sets Host function failed, and the integer the callback answers next is the call's value
+# caught by: the misuse tests (testCustom_reentry)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -882,7 +882,6 @@
+     // The refusal fails the call, and stays: an answer or a status the callback gives after it does not clear it
+     // (gltang_vm_call_settle, the brackets).
+     gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+-    call->guest_refused = true;
+     call->requested = true;
+     return GLTANG_ERR_INVALID;
+   }

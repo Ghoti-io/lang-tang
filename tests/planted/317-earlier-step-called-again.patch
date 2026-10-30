@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -658,7 +658,7 @@
+@@ -666,7 +666,7 @@
   */
  static bool __attribute__((noinline)) invoke_resume(GLTANG_Execution * exec, const OpCall * oc, uint32_t step, Stage * stage, bool * declined, GLTANG_Value * early) {
    const GLTANG_PendingObject * record = gltang_object(exec->pending_top);

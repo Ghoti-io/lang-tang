@@ -320,6 +320,14 @@ static GLTANG_Value invoke_nested(GLTANG_Execution * exec, const OpCall * oc, co
 static bool __attribute__((noinline)) bracket_request(GLTANG_Execution * exec, const OpCall * oc, GLTANG_NativeCall * call, GLTANG_OpStatus * status, const GLTANG_Value * held, const GLTANG_Value * args,
     uint32_t step, bool * declined, Stage * stage, GLTANG_Value * result) {
   GLTANG_HandleState * const hs = exec->handles;
+  if (call->guest_refused) {
+    // A request was refused (gltang_call_guest set the error): the call failed, whatever status it returned (a
+    // decline or a DONE included), and a request it made before that does not stand either.
+    hs->request.made = false;
+    gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+    *status = GLTANG_OP_ERROR;
+    return false;
+  }
   if (*status != GLTANG_OP_PENDING) {
     hs->request.made = false;
     gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);

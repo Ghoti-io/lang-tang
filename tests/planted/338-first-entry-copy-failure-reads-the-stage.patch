@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -416,7 +416,7 @@
+@@ -424,7 +424,7 @@
        if (oc->extra && oc->extra->errored) {
          *oc->extra->errored = true;
        }

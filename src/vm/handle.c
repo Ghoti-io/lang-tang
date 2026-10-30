@@ -879,7 +879,11 @@ GLTANG_Result gltang_call_guest(GLTANG_NativeCall * call, GLTANG_Handle callee, 
     }
   }
   if (!ok) {
+    // The refusal fails the call, and stays: an answer or a status the callback gives after it does not clear it
+    // (gltang_vm_call_settle, the brackets).
     gltang_call_return_error(call, GLTANG_ERROR_HOST_FAILED);
+    call->guest_refused = true;
+    call->requested = true;
     return GLTANG_ERR_INVALID;
   }
   request.made = true;

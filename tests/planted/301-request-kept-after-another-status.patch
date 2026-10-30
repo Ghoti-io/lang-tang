@@ -4,10 +4,10 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -320,7 +320,7 @@
- static bool __attribute__((noinline)) bracket_request(GLTANG_Execution * exec, const OpCall * oc, GLTANG_NativeCall * call, GLTANG_OpStatus * status, const GLTANG_Value * held, const GLTANG_Value * args,
-     uint32_t step, bool * declined, Stage * stage, GLTANG_Value * result) {
-   GLTANG_HandleState * const hs = exec->handles;
+@@ -328,7 +328,7 @@
+     *status = GLTANG_OP_ERROR;
+     return false;
+   }
 -  if (*status != GLTANG_OP_PENDING) {
 +  if (*status != GLTANG_OP_PENDING && false) {
      hs->request.made = false;

@@ -385,7 +385,8 @@ struct GLTANG_NativeCall {
   bool failed_to_copy;
   bool scope_oom;               ///< A handle or a value could not be made: the call's value is Out of memory.
   bool scope_unwind;            ///< A constructor's poll ordered the run to stop.
-  bool requested;               ///< gltang_call_guest accepted a request (the callback has to return PENDING or true).
+  bool requested;               ///< gltang_call_guest was called: it accepted a request (the callback has to return PENDING or true), or refused one (`guest_refused`).
+  bool guest_refused;           ///< gltang_call_guest refused a request: the call is `Host function failed` whatever the callback does after it (no later answer or status clears it).
   uint8_t owner_kind;           ///< 0: `owner` is a type or NULL; 2: it is a resumable native's member.
   uint8_t op;                   ///< With a type: the GLTANG_TypeOp.
   // Set by the call, not zeroed:

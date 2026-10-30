@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -343,6 +343,7 @@
+@@ -351,6 +351,7 @@
    }
    request->made = false;
    gltang_vm_call_abandon(call);
@@ -14,7 +14,7 @@
    bool held_request = true;
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -742,6 +742,7 @@
+@@ -746,6 +746,7 @@
      const uint32_t request_index = request->continuation;
      hs->request.made = false;
      gltang_vm_call_abandon(&call);

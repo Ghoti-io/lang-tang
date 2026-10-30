@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -535,7 +535,7 @@
+@@ -543,7 +543,7 @@
      settle = false;
    }
    else if (status != GLTANG_OP_OK && !call.scope_unwind && !call.scope_oom) {

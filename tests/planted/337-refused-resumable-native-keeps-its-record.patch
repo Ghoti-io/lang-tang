@@ -4,7 +4,7 @@
 #
 --- a/src/vm/libvalue.c
 +++ b/src/vm/libvalue.c
-@@ -868,9 +868,6 @@
+@@ -872,9 +872,6 @@
    const size_t held_count = 1u + argc + N_EXTRA;
    GLTANG_Value * held = gcu_calloc(held_count, sizeof(GLTANG_Value));
    if (!held) {
@@ -14,7 +14,7 @@
      return exec->roots[GLTANG_ROOT_OOM];
    }
    held[0] = callee;
-@@ -911,7 +908,7 @@
+@@ -915,7 +912,7 @@
    gltang_jit_return_depth(exec, lent);
  #endif
    gcu_free(held);

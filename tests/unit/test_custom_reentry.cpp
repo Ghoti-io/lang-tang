@@ -1697,8 +1697,12 @@ TEST(ReentryMisuse, EveryRefusalIsHostFunctionFailedOrAnInvalidResultAndNothingR
       continue;  // the helper of mode 4
     }
     g_stale = GLTANG_Handle{0, 0};
+    g_refused = 0;
     Types types;
-    Scenario sc = scenario("use t; function f() { print(\"RAN\"); return 1; } " + std::string(mode == 4 ? "u.misuse(9, f); " : "") + "r = u.misuse(" + std::to_string(mode) + ", f); print(\"|\"); r;\n");
+    uint64_t pending = 99;
+    // After the call, the handle scopes open (none: the refused call's is closed) are printed after the bar.
+    Scenario sc = scenario("use t; use scopes; function f() { print(\"RAN\"); return 1; } " + std::string(mode == 4 ? "u.misuse(9, f); " : "") + "r = u.misuse(" + std::to_string(mode) + ", f); print(\"|\"); print(scopes()); r;\n");
+    sc.after = [&](Context & c) { pending = gltang_vm_test_pending_depth(c.execution); };
     sc.before = [&](Context & c) {
       install(c, types);
       GLTANG_Library * lib = nullptr;
@@ -1710,7 +1714,7 @@ TEST(ReentryMisuse, EveryRefusalIsHostFunctionFailedOrAnInvalidResultAndNothingR
       gltang_library_release(lib);
     };
     if (mode == 8) {
-      sc.source = "use t; use u; function f() { print(\"RAN\"); return 1; } r = u.plain(f); r;\n";
+      sc.source = "use t; use u; use scopes; function f() { print(\"RAN\"); return 1; } r = u.plain(f); print(\"|\"); print(scopes()); r;\n";
     }
     sc.source = "use u; " + sc.source;
     Outcome o = run(sc, 0);
@@ -1718,7 +1722,7 @@ TEST(ReentryMisuse, EveryRefusalIsHostFunctionFailedOrAnInvalidResultAndNothingR
       case 1:
       case 2:
         // A request followed by a failure, and a second request, which the engine refuses and which fails the call: Host function failed, and the function never ran.
-        EXPECT_EQ(o.raw, "|") << "mode " << mode;
+        EXPECT_EQ(o.raw, "|0") << "mode " << mode;
         EXPECT_NE(o.result.find("Host function failed"), std::string::npos) << o.result;
         break;
       case 10:
@@ -1729,11 +1733,14 @@ TEST(ReentryMisuse, EveryRefusalIsHostFunctionFailedOrAnInvalidResultAndNothingR
         EXPECT_NE(o.raw.find("RAN"), std::string::npos) << "the control asks for a good call and gets it";
         break;
       default:
-        EXPECT_EQ(o.raw.find("RAN"), std::string::npos) << "mode " << mode << " ran the function";
-        EXPECT_EQ(o.result, std::to_string(mode)) << "mode " << mode;
+        // Refused, and the refusal stands: the integer the native answered after it is not the call's value.
+        EXPECT_EQ(o.raw, "|0") << "mode " << mode << " ran the function, or left a scope open";
+        EXPECT_EQ(g_refused, mode) << "mode " << mode << ": gltang_call_guest answered GLTANG_ERR_INVALID";
+        EXPECT_NE(o.result.find("Host function failed"), std::string::npos) << "mode " << mode << ": " << o.result;
         break;
     }
     EXPECT_EQ(o.native_depth, 0u) << "mode " << mode;
+    EXPECT_EQ(pending, 0u) << "mode " << mode;
   }
 }
 
@@ -1782,8 +1789,12 @@ TEST(ReentryMisuse, PendingWithNoRequestARequestThenOkAndARequestFromAnOpaqueCal
   holders[1] = {b};
   holders[2] = {c};
   for (int k = 0; k < 3; ++k) {
-    Scenario sc = scenario("use u; function f() { print(\"RAN\"); return 1; } x = u.mk(f); y = -x; print(\"|\"); y;\n");
+    g_refused = 0;
+    uint64_t pending = 99;
+    Scenario sc = scenario("use u; use scopes; function f() { print(\"RAN\"); return 1; } x = u.mk(f); y = -x; print(\"|\"); print(scopes()); y;\n");
+    sc.after = [&](Context & ctx) { pending = gltang_vm_test_pending_depth(ctx.execution); };
     sc.before = [&](Context & ctx) {
+      ctx.add_native_library();
       GLTANG_Library * lib = nullptr;
       EXPECT_EQ(gltang_library_create("u", &lib), GLTANG_OK);
       EXPECT_EQ(gltang_library_add_native(lib, "mk", [](GLTANG_NativeCall * call, void * user) {
@@ -1799,14 +1810,13 @@ TEST(ReentryMisuse, PendingWithNoRequestARequestThenOkAndARequestFromAnOpaqueCal
       EXPECT_EQ(gltang_execution_attach_types(ctx.execution, registry), GLTANG_OK);
     };
     Outcome o = run(sc, 0);
-    EXPECT_EQ(o.raw.find("RAN"), std::string::npos) << "case " << k << ": nothing runs";
-    if (k < 2) {
-      EXPECT_NE(o.result.find("Host function failed"), std::string::npos) << "case " << k << ": " << o.result;
-    }
-    else {
-      EXPECT_EQ(o.result, "11") << "an opaque callback's request is refused";
+    EXPECT_EQ(o.raw, "|0") << "case " << k << ": nothing runs, and no scope is left open";
+    EXPECT_NE(o.result.find("Host function failed"), std::string::npos) << "case " << k << ": " << o.result;
+    if (k == 2) {
+      EXPECT_EQ(g_refused, 11) << "an opaque callback's request is refused, and the answer it gave after does not stand";
     }
     EXPECT_EQ(o.native_depth, 0u);
+    EXPECT_EQ(pending, 0u) << "case " << k;
   }
   gltang_type_registry_release(registry);
 }
@@ -2080,9 +2090,11 @@ TEST(ReentryPause, ARunOfAFixtureWithAnOldDescriptorSizeWorksAndNothingIsResumab
   gltang_library_release(lib);
   ASSERT_EQ(gltang_execution_attach_types(context.execution, registry), GLTANG_OK);
   gltang_type_registry_release(registry);
+  g_refused = 0;
   ASSERT_TRUE(context.execute());
   EXPECT_EQ(context.raw(), "");
-  EXPECT_EQ(context.describe(), "11") << "the callback saw its request refused";
+  EXPECT_EQ(g_refused, 11) << "the callback saw its request refused";
+  EXPECT_NE(context.describe().find("Host function failed"), std::string::npos) << context.describe();
 }
 
 TEST(ReentryEngine, TheTestNativeThatSumsThreeCallsStillWorksOnThePublicProtocol) {
