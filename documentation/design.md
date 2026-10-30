@@ -1202,12 +1202,17 @@ operation) or `true` (a native) at once. A type lists the operations that may as
 `gltang_handle_make_resumable_native`, which is how an attribute of a built-in kind answers a *bound resumable
 native* when it wants a guest call: the attribute function itself is never resumable). The refusals are in
 the header: not resumable, a second request, a bad index, a stale handle, a callee that no `CALL`
-accepts, too many arguments; each returns `GLTANG_ERR_INVALID` and sets `Host function failed`, and a
-`PENDING` with no request, or a request followed by another status, is `Host function failed` too and
-runs nothing. The values are read out of the handles at the request into one `GLTANG_GuestRequest`
-(in the handle state, so the execution struct did not grow), and out of there into the execution's
-temporaries (which the collector updates) while the pending record is made, so a collection there
-cannot lose or move them; a native's frame, which is a heap block its record covers, holds them for it.
+accepts, too many arguments; each returns `GLTANG_ERR_INVALID` and fails the whole call with `Host function failed`, and the failure
+stays: the call object's `guest_refused` is read where the call's value is made (`call_result`, the
+bracket's cold half), so an answer, a decline or any status the callback gives after the refusal does
+not clear it, and a request made before it does not run. A `PENDING` with no request, or a request
+followed by another status, is `Host function failed` too and runs nothing. The values are read out of
+the handles at the request into one `GLTANG_GuestRequest` (in the handle state, so the execution struct
+did not grow), which is a root from then until the callback returns (`gltang_vm_handles_enumerate`
+reports it while `made`): a callback should touch nothing but its return, and one that pops the handle
+frame its values were in, or allocates, still has its request kept and updated by the collector. From
+there they go into the execution's temporaries while the pending record is made; a native's frame,
+which is a heap block its record covers, holds them for it.
 
 **What a suspension holds.** The bracket (the activation record, the unit of native depth, the
 handle scope, `in_host`) closes at the return of `PENDING`. What stays is one heap object, the
@@ -1215,14 +1220,21 @@ handle scope, `in_host`) closes at the return of `PENDING`. What stays is one he
 strong and traced; stores through the barrier): the owner (the type, or the native's member), the
 operation, the dispatch step, the continuation index, the state, a slot for the callee's value, the
 requested callee and arguments, and, for a record in the middle of a chain, the operands of the call
-it continues. The records form a chain held by the execution (`pending_top`, a root), and the frame
+it continues. Each record names two frames by offset: `frame`, the frame of the instruction it
+continues (the top frame when it is made, for a chained record too: its call is made from that
+instruction's frame), and `callee_frame`, the frame its callee runs in (0 while it has none: a native's
+or an instance's call has no frame of its own, and 0 is never a callee's, whose frame is above
+`frame`). The records form a chain held by the execution (`pending_top`, a root), and the frame
 of the callee is named by one word (`deliver_frame`, a frame offset), which is what the interpreter's
 `RET`, a template's `HALT` and a compiled function's return test: `frame.offset == deliver_frame`,
 a load and a compare, and a return that is not a callee's pays nothing else. Nothing of the callback
 is on the C stack, so a pause (the callee's polls), a resume on any thread, the collector's moves
 and an unwind need nothing of it: an unwind drops the chain (`gltang_vm_pending_drop_to`), so no
-continuation runs and nothing is left; a nested run (AD-23) drops what it opened; a template
-callee whose own budget scope stops is the callee's limit error and is delivered as its value. The
+continuation runs and nothing is left; a nested run (AD-23) drops what it opened; a template's own
+budget scope that stops lets go of every record whose instruction's frame (`frame`) went with the
+template's frames, whatever its callee was (a native in the middle of a chain has no frame, so the
+callee's frame cannot say it), and the record whose callee is the template itself takes the limit
+error as its callee's value. The
 operands of the instruction stay on the caller's operand stack, as roots, for the whole call.
 Core keeps no activation record while the callee runs (the existing resumable native kept none
 either; `grcore_boundary_*` is the cross-engine record of a later story): the `depth`, `records`
@@ -1245,6 +1257,21 @@ record belongs to a chained call, that call is run again instead and its value g
 below. Running the instruction again is what makes the stack effect of every instruction (the drop
 count, the push, the jump target of `ITER_NEXT`, a setter's value) the instruction's own and not a
 second copy of it.
+
+**A replay that answers before its step.** The operation run again can answer by a rule of its own
+before it reaches the record's step, when the callee changed what the rule reads: an instance the
+callee marked as an error is `false` to `as bool` (`ops.c`) and is the value of `+` (`custom.c`)
+without its type being asked; a resumable native run again can be refused before it takes its record
+(the copy of its arguments, its activation record: `call_resumable_native`); the heap copy of more than
+seventeen operands can be refused before a continuation's bracket opens; an `ATTR` whose name constant
+cannot be made unwinds. The record then holds a value no continuation will take, and its delivery mark
+would make the next return from a frame at the same place deliver to it. It is let go in one place,
+not at each early answer: every site that suspends ends with `SUSPEND_END` (`interp.c`), which lets go
+of the innermost record if its value was delivered (`resume_active`) and no continuation took it
+(`gltang_vm_pending_unconsumed`); `pending_step` does the same after a chained call run again, and
+`call_resumable_native` after its own refusals. A new record ends any delivery too, so a continuation
+that asks again never leaves its own record under the new one. An unwind drops the chain whole, as
+above.
 
 **Dispatch steps.** An operation's callbacks have fixed places in it, and *replay* is how a record
 continues from its own: the operation runs again from the start, a callback whose step is before
@@ -1279,7 +1306,7 @@ does with a request:
 | Caller | Reached from | A request |
 | --- | --- | --- |
 | `reflect` through `gltang_vm_custom_binary` | the binary and comparison instructions with a custom operand (interpreter) | suspends |
-| the same | the helpers compiled code calls (`natives.c`), after a guard that exits for a custom operand | nested (not reached: the exit comes first) |
+| the same, and the cast, print and attribute operations | the helpers compiled code calls (`natives.c`), after a guard that exits for a custom operand (`guard_not_custom`, `guard_neither_custom`: `+`, `INDEX`, `SLICE`, `ATTR`, and since the review of story 9 a cast to bool or string and `PRINT`, which before it called the interpreter's cast and print with the instance, so a request there ran nested where the interpreter suspends) | nested (not reached: the exit comes first) |
 | `gltang_vm_custom_element_equal` | `==` on arrays and maps, per element (`container.c`) | nested |
 | `unary_like`: negate, attribute get and set, index get and set, slice | `NEG`, `ATTR`, `SET_ATTR`, `INDEX`, `SET_INDEX`, `SLICE` | suspends |
 | `unary_like`: attribute get | `use a.b` (`gltang_vm_resolve`, `libvalue.c`) | nested |
@@ -1287,7 +1314,8 @@ does with a request:
 | `gltang_vm_custom_call` | `CALL` of an instance; and the call a pending record waits for | suspends; chains |
 | `gltang_vm_custom_cast` | `CAST` | suspends |
 | `gltang_vm_custom_text` | `PRINT` and `CAST` to string of an instance | suspends |
-| `gltang_vm_custom_text` | `gltang_vm_render` of an element inside a container, the text of a container in a concatenation or a cast, a host reading the result | nested |
+| `gltang_vm_custom_text` | `gltang_vm_render` of an element inside a container, the text of a container in a concatenation or a cast | nested |
+| (none) | the debugger's inspector (`descriptor_inspect`) and a host describing the result (`gltang_execution_result_describe`) render into a buffer sink, which never runs a type's callback (`Custom: name`), from inside a callback too | not reached |
 | `gltang_vm_custom_truth` | `JMP_*`, `AND`, `OR`, `NOT`, `as bool` | never resumable |
 | `gltang_vm_host_attribute` | an attribute a host added to a built-in kind | never resumable |
 
@@ -1300,11 +1328,18 @@ suspend), the resumable entry of `gltang_vm_call_native` sets it for a resumable
 activation (`gltang_vm_call_guest`): a Tang function callee only (anything else, and any callee while the
 program is not running, is `Host function failed`), a pause inside is an unwind that stops at the record, and
 a statistic (`nested_requests`) counts them. The corpus test asserts it is zero at every instruction site
-(ledger row D-057 records the departure).
+(ledger row D-057 records the departure). The statistic is read through a test hook
+(`gltang_vm_test_request_counts`, `src/vm/test_hooks.h`) and is not part of the public API: the handle
+state has no public statistics to put it beside, and making one is a decision about that API, not this
+protocol's.
 
-**Compiled code and the JIT.** Unchanged. A call of a resumable member and every operation with a custom
-operand already leave compiled code (`guard_not_custom`, the resumable flag at the member); the interpreter is
-the only tier that services a request, and a request that arrives from a compiled helper runs nested. The
+**Compiled code and the JIT.** A call of a resumable member and every operation with a custom operand leave
+compiled code (`guard_not_custom`, the resumable flag at the member); the interpreter is the only tier that
+services a request, and a request that arrives from a compiled helper runs nested. The review of story 9
+found two helpers with no guard, a cast (to bool, to string, and to int of what is not a number) and
+`PRINT`, which called the interpreter's cast and print with the instance: a request there ran nested, so a template callee was refused, a pause in
+the callee was an unwind, and nothing ran the cast again to see what the callee changed. Both now leave
+first, as the others do (the exit is a counted one, as theirs are). The
 differential of the fixtures (JIT on against off) gives identical answers, output and errors, and no
 `JIT=yes` statistic gains an exit kind.
 
