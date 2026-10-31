@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -804,7 +804,7 @@
+@@ -813,7 +813,7 @@
    if (cell) {
      // Null empties it: "never set" again, not "cleared".
      (void)grheap_store_word(exec->heap, cell, &cell->target, v);

@@ -1891,7 +1891,9 @@ static uint64_t collector_weak_run(uint64_t iterations, double * elapsed) {
   return collector_case("use c; n = c.node(0); x = c.node(1); k = 0; for (i = 0; i < 1000; i += 1) { c.wset(n, x); if (c.wget(n) != null) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
 }
 
-#define VALUE_STORE_SOURCE "use c; function f(m) { a = [0]; k = 0; for (i = 0; i < 1000; i += 1) { a[0] = m; k += 1; } return k; } f(c.point(1));"
+/* A literal, so that the store is ADOPT and the literal's fill, which compiled code does itself (compiled code has no
+ * indexed store, so a loop of `a[0] = m` would be the interpreter's in both rows). */
+#define VALUE_STORE_SOURCE "use c; function f(m) { k = 0; for (i = 0; i < 1000; i += 1) { a = [m]; k += 1; } return k; } f(c.point(1));"
 
 static uint64_t collector_value_store_run(uint64_t iterations, double * elapsed) {
   return collector_case(VALUE_STORE_SOURCE, 1000, setup_collector, iterations, elapsed);

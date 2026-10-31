@@ -92,7 +92,6 @@ static bool frame_push(GLTANG_Execution * exec) {
   f->serial = ++hs->scope_serial;
   f->base = exec->temp_count;
   f->count = 0;
-  f->pin_base = hs->pin_count;
   return true;
 }
 
@@ -111,18 +110,28 @@ static bool scope_ensure(GLTANG_NativeCall * call) {
   return true;
 }
 
+/**
+ * Lets go of the instances gltang_handle_custom_bytes pinned for the callback whose scope is `scope`: the pointers it
+ * handed out end here. A callback's pins are the top of the list while it runs (a nested callback's are above them and
+ * gone by the time it returns), so they are popped while they carry its serial. Out of line: almost no scope has one.
+ */
+static void __attribute__((noinline)) unpin_scope(GLTANG_Execution * exec, GLTANG_HandleState * hs, uint32_t scope) {
+  while (hs->pin_count && hs->pins[hs->pin_count - 1u].scope == scope) {
+    --hs->pin_count;
+    (void)grheap_unpin(exec->heap, hs->pins[hs->pin_count].object);
+  }
+}
+
 void gltang_vm_scope_close(GLTANG_NativeCall * call) {
   if (!call->scope) {
     return;
   }
   GLTANG_Execution * exec = call->exec;
   GLTANG_HandleState * hs = exec->handles;
+  if (__builtin_expect(hs->pin_count != 0, 0)) {
+    unpin_scope(exec, hs, call->scope);
+  }
   if (hs->frame_count > call->frame_floor) {
-    // The instances gltang_handle_custom_bytes pinned for this callback: the pointers it handed out end here.
-    const size_t pin_base = hs->frames[call->frame_floor].pin_base;
-    while (hs->pin_count > pin_base) {
-      (void)grheap_unpin(exec->heap, hs->pins[--hs->pin_count]);
-    }
     gltang_vm_temp_release(exec, hs->frames[call->frame_floor].base);
     hs->frame_count = call->frame_floor;
   }
@@ -912,15 +921,14 @@ GLTANG_Result gltang_handle_custom_bytes(GLTANG_NativeCall * call, GLTANG_Handle
     // pinned already, by the bracket's segment, and costs nothing here.
     GLTANG_Execution * exec = call->exec;
     GLTANG_HandleState * hs = exec->handles;
-    const size_t pin_base = hs->frames[call->frame_floor].pin_base;
     bool pinned = false;
-    for (size_t i = pin_base; i < hs->pin_count && !pinned; ++i) {
-      pinned = hs->pins[i] == (void *)custom;
+    for (size_t i = hs->pin_count; i > 0 && hs->pins[i - 1u].scope == call->scope && !pinned; --i) {
+      pinned = hs->pins[i - 1u].object == (void *)custom;
     }
     if (!pinned) {
       if (hs->pin_count == hs->pin_capacity) {
         size_t grown = hs->pin_capacity ? hs->pin_capacity * 2u : 8u;
-        void ** bigger = gcu_allocator_realloc(exec->allocator, hs->pins, grown * sizeof(*bigger));
+        GLTANG_Pin * bigger = gcu_allocator_realloc(exec->allocator, hs->pins, grown * sizeof(*bigger));
         if (!bigger) {
           return GLTANG_ERR_LIMIT;
         }
@@ -930,7 +938,9 @@ GLTANG_Result gltang_handle_custom_bytes(GLTANG_NativeCall * call, GLTANG_Handle
       if (grheap_pin(exec->heap, custom) != GRHEAP_OK) {
         return GLTANG_ERR_LIMIT;   // the object's pin count is full, or the pin table's memory was refused
       }
-      hs->pins[hs->pin_count++] = custom;
+      hs->pins[hs->pin_count].object = custom;
+      hs->pins[hs->pin_count].scope = call->scope;
+      ++hs->pin_count;
     }
   }
   *out_bytes = gltang_custom_bytes(custom);

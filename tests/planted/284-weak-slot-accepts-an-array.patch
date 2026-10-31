@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -780,6 +780,7 @@
+@@ -789,6 +789,7 @@
    }
    switch ((GLTANG_ObjectKind)gltang_object_kind(v)) {
      case GLTANG_OBJ_STRING:

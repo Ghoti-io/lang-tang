@@ -842,7 +842,7 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs the hundred and eighty-six that need neither a relocation heap nor ThreadSanitizer (the relocation cases, 13, 14, 15, 20, 27, 46, 117, 168, 285, 286 and 360, need a relocation heap and run in the relocation arm).
+# part of `make test-torture`; `make check-planted` runs every one that needs neither a relocation heap nor ThreadSanitizer (the relocation cases, 13, 14, 15, 20, 27, 46, 117, 168, 285, 286 and 360, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -803,7 +803,7 @@
+@@ -812,7 +812,7 @@
    GLTANG_WeakCell * cell = weak_cell(holder, index);
    if (cell) {
      // Null empties it: "never set" again, not "cleared".

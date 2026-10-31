@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -796,6 +796,7 @@
+@@ -805,6 +805,7 @@
  static GLTANG_Result weak_slot_set(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Value v) {
    GLTANG_Execution * exec = call->exec;
    if (!weak_storable(v)) {

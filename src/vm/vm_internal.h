@@ -384,7 +384,6 @@ typedef struct GLTANG_HostScope {
   uint32_t serial;              ///< 0: none open. Never reused within an execution.
   size_t base;                  ///< GLTANG_Execution::temp_count when it opened.
   size_t count;                 ///< Handles made in it.
-  size_t pin_base;              ///< GLTANG_HandleState::pin_count when it opened: a callback's pins (its first frame's) are let go when its scope closes.
 } GLTANG_HostScope;
 
 /** @brief What a host function is given; see library.h. */
@@ -534,6 +533,12 @@ typedef struct GLTANG_GuestRequest {
   GLTANG_Value args[GLTANG_GUEST_CALL_ARGS_MAX];
 } GLTANG_GuestRequest;
 
+/** @brief An instance gltang_handle_custom_bytes pinned, and the serial of the callback's scope it is pinned for (handle.c). */
+typedef struct GLTANG_Pin {
+  void * object;
+  uint32_t scope;
+} GLTANG_Pin;
+
 /** @brief A weak cell the execution made: its stable ID (held weakly by the heap, so it is forgotten when the cell dies) and the type of the instance it was made for. */
 typedef struct GLTANG_WeakRecord {
   uint64_t id;
@@ -570,7 +575,7 @@ typedef struct GLTANG_HandleState {
   GLTANG_GuestRequest request;            ///< The request the callback running has made, read at once when it returns (custom.c, libvalue.c).
   uint64_t nested_requests;               ///< Requests run as a nested activation (a site inside a C loop); zero at every instruction site.
   uint64_t suspensions;                   ///< Requests that suspended: a pending record was made.
-  void ** pins;                           ///< Instances gltang_handle_custom_bytes pinned (grheap_pin), innermost callback's last; unpinned when the scope that pinned closes.
+  GLTANG_Pin * pins;                      ///< Instances gltang_handle_custom_bytes pinned (grheap_pin), innermost callback's last; unpinned when the scope that pinned closes.
   size_t pin_count;
   size_t pin_capacity;
   GLTANG_WeakRecord * weak_cells;         ///< Every weak cell made, by stable ID, with its instance's type: what a snapshot refused by a cell names (snapshot.c). Dead ones are dropped when it fills.

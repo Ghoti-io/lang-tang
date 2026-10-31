@@ -4,12 +4,12 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -914,7 +914,7 @@
+@@ -922,7 +922,7 @@
+     GLTANG_Execution * exec = call->exec;
      GLTANG_HandleState * hs = exec->handles;
-     const size_t pin_base = hs->frames[call->frame_floor].pin_base;
      bool pinned = false;
--    for (size_t i = pin_base; i < hs->pin_count && !pinned; ++i) {
-+    for (size_t i = pin_base; i < pin_base && !pinned; ++i) { /* planted */
-       pinned = hs->pins[i] == (void *)custom;
+-    for (size_t i = hs->pin_count; i > 0 && hs->pins[i - 1u].scope == call->scope && !pinned; --i) {
++    for (size_t i = 0; i > 0 && !pinned; --i) { /* planted */
+       pinned = hs->pins[i - 1u].object == (void *)custom;
      }
      if (!pinned) {

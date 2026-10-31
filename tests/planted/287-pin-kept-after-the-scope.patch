@@ -4,12 +4,14 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -121,7 +121,7 @@
-     // The instances gltang_handle_custom_bytes pinned for this callback: the pointers it handed out end here.
-     const size_t pin_base = hs->frames[call->frame_floor].pin_base;
-     while (hs->pin_count > pin_base) {
--      (void)grheap_unpin(exec->heap, hs->pins[--hs->pin_count]);
-+      --hs->pin_count; /* planted */
-     }
+@@ -128,9 +128,7 @@
+   }
+   GLTANG_Execution * exec = call->exec;
+   GLTANG_HandleState * hs = exec->handles;
+-  if (__builtin_expect(hs->pin_count != 0, 0)) {
+-    unpin_scope(exec, hs, call->scope);
+-  }
++  /* planted: the pins are not let go */
+   if (hs->frame_count > call->frame_floor) {
      gltang_vm_temp_release(exec, hs->frames[call->frame_floor].base);
      hs->frame_count = call->frame_floor;

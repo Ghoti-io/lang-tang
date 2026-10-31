@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -1242,10 +1242,7 @@
+@@ -1252,10 +1252,7 @@
      gltang_library_release(hs->held_libraries[i]);
    }
    gcu_allocator_free(exec->allocator, hs->held_libraries);
