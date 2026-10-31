@@ -1688,6 +1688,229 @@ static uint64_t reentry_chain_run(uint64_t iterations, double * elapsed) {
 }
 #endif /* GLTANG_BENCH_NO_GUEST_CALLS */
 
+#ifndef GLTANG_BENCH_NO_COLLECTOR_MODEL
+/*
+ * The cases of the collector model for host types (spec-tang-host-extensibility story 7): making and dropping an
+ * instance of a type with a finalizer (against custom-make-1000, the same loop with none), a weak slot set and read,
+ * a value-type instance stored into an array (interpreted, and compiled at a threshold of one), twenty collections
+ * of a heap holding 1,000 instances with a weak slot set (against the same instances with none), and an ID asked
+ * for and looked up. A build without the story leaves them out (GLTANG_BENCH_NO_COLLECTOR_MODEL).
+ */
+static const GLTANG_Type * bench_res;
+static const GLTANG_Type * bench_node;
+static const GLTANG_Type * bench_point;
+static uint64_t bench_finalized;
+
+static void bench_finalize(void * user, void * bytes, size_t byte_count) {
+  (void)user;
+  (void)bytes;
+  (void)byte_count;
+  ++bench_finalized;
+}
+
+static bool bench_make(GLTANG_NativeCall * call, const GLTANG_Type * type) {
+  GLTANG_Handle h;
+  int64_t tag = gltang_call_integer(call, 0);
+  if (gltang_handle_make_custom(call, type, &h) != GLTANG_OK || gltang_handle_custom_write_bytes(call, h, 0, &tag, sizeof tag) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
+static bool bench_make_res(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  return bench_make(call, bench_res);
+}
+
+static bool bench_make_node(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  return bench_make(call, bench_node);
+}
+
+static bool bench_make_point(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  return bench_make(call, bench_point);
+}
+
+static bool bench_tag(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle h;
+  if (gltang_call_arg(call, 0, &h) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_integer(call, bench_amount(call, h));
+  return true;
+}
+
+/* wset(n, x): x into n's weak slot 0. wget(n): what it holds. */
+static bool bench_wset(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle n, x;
+  if (gltang_call_arg(call, 0, &n) != GLTANG_OK || gltang_call_arg(call, 1, &x) != GLTANG_OK || gltang_handle_custom_slot_set(call, n, 0, x) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_null(call);
+  return true;
+}
+
+static bool bench_wget(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle n, out;
+  if (gltang_call_arg(call, 0, &n) != GLTANG_OK || gltang_handle_custom_slot_get(call, n, 0, &out) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, out);
+  return true;
+}
+
+/* nodes(k, weak): an array of k nodes, each with its weak slot 0 set to one shared target when `weak` is true. */
+static bool bench_nodes(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle array, target;
+  const int64_t k = gltang_call_integer(call, 0);
+  GLTANG_Handle weak;
+  if (gltang_call_arg(call, 1, &weak) != GLTANG_OK || gltang_handle_make_array(call, 0, &array) != GLTANG_OK || gltang_handle_make_custom(call, bench_node, &target) != GLTANG_OK) {
+    return false;
+  }
+  for (int64_t i = 0; i < k; ++i) {
+    GLTANG_Handle n;
+    if (gltang_handle_push_frame(call) != GLTANG_OK || gltang_handle_make_custom(call, bench_node, &n) != GLTANG_OK) {
+      return false;
+    }
+    if (gltang_handle_bool(call, weak) && gltang_handle_custom_slot_set(call, n, 0, target) != GLTANG_OK) {
+      return false;
+    }
+    if (gltang_handle_array_push(call, array, n) != GLTANG_OK || gltang_handle_pop_frame(call) != GLTANG_OK) {
+      return false;
+    }
+  }
+  gltang_call_return_handle(call, array);
+  return true;
+}
+
+static bool bench_collect(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  if (grheap_collect(grheap_heap_get(setup_context)) != GRHEAP_OK) {
+    return false;
+  }
+  gltang_call_return_null(call);
+  return true;
+}
+
+/* idround(x): x's ID, and the instance it names again; true when that is x. */
+static bool bench_idround(GLTANG_NativeCall * call, void * user) {
+  (void)user;
+  GLTANG_Handle x, back;
+  uint64_t id = 0;
+  if (gltang_call_arg(call, 0, &x) != GLTANG_OK || gltang_handle_custom_id(call, x, &id) != GLTANG_OK || gltang_handle_custom_from_id(call, id, &back) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_bool(call, gltang_vm_test_handle_object(call, back) == gltang_vm_test_handle_object(call, x));
+  return true;
+}
+
+static GLTANG_TypeRegistry * bench_collector_types(void) {
+  static GLTANG_TypeRegistry * registry;
+  static const uint32_t weak[] = {0};
+  if (!registry) {
+    GLTANG_TypeDescriptor r = GLTANG_TYPE_DESCRIPTOR_INIT;
+    r.name = "res";
+    r.byte_count = sizeof(int64_t);
+    r.thread_safe = true;
+    r.finalizer = bench_finalize;
+    GLTANG_TypeDescriptor n = GLTANG_TYPE_DESCRIPTOR_INIT;
+    n.name = "node";
+    n.slot_count = 1;
+    n.byte_count = sizeof(int64_t);
+    n.thread_safe = true;
+    n.weak_slots = weak;
+    n.weak_slot_count = 1;
+    GLTANG_TypeDescriptor v = GLTANG_TYPE_DESCRIPTOR_INIT;
+    v.name = "point";
+    v.slot_count = 1;
+    v.byte_count = sizeof(int64_t);
+    v.thread_safe = true;
+    v.copy_semantics = GLTANG_COPY_VALUE;
+    if (gltang_type_registry_create(&registry) != GLTANG_OK || gltang_type_registry_add(registry, &r, &bench_res) != GLTANG_OK
+        || gltang_type_registry_add(registry, &n, &bench_node) != GLTANG_OK || gltang_type_registry_add(registry, &v, &bench_point) != GLTANG_OK) {
+      setup_failed("the collector model's types");
+    }
+  }
+  return registry;
+}
+
+static void setup_collector(GLTANG_Execution * execution) {
+  GLTANG_Library * library = NULL;
+  if (gltang_library_create("c", &library) != GLTANG_OK
+      || gltang_library_add_native(library, "res", bench_make_res, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "node", bench_make_node, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "point", bench_make_point, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "tag", bench_tag, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "wset", bench_wset, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "wget", bench_wget, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "nodes", bench_nodes, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "collect", bench_collect, NULL) != GLTANG_OK
+      || gltang_library_add_native(library, "idround", bench_idround, NULL) != GLTANG_OK) {
+    setup_failed("the collector model's library");
+  }
+  GLTANG_Library * root = NULL;
+  if (gltang_library_create(NULL, &root) != GLTANG_OK || gltang_library_add_library(root, library) != GLTANG_OK
+      || gltang_execution_set_libraries(execution, root) != GLTANG_OK || gltang_execution_attach_types(execution, bench_collector_types()) != GLTANG_OK) {
+    setup_failed("the collector model's library");
+  }
+  gltang_library_release(library);
+  gltang_library_release(root);
+}
+
+static uint64_t collector_case(const char * source, int64_t expected, Setup setup, uint64_t iterations, double * elapsed) {
+  have_expected_integer = 1;
+  expected_integer = expected;
+  uint64_t sink = run_source_with(source, iterations, elapsed, GLTANG_KIND_INTEGER, 0, setup);
+  have_expected_integer = 0;
+  return sink;
+}
+
+static uint64_t collector_make_final_run(uint64_t iterations, double * elapsed) {
+  return collector_case("use c; m = null; for (i = 0; i < 1000; i += 1) { m = c.res(i); } c.tag(m);", 999, setup_collector, iterations, elapsed);
+}
+
+static uint64_t collector_weak_run(uint64_t iterations, double * elapsed) {
+  return collector_case("use c; n = c.node(0); x = c.node(1); k = 0; for (i = 0; i < 1000; i += 1) { c.wset(n, x); if (c.wget(n) != null) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
+}
+
+#define VALUE_STORE_SOURCE "use c; function f(m) { a = [0]; k = 0; for (i = 0; i < 1000; i += 1) { a[0] = m; k += 1; } return k; } f(c.point(1));"
+
+static uint64_t collector_value_store_run(uint64_t iterations, double * elapsed) {
+  return collector_case(VALUE_STORE_SOURCE, 1000, setup_collector, iterations, elapsed);
+}
+
+#ifdef GLTANG_WITH_JIT
+static void setup_collector_jit_on(GLTANG_Execution * execution) {
+  setup_collector(execution);
+  if (gltang_execution_set_jit_threshold(execution, 1) != GLTANG_OK) {
+    setup_failed("the JIT threshold");
+  }
+}
+
+static uint64_t collector_value_store_compiled_run(uint64_t iterations, double * elapsed) {
+  return collector_case(VALUE_STORE_SOURCE, 1000, setup_collector_jit_on, iterations, elapsed);
+}
+#endif
+
+static uint64_t collector_collect_weak_run(uint64_t iterations, double * elapsed) {
+  return collector_case("use c; keep = c.nodes(1000, true); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1000, setup_collector, iterations, elapsed);
+}
+
+static uint64_t collector_collect_plain_run(uint64_t iterations, double * elapsed) {
+  return collector_case("use c; keep = c.nodes(1000, false); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1000, setup_collector, iterations, elapsed);
+}
+
+static uint64_t collector_id_run(uint64_t iterations, double * elapsed) {
+  return collector_case("use c; x = c.node(0); k = 0; for (i = 0; i < 1000; i += 1) { if (c.idround(x)) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
+}
+#endif /* GLTANG_BENCH_NO_COLLECTOR_MODEL */
+
 static uint64_t swallowed_errors_run(uint64_t iterations, double * elapsed) {
   /* 2,000 swallowed errors against the default cap of 1,024: the list is full
    * for the last 976, which are counted and not kept. */
@@ -2901,6 +3124,17 @@ static const Case cases[] = {
     {"reentry-callable-template-200", reentry_callable_template_run, 2000u, 5u},
     {"reentry-pause-resume-1000", reentry_pause_resume_run, 1000u, 2u},
     {"reentry-chain-depth-200", reentry_chain_run, 2000u, 5u},
+#endif
+#ifndef GLTANG_BENCH_NO_COLLECTOR_MODEL
+    {"collector-make-final-1000", collector_make_final_run, 2000u, 5u},
+    {"collector-weak-set-get-1000", collector_weak_run, 2000u, 5u},
+    {"collector-value-store-1000", collector_value_store_run, 2000u, 5u},
+#ifdef GLTANG_WITH_JIT
+    {"collector-value-store-1000-compiled", collector_value_store_compiled_run, 2000u, 5u},
+#endif
+    {"collector-collect-20-of-1000-weak-cells", collector_collect_weak_run, 200u, 5u},
+    {"collector-collect-20-of-1000-no-cells", collector_collect_plain_run, 200u, 5u},
+    {"collector-id-round-trip-1000", collector_id_run, 2000u, 5u},
 #endif
     {"run-swallowed-errors-2000-at-cap", swallowed_errors_run, 500u, 2u},
     {"run-random-global-1000", random_global_run, 5000u, 5u},
