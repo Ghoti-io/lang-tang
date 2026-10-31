@@ -984,8 +984,9 @@ calls this kind added (`gltang_execution_attach_types`,
 `gltang_snapshot_refused_type`) so that none of it is in the `free`
 `execution.h`, and the custom-value calls of `handle.h`.
 
-**One kind, one heap type.** An instance is one object of the engine's heap type
-`lang-tang custom`: its kind, the number of slots, a pointer to its type, the
+**One kind, two heap types.** An instance is one object of the engine's heap type
+`lang-tang custom` (or of its twin `lang-tang custom final`, for a type with a
+finalizer: the collector model, below): its kind, the number of slots, a pointer to its type, the
 slots, then the raw bytes, zero-filled when it is made. The trace reads the slot
 count from the object's own header, not from the type, so the collector never
 follows a host pointer to trace an object (and an execution destroyed while its
@@ -993,8 +994,9 @@ heap still holds instances leaves nothing the trace needs). No module writes a
 trace function (AD-11). Every slot store is `grheap_store_word` (the handle API's
 `gltang_handle_custom_slot_set`, which copies a container first, as every store of
 one does); raw bytes are copied in and out by offset and length and are never
-traced. An instance is passed by reference, as a function is: `deep_copy` returns
-it as it is, so `[m, m]` holds one object twice.
+traced. An instance of a reference type (the default) is passed by reference, as a
+function is: `deep_copy` returns it as it is, so `[m, m]` holds one object twice. An
+instance of a value type is copied where a container is (the collector model, below).
 
 **The descriptor and the registry.** `GLTANG_TypeDescriptor` is size-prefixed: a
 registry reads the members its own header knows, as far as the host's `size`
@@ -1093,8 +1095,8 @@ image and records the type, and `gltang_snapshot_take` answers
 `GLTANG_ERR_UNSUPPORTED` with `gltang_snapshot_refused_type` naming it. Compiled
 code exits to the interpreter on a custom operand of an operator, a truth test, an
 index, a slice or an attribute, as on any operand that fails its guard (the
-dispatch compiled is a later story's). Finalizers, weak slots, pins and in-place
-byte access are a later story's; module identity is later still.
+dispatch compiled is a later story's). Weak slots, the bytes in place, finalizers,
+value semantics and identity by stable ID are the collector model's (below).
 
 **The remaining operations** (iteration, calls, casts, truthiness, print and
 to-string, an instance that stands for an error, attributes on built-in kinds).
@@ -1356,6 +1358,118 @@ call object, which was cleared whole on every native call and every operation, n
 sixty-four bytes (the fields that are read whether or not they were set; the rest is set before it is read),
 which is cheaper than the machinery added and is what keeps these paths level. A new field of the call
 object that is read without being set must go in that part (a static assertion bounds its size).
+
+### The collector model for host types
+
+What a host-defined type may keep beside its strong slots and raw bytes, and how the collector sees each
+(ledger D-043, D-044). The public surface is the end of `GLTANG_TypeDescriptor` (`copy_semantics`, `copy`,
+`finalizer`, `weak_slots`, `weak_slot_count`, in that order, so a descriptor sized before them is a reference
+type with strong slots and no finalizer) and five calls of `handle.h` (`gltang_handle_custom_slot_cleared`,
+`_bytes`, `_id`, `_identity_hash`, `_from_id`). A descriptor that declares none of them registers, allocates,
+traces, sweeps and hashes exactly as before; each one it declares enters the table hash.
+
+**Weak slots are cells.** runtime-heap's weak mechanism is one weak cell per heap type, at a fixed payload offset,
+and every instance shares one heap type with a per-type slot count, so a weak slot cannot be a slot of the
+instance. It holds a strong reference to a separate object of the heap type `lang-tang weak cell` (kind
+`GLTANG_OBJ_WEAK`, never a language value: `gltang_vm_kind` answers null for it), whose one word is the type's
+weak cell, `encoded` (an immediate is left alone and never cleared) and with no `cleared` callback. The instance's
+trace is unchanged: it reports the slot, which keeps the cell alive, and never the cell's target; the collector
+clears the target after marking and before the sweep, and a pinned or conservatively found target stays. The
+cell is made at the first non-null store (a GC point: the value is held across the allocation, and the instance
+is read again from its handle after it), written through `grheap_store_word`, and carries a `had_target` flag, so
+`gltang_handle_custom_slot_cleared` answers true only for a cell that had a heap object and lost it (never set,
+emptied with null, or holding an immediate is not cleared). The same `slot_get` and `slot_set` read and write
+both kinds of slot. A weak slot takes null, a boolean, a function, and the values stored by reference (a string,
+a library, a native or template, a generator, an instance of a reference type); a number, an array, a map, an
+error and an instance of a value type are refused with `GLTANG_ERR_INVALID` and nothing changed, because each is
+copied (or boxed by accident of size) when it is stored, so what the slot held would be a value nothing else
+holds. No host code runs when a cell clears: `cleared` is called with the heap busy and may not allocate, so the
+host polls (`slot_cleared`, or a null `slot_get`). The price is one allocation per weak slot, at its first store,
+and a cell for as long as its instance lives. A collection's weak pass costs nothing while no cell exists.
+
+**A cell refuses an image.** runtime-heap refuses an image of a heap that holds an object of a type with a weak
+spec, live or not yet collected, before any hook runs, so no instance's hook gets to name anything. The execution
+records every cell it makes by its stable ID with the type of the instance it was made for (`weak_cells` in the
+handle state; IDs are held weakly, so a dead cell's is forgotten, and dead records are dropped when the list fills
+before it grows). `gltang_snapshot_take` then answers `GLTANG_ERR_UNSUPPORTED` with `gltang_snapshot_refused_type`
+naming the type of the oldest cell still in the heap; a refusal with no cell in the heap is reported as what it
+is. A cell whose ID or record cannot be had fails its store (`Out of memory`), so no cell refuses an image unnamed.
+Snapshot support for host types does not lift this; a cell has nothing to write by name.
+
+**The bytes in place, and the pin.** Every operand of an operation (and every argument of a native) is pinned for
+the call by the conservative segment of the bracket's activation record, which names the copies of the operands
+in the bracket's frame: this is the guarantee `gltang_handle_custom_bytes` rests on for an operand, and it costs no
+pin. An instance the callback reached on its own (a slot's, a container's, one it made) is pinned with
+`grheap_pin`, once per callback however often it is asked for (the pins are a list in the handle state, each
+carrying the serial of the callback's scope; a callback's are the top of the list while it runs, so finding a repeat
+and letting them go reads only its own), and unpinned when the callback's scope closes, which is also what a
+callback that returns `GLTANG_OP_PENDING` does. A scope close with no pin in the execution pays one load and test. A pin the heap refuses (the object's pin count is full, or the
+table's memory) is `GLTANG_ERR_LIMIT`. The bytes are plain data, written through the pointer with no barrier.
+
+**Finalizers, and the registry they keep.** `finalizer(user, bytes, byte_count)` runs from the heap's `destroy`
+hook: once per instance, when a collection finds it unreachable or when the context is destroyed, and never for
+the old copy of an object the moving collector relocated (relocation frees the old cell without its hook). It gets
+no call object, may free host memory, and must not allocate in the heap, touch another object, call the engine or
+run guest code; it sees whatever the bytes hold, all zeros included. An instance of a type with a finalizer has
+the heap type `lang-tang custom final` (the same layout, trace and image hook, and `destroy` =
+`gltang_vm_custom_destroy`), chosen when it is made, so an instance of a type with none has no hook to run. The
+teardown order is what makes this need care: the context destroys its keys in reverse order of registration, so
+the execution's key (`release_parts`, which releases the attached registries) runs before the heap's destructor
+runs the hooks. A finalizable instance therefore takes a reference to its registry when it is made (one atomic
+increment) and the hook lets it go after the finalizer (a decrement, which can free the registry: with the
+process allocator it was made with, never a context's). The registry, its descriptors, `user` and whatever the
+host keeps alive with them outlive every instance that needs them, including after the host let its own
+reference go, and the execution need not force a collection at teardown (which could not reach a pinned or
+conservatively found object anyway). A collection forgets an instance's stable ID before the hook runs, so a host
+that keys its own table by ID writes the ID into the bytes when it asks for it. The alternative, copying the
+finalizer and `user` into each instance (16 bytes) and requiring the host to keep its module loaded, was not
+taken.
+
+**Value semantics.** `GLTANG_COPY_VALUE` makes an instance a value: `gltang_vm_is_copied` (an array, a map, or an
+instance whose header has the value flag, set when it is made from the type, so the predicate reads no type) is
+asked at every site that copies what it stores: the interpreter's `ADOPT`, the compiled `ADOPT` (its inline kind
+test adds the instance and the flag, and calls the same helper), the recursion of the deep copy into elements and
+slots, the handle API's stored copy (`slot_set`, `array_push`, `map_set`, a native's bound value), and the
+element copies of a slice and of an array concatenation. `gltang_vm_is_container` stays where an array's or a
+map's structure is meant. The copy is the type's `copy` operation when it answers (through the operation
+bracket, entered directly rather than through the replay machinery, since a copy can run inside an instruction
+that is running again to continue a pending record whose step it is not; it cannot ask for a guest call, and an
+answer that is not a new instance of the type is `Host function failed`), and otherwise the default: a new
+instance, each strong slot copied as a stored value is, each weak slot given a new cell with the same target and
+flag, the bytes and the error mark copied exactly. It shares the container copy's depth limit and pacing, and is
+a GC point. A copy that fails with an error of its own (the type's `copy` answered one, or no copy; the depth limit)
+is the store's value in Tang, as a failed container copy is; through the handle API nothing is stored, the error
+becomes the callback's answer and the call answers `GLTANG_ERR_LIMIT` (which also changed, for the better, what a
+container past the depth limit did there: it used to be stored as its error). Registration refuses a `copy` on a reference type and a value type with a finalizer and no `copy`
+(the default copy would duplicate a host resource the bytes name, and the finalizer would release it twice); a
+`copy` that declines gets the default copy all the same, which is the host's choice to make. Two consequences
+worth knowing: an operation's answer is stored as it is (the compiler takes an operator's value to be new and
+emits no `ADOPT` for it), so a value type's operations answer new instances; and when an instruction runs again
+to continue a pending record, a store it repeats copies again, calling `copy` again.
+
+**Identity.** An instance's identity is runtime-heap's stable ID (AD-12): `gltang_handle_custom_id` is
+`grheap_id_of` (an ID from 1, issued on first request, never reused, held weakly), `identity_hash` is
+`grheap_identity_hash` (a function of the ID, so stable across a move), and `from_id` is `grheap_object_of_id`
+with the kind word checked, refusing an ID never issued, one whose object died, and one of an object that is not
+an instance. Audit of addresses kept across a collection point: nothing in the engine holds an instance's address
+past a GC point. The bracket's operand copies are pinned by its segment; `invoke`'s callers read their operands
+again from the temporaries after each call; the copy paths hold source and copy on the temporaries; the weak
+cell's maker holds the target there; the pin list holds addresses that cannot move while pinned. The identity of
+two live values in `==` (story 5's pointer comparison) stays, since both are traced and compared at one moment.
+
+**Measured.** On a 16-thread x86-64 build host (GCC 16.2.0, the bench pinned to one core), against the commit
+before the story with the same bench: every standing case within 1% of its instructions (the cases without a
+host-defined value level; the operations of host-defined types +0.2% to +0.6%, the instance's heap-type choice and
+flags store and code placement in the bracket's file) and within its spread plus 2% of wall clock, most of them
+faster. A first cut put the operations that open a handle scope at +0.5% to +0.8%: the scope close had grown out of
+line with the unpin loop, and every handle frame stored a pin base. Each pin now carries the serial of the scope it
+was taken for, and a close with no pin in the execution tests one word. The story's own cases, per run of a
+1,000-iteration loop: making and dropping an instance of a type with a finalizer 156 us against 152 for one with
+none (+3%); a weak slot set and read 223 us (two native calls an iteration, no allocation after the first); a
+value-type instance stored into an array literal 296 us interpreted and 326 compiled (the compiled run includes
+compiling the loop, and reaches the copy through a native call); an ID asked for and looked up 135 us; twenty
+collections of a heap holding 1,000 instances with a weak slot set 879 us, against 386 for the same instances with
+none (the weak pass is about 25 ns a cell).
 
 ### The seed sequence and the generator per context
 
