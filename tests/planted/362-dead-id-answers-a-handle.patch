@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -964,7 +964,7 @@
+@@ -973,7 +973,7 @@
    // An ID never issued, or whose object is dead (the heap forgets it when it frees the object), is refused; so is an
    // ID of an object that is not an instance (the heap issues IDs to whoever asks).
    if (grheap_object_of_id(call->exec->heap, id, &object) != GRHEAP_OK || gltang_object_kind(gltang_value_of(object)) != GLTANG_OBJ_CUSTOM) {

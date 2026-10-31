@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -905,7 +905,7 @@
+@@ -914,7 +914,7 @@
      GLTANG_HandleState * hs = exec->handles;
      const size_t pin_base = hs->frames[call->frame_floor].pin_base;
      bool pinned = false;

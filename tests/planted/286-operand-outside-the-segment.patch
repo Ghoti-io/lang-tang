@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -536,7 +536,8 @@
+@@ -587,7 +587,8 @@
    const size_t lent = exec->jit && exec->jit->records_open > exec->jit->depth_lent ? gltang_jit_lend_depth(exec) : 0;
  #endif
    GRCORE_Stack * stack = grcore_context_stack(exec->context);

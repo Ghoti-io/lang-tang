@@ -4,12 +4,12 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -229,7 +229,7 @@
+@@ -280,7 +280,7 @@
    cell->kind = GLTANG_OBJ_WEAK;
    cell->flags = flags;
    // The weak slot is a slot of a heap object: written through the barrier.
 -  (void)grheap_store_word(exec->heap, cell, &cell->target, gltang_vm_temp_at(exec, mark));
 +  cell->target = gltang_vm_temp_at(exec, mark); /* planted */
    gltang_vm_temp_release(exec, mark);
-   GLTANG_HandleState * hs = exec->handles;
-   if (hs && !hs->weak_owner) {
+   if (!record_weak_cell(exec, cell, owner)) {
+     // Unrecorded, the cell would refuse a snapshot with no name: the store fails instead, and the cell is garbage.

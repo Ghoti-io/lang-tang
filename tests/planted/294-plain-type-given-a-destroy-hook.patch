@@ -15,7 +15,7 @@
  // hook, and a destroy hook that runs the finalizer (custom.c). A type of its
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -206,7 +206,9 @@
+@@ -207,7 +207,9 @@
    // touched, and nothing is allocated in the heap. The instance's ID is already forgotten.
    GLTANG_CustomObject * custom = payload;
    const GLTANG_Type * type = custom->type;

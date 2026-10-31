@@ -56,6 +56,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <ghoti.io/cutil/memory.h>
+#include <ghoti.io/runtime-heap/id.h>
 #include "vm_internal.h"
 #ifdef GLTANG_WITH_JIT
 #include "../jit/jit.h"
@@ -212,6 +213,56 @@ void gltang_vm_custom_destroy(void * payload) {
   gltang_type_registry_release((GLTANG_TypeRegistry *)(uintptr_t)type->registry);
 }
 
+/**
+ * Records a new weak cell by its stable ID, so that a snapshot refused because the heap holds one can name the type of
+ * the instance it was made for. The heap forgets an ID when its object dies, so the records of dead cells are dropped
+ * when the list is full, before it grows. False when the ID or the record cannot be had.
+ */
+static bool record_weak_cell(GLTANG_Execution * exec, void * cell, const GLTANG_Type * owner) {
+  GLTANG_HandleState * hs = gltang_vm_handle_state(exec);
+  if (!hs) {
+    return false;
+  }
+  if (hs->weak_cell_count == hs->weak_cell_capacity) {
+    size_t kept = 0;
+    for (size_t i = 0; i < hs->weak_cell_count; ++i) {
+      void * object = NULL;
+      if (grheap_object_of_id(exec->heap, hs->weak_cells[i].id, &object) == GRHEAP_OK) {
+        hs->weak_cells[kept++] = hs->weak_cells[i];
+      }
+    }
+    hs->weak_cell_count = kept;
+  }
+  if (hs->weak_cell_count == hs->weak_cell_capacity) {
+    size_t grown = hs->weak_cell_capacity ? hs->weak_cell_capacity * 2u : 8u;
+    GLTANG_WeakRecord * bigger = gcu_allocator_realloc(exec->allocator, hs->weak_cells, grown * sizeof(*bigger));
+    if (!bigger) {
+      return false;
+    }
+    hs->weak_cells = bigger;
+    hs->weak_cell_capacity = grown;
+  }
+  uint64_t id = 0;
+  if (grheap_id_of(exec->heap, cell, &id) != GRHEAP_OK) {
+    return false;
+  }
+  hs->weak_cells[hs->weak_cell_count].id = id;
+  hs->weak_cells[hs->weak_cell_count].owner = owner;
+  ++hs->weak_cell_count;
+  return true;
+}
+
+const GLTANG_Type * gltang_vm_weak_cell_owner(const GLTANG_Execution * exec) {
+  const GLTANG_HandleState * hs = exec->handles;
+  for (size_t i = 0; hs && i < hs->weak_cell_count; ++i) {
+    void * object = NULL;
+    if (grheap_object_of_id(exec->heap, hs->weak_cells[i].id, &object) == GRHEAP_OK) {
+      return hs->weak_cells[i].owner;
+    }
+  }
+  return NULL;
+}
+
 GLTANG_Value gltang_vm_weak_cell_make(GLTANG_Execution * exec, const GLTANG_Type * owner, GLTANG_Value target, uint32_t flags) {
   // The target is held across the allocation (a collection there could free or move it): it is weakly held only
   // once it is in the cell.
@@ -231,9 +282,9 @@ GLTANG_Value gltang_vm_weak_cell_make(GLTANG_Execution * exec, const GLTANG_Type
   // The weak slot is a slot of a heap object: written through the barrier.
   (void)grheap_store_word(exec->heap, cell, &cell->target, gltang_vm_temp_at(exec, mark));
   gltang_vm_temp_release(exec, mark);
-  GLTANG_HandleState * hs = exec->handles;
-  if (hs && !hs->weak_owner) {
-    hs->weak_owner = owner;
+  if (!record_weak_cell(exec, cell, owner)) {
+    // Unrecorded, the cell would refuse a snapshot with no name: the store fails instead, and the cell is garbage.
+    return exec->roots[GLTANG_ROOT_OOM];
   }
   return gltang_value_of(cell);
 }

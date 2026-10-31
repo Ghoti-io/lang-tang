@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -171,7 +171,7 @@
+@@ -172,7 +172,7 @@
    size_t bytes = sizeof(GLTANG_CustomObject) + (size_t)slots * sizeof(GLTANG_Value) + (size_t)type->descriptor.byte_count;
    void * object;
    // A type with a finalizer has the heap type whose destroy hook runs it; any other has none, and costs nothing for it.
@@ -13,7 +13,7 @@
    if (st != GLTANG_ST_OK) {
      return gltang_vm_failure_value(exec, st);
    }
-@@ -206,6 +206,9 @@
+@@ -207,6 +207,9 @@
    // touched, and nothing is allocated in the heap. The instance's ID is already forgotten.
    GLTANG_CustomObject * custom = payload;
    const GLTANG_Type * type = custom->type;

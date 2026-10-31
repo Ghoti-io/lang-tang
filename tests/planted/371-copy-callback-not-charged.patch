@@ -1,0 +1,15 @@
+# 371 a type's `copy` is not charged as a callback
+# defect: the bracket charges every operation a native call's fuel but the copy, which then runs for nothing
+# caught by: the charging test (the fuel of a store that copies) (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -576,7 +576,7 @@
+     }
+   }
+   // Charged as a native call; the bytes of a string answer are charged below.
+-  exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_CALL];
++  exec->pending_fuel += oc->op == GLTANG_TYPE_OP_COPY ? 0u : gltang_opcode_cost_table[GLTANG_OP_CALL]; /* planted */
+ #ifdef GLTANG_WITH_JIT
+   // From a helper that compiled code called (a cast, a print, a host attribute of a string), the
+   // native-depth units its open records hold are handed back for the call, as for a native

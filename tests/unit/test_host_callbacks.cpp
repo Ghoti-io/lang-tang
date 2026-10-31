@@ -176,10 +176,11 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   void * in_place = nullptr;
   size_t in_place_size = 0;
   uint64_t id = 0;
+  uint64_t identity_hash = 0;
   CASE(gltang_handle_custom_slot_cleared, false, (void)gltang_handle_custom_slot_cleared(call, c, 0, &cleared));
   CASE(gltang_handle_custom_bytes, false, (void)gltang_handle_custom_bytes(call, c, &in_place, &in_place_size));
   CASE(gltang_handle_custom_id, false, (void)gltang_handle_custom_id(call, c, &id));
-  CASE(gltang_handle_custom_identity_hash, false, (void)gltang_handle_custom_identity_hash(call, c, &id));
+  CASE(gltang_handle_custom_identity_hash, false, (void)gltang_handle_custom_identity_hash(call, c, &identity_hash));
   CASE(gltang_handle_custom_from_id, false, (void)gltang_handle_custom_from_id(call, id, &out));
 #undef CASE
 

@@ -1,0 +1,18 @@
+# 372 the default copy of an instance is not paced
+# defect: a copy of an instance of many slots polls nothing and is charged nothing for its work, as a container copy is
+# caught by: the charging test (the wide instance against the array) (testCustom_collector)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -436,10 +436,7 @@
+     if (!*fail) {
+       // Nothing collects between the child's return and its being stored.
+       GLTANG_CustomObject * target = gltang_vm_custom(gltang_vm_temp_at(exec, mark + 1u));
+-      (void)grheap_store_word(exec->heap, target, &target->slots[i], child);
+-      if (pace(pacer, 1) != GLTANG_ST_OK) {
+-        *fail = COPY_UNWIND;
+-      }
++      (void)grheap_store_word(exec->heap, target, &target->slots[i], child); /* planted: not paced */
+     }
+   }
+   if (!*fail) {

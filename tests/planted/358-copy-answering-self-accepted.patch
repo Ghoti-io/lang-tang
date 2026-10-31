@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -1170,7 +1170,8 @@
+@@ -1221,7 +1221,8 @@
    }
    // A new instance of its own type, and not `self`: anything else would store the original, or a value of another
    // type, where a copy was asked for.

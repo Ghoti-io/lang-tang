@@ -55,8 +55,8 @@
  *    instance of a value type are refused (each is copied, or boxed, when it is
  *    stored, so what the slot held would be a copy that nothing else holds). A
  *    weak slot is kept in a small object of its own, made at its first
- *    non-null store, so an execution that holds one cannot be in a snapshot
- *    (the refusal names the instance's type).
+ *    non-null store, so an execution whose heap holds one cannot be in a
+ *    snapshot (the refusal names the instance's type).
  *  - *Raw bytes*: plain data the collector never reads. They are copied in and
  *    out (::gltang_handle_custom_read_bytes, ::gltang_handle_custom_write_bytes)
  *    or reached in place (::gltang_handle_custom_bytes), through a pointer that
@@ -74,8 +74,10 @@
  *    An instance of a type with no finalizer costs nothing for it.
  *  - *Identity*: an instance's identity is its stable ID
  *    (::gltang_handle_custom_id), never its address, which a collector may
- *    change. An ID is never reused, and holds its instance weakly: once the
- *    instance dies, ::gltang_handle_custom_from_id refuses it. A collection
+ *    change. An ID is never reused within the execution (each execution has
+ *    its heap and its own IDs, so an ID names nothing in another), and holds
+ *    its instance weakly: once the instance dies,
+ *    ::gltang_handle_custom_from_id refuses it. A collection
  *    forgets an instance's ID before its finalizer runs, so a host that keys a
  *    table of its own by ID writes the ID into the raw bytes when it asks for it.
  *
@@ -85,8 +87,9 @@
  * (`[m]`, `a[i] = m`, `{"k": m}`), into a slot or a container through the
  * handle API, and as an element of a container that is copied. Assigning it to a
  * variable or passing it to a function does not copy it, as for an array. The
- * copy is the type's `copy` operation when it has one and it answers (a new
- * instance of the same type, which must not be `self`; anything else is
+ * copy is the type's `copy` operation when it has one and it answers (an
+ * instance of the same type other than `self`, which the type is responsible
+ * for making a copy and not another live value; `self`, or anything else, is
  * `Host function failed`), and otherwise the default copy: a new instance of the
  * type, each strong slot copied as a stored value is (a container deeply, an
  * instance of a value type recursively, anything else by reference), each weak
@@ -96,7 +99,10 @@
  * identity unless it implements `equal`, so a stored copy is not `==` its
  * original. An operation's answer is stored as it is (the language takes an
  * operator's value to be new), so a value type's operations answer new
- * instances, not an operand. A value type with a finalizer must implement `copy`
+ * instances, not an operand. A copy that fails (its `copy` answers an error or
+ * no copy, or the depth limit) is the value of the store in Tang, as a failed
+ * container copy is; through the handle API nothing is stored and the call's
+ * answer becomes that error (handle.h). A value type with a finalizer must implement `copy`
  * (the default copy would duplicate a host resource its bytes name, and the
  * finalizer would release it twice); when that `copy` declines, the default copy
  * is made all the same, so a `copy` declines only for an instance whose bytes
@@ -292,8 +298,8 @@
  *
  * A snapshot of an execution that holds an instance is refused
  * (::gltang_snapshot_refused_type names the type), and so is one whose heap
- * still holds the cell of a weak slot (it names the type of the instance that
- * made a cell first).
+ * still holds the cell of a weak slot (it names the type of the instance the
+ * oldest such cell was made for).
  *
  * **Threads.** A registry is built on one thread. Once sealed, it and its
  * descriptors may be read from any thread. ::gltang_type_registry_retain and
@@ -527,11 +533,12 @@ typedef GLTANG_OpStatus (*GLTANG_HostAttributeFn)(GLTANG_NativeCall * call,
     void * user, GLTANG_Handle self);
 
 /**
- * @brief The copy of an instance of a value type: the answer is a new instance
- *   of the same type (not `self`), which is stored in place of `self`. A
- *   decline makes the default copy. An answer that is not an instance of the
- *   type, or that is `self`, is `Host function failed`. It cannot ask for a
- *   guest call.
+ * @brief The copy of an instance of a value type: the answer is an instance of
+ *   the same type other than `self` (normally one the callback made, the type
+ *   being responsible for its being a copy), which is stored in place of
+ *   `self`. A decline makes the default copy. An answer that is not an
+ *   instance of the type, or that is `self`, is `Host function failed`. It
+ *   cannot ask for a guest call.
  */
 typedef GLTANG_OpStatus (*GLTANG_TypeCopyFn)(GLTANG_NativeCall * call,
     void * user, GLTANG_Handle self);
@@ -590,11 +597,11 @@ typedef struct GLTANG_TypeDescriptor {
   GLTANG_TypePrintFn print;                   ///< `print self`
   GLTANG_TypeToStringFn to_string;            ///< `self as string`, an element's text
   // Added after story 6 (guest calls); a descriptor sized without them declares nothing resumable.
-  uint32_t resumable_ops;                     ///< A bit `1u << GLTANG_TYPE_OP_*` for each operation that may call guest code; not `truthy`, and only an operation the type implements.
+  uint32_t resumable_ops;                     ///< A bit `1u << GLTANG_TYPE_OP_*` for each operation that may call guest code; not `truthy` or `copy`, and only an operation the type implements.
   const GLTANG_Continuation * continuations;  ///< The table ::gltang_call_guest names an index of; copied. Needed when `resumable_ops` is not 0.
   size_t continuation_count;                  ///< Entries of `continuations`, at most ::GLTANG_CONTINUATIONS_MAX.
   // Added after story 9 (the collector model); a descriptor sized without them is a reference type with strong slots and no finalizer.
-  GLTANG_CopySemantics copy_semantics;        ///< ::GLTANG_COPY_REFERENCE (the default) or ::GLTANG_COPY_VALUE.
+  uint32_t copy_semantics;                    ///< A ::GLTANG_CopySemantics: ::GLTANG_COPY_REFERENCE (the default) or ::GLTANG_COPY_VALUE. A fixed width, not the enum, so that its size is the same whatever the host's compiler makes of an enum.
   GLTANG_TypeCopyFn copy;                     ///< A value type's copy; NULL for the default copy. Refused on a reference type.
   GLTANG_TypeFinalizeFn finalizer;            ///< Run once per instance when it dies; NULL for none. A value type with one must have `copy`.
   const uint32_t * weak_slots;                ///< The slot indices that are weak, each below `slot_count`, none twice; copied. NULL for none.
@@ -646,7 +653,7 @@ GLTANG_API void gltang_type_registry_release(GLTANG_TypeRegistry * registry);
  *   registry, a `size` below ::GLTANG_TYPE_DESCRIPTOR_MIN_SIZE, a name that is
  *   not 1 to ::GLTANG_TYPE_NAME_MAX identifier characters, a slot or byte count past its maximum,
  *   a name and version the registry already holds, a `resumable_ops` that names `truthy` or
- *   `copy`, a `copy_semantics` that is neither value, a `copy` on a reference type, a value type
+ *   `copy`, a `copy_semantics` that is neither reference nor value, a `copy` on a reference type, a value type
  *   with a `finalizer` and no `copy`, or a weak slot index that is past `slot_count` or listed
  *   twice (or a `weak_slot_count` with no list); ::GLTANG_ERR_OOM.
  */
@@ -769,9 +776,9 @@ GLTANG_API GLTANG_Result gltang_execution_attach_types(
  * ::GLTANG_ERR_UNSUPPORTED, and this names the type of the first instance the
  * take met. So is a take of a heap that still holds the cell of a weak slot
  * (the heap type `lang-tang weak cell`, which no image can hold), live or not
- * yet collected: this then names the instance's type when the take met the
- * instance, and otherwise the type of the first instance of the execution that
- * made a cell. A later take that is not refused for a type clears it.
+ * yet collected: the heap refuses it before any instance is met, and this
+ * then names the type of the instance the oldest cell still in the heap was
+ * made for. A later take that is not refused for a type clears it.
  */
 GLTANG_API const GLTANG_Type * gltang_snapshot_refused_type(
     const GLTANG_Execution * execution);

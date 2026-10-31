@@ -13,6 +13,7 @@
 //   plain  declares nothing of this story: two slots, eight bytes.
 //   bare   one slot and no raw bytes.
 //   bigv   a value type: one slot and 64 KiB of raw bytes, so that its copy needs memory of its own.
+//   wide   a value type: 4,000 slots and no raw bytes, so that its default copy is paced.
 // The finalizer records every call: the tag, the pointer it was given, its size, and
 // how many registries the process had freed when it ran.
 //
@@ -26,6 +27,7 @@
 #include "test_helpers.h"
 #include "watchdog.h"
 
+#include <ghoti.io/lang-tang/bytecode.h>
 #include <ghoti.io/lang-tang/type.h>
 #include <ghoti.io/runtime-heap/id.h>
 #include <ghoti.io/runtime-heap/roots.h>
@@ -53,6 +55,7 @@ struct Probe {
   const GLTANG_Type * plain = nullptr;
   const GLTANG_Type * bare = nullptr;
   const GLTANG_Type * bigv = nullptr;
+  const GLTANG_Type * wide = nullptr;
   Context * context = nullptr;
   // The finalizer's record.
   std::vector<int64_t> final_tags;
@@ -186,6 +189,13 @@ Probe::Probe() {
   g.user = this;
   g.copy_semantics = GLTANG_COPY_VALUE;
   EXPECT_EQ(gltang_type_registry_add(registry, &g, &bigv), GLTANG_OK);
+  GLTANG_TypeDescriptor w = GLTANG_TYPE_DESCRIPTOR_INIT;
+  w.name = "wide";
+  w.slot_count = 4000;
+  w.thread_safe = true;
+  w.user = this;
+  w.copy_semantics = GLTANG_COPY_VALUE;
+  EXPECT_EQ(gltang_type_registry_add(registry, &w, &wide), GLTANG_OK);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +226,83 @@ bool n_point(GLTANG_NativeCall * call, void * u) { return make_tagged(call, prob
 bool n_vcopy(GLTANG_NativeCall * call, void * u) { return make_tagged(call, probe_of(u)->vcopy); }
 bool n_plain(GLTANG_NativeCall * call, void * u) { return make_tagged(call, probe_of(u)->plain); }
 bool n_bigv(GLTANG_NativeCall * call, void * u) { return make_tagged(call, probe_of(u)->bigv); }
+bool n_wide(GLTANG_NativeCall * call, void * u) {
+  GLTANG_Handle h;
+  if (gltang_handle_make_custom(call, probe_of(u)->wide, &h) != GLTANG_OK) {
+    return false;
+  }
+  gltang_call_return_handle(call, h);
+  return true;
+}
+
+/// nulls(n): an array of n nulls (the wide instance's twin for the pacing test).
+bool n_nulls(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle n, array, null_value;
+  if (!arg(call, 0, &n) || gltang_handle_make_array(call, 0, &array) != GLTANG_OK || gltang_handle_make_null(call, &null_value) != GLTANG_OK) {
+    return false;
+  }
+  for (int64_t i = 0; i < gltang_handle_integer(call, n); ++i) {
+    if (gltang_handle_array_push(call, array, null_value) != GLTANG_OK) {
+      return false;
+    }
+  }
+  gltang_call_return_handle(call, array);
+  return true;
+}
+
+/// push(a, v): the GLTANG_Result of appending v to array a; mset(m, v): of setting key "k" of map m to v.
+bool n_push(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle a, v;
+  if (!arg(call, 0, &a) || !arg(call, 1, &v)) {
+    return false;
+  }
+  gltang_call_return_integer(call, static_cast<int64_t>(gltang_handle_array_push(call, a, v)));
+  return true;
+}
+
+bool n_mset(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle m, v;
+  if (!arg(call, 0, &m) || !arg(call, 1, &v)) {
+    return false;
+  }
+  gltang_call_return_integer(call, static_cast<int64_t>(gltang_handle_map_set(call, m, "k", 1, GLTANG_UNICODE_STRING_TYPE_TRUSTED, v)));
+  return true;
+}
+
+/// setonly(o, i, v): stores v in slot i and answers nothing of its own, so a failed copy's error is its answer.
+bool n_setonly(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle o, i, v;
+  if (!arg(call, 0, &o) || !arg(call, 1, &i) || !arg(call, 2, &v)) {
+    return false;
+  }
+  (void)gltang_handle_custom_slot_set(call, o, static_cast<size_t>(gltang_handle_integer(call, i)), v);
+  return true;
+}
+
+/// refusedalloc(o, i, v): stores v in weak slot i, which must refuse it; answers the heap allocations it made.
+bool n_refusedalloc(GLTANG_NativeCall * call, void * u) {
+  GLTANG_Handle o, i, v;
+  if (!arg(call, 0, &o) || !arg(call, 1, &i) || !arg(call, 2, &v)) {
+    return false;
+  }
+  GRHEAP_Stats before, after;
+  EXPECT_EQ(grheap_stats(probe_of(u)->context->heap, &before), GRHEAP_OK);
+  EXPECT_EQ(gltang_handle_custom_slot_set(call, o, static_cast<size_t>(gltang_handle_integer(call, i)), v), GLTANG_ERR_INVALID);
+  EXPECT_EQ(grheap_stats(probe_of(u)->context->heap, &after), GRHEAP_OK);
+  gltang_call_return_integer(call, static_cast<int64_t>(after.allocations - before.allocations));
+  return true;
+}
+
+/// addr(o): o's address now, as a string of decimal digits (to see that the collector moved it).
+bool n_addr(GLTANG_NativeCall * call, void *) {
+  GLTANG_Handle o;
+  if (!arg(call, 0, &o)) {
+    return false;
+  }
+  std::string s = std::to_string(reinterpret_cast<uintptr_t>(gltang_vm_test_handle_object(call, o)));
+  gltang_call_return_string(call, s.data(), s.size(), GLTANG_UNICODE_STRING_TYPE_TRUSTED);
+  return true;
+}
 bool n_bare(GLTANG_NativeCall * call, void * u) {
   GLTANG_Handle h;
   if (gltang_handle_make_custom(call, probe_of(u)->bare, &h) != GLTANG_OK) {
@@ -546,6 +633,7 @@ struct Out {
   uint64_t moved = 0;          ///< Objects the relocating heap moved (0 when it is not relocating).
   uint64_t frees = 0;          ///< Objects the heap freed by the end of the run.
   uint64_t memory_peak = 0;    ///< The context's memory peak.
+  uint64_t fuel = 0;           ///< The fuel the run used.
   GLTANG_ErrorKind error = GLTANG_ERROR_KIND_COUNT;  ///< The result's error kind, when it is an error.
 };
 
@@ -583,7 +671,8 @@ Out run(const std::string & source, Probe & probe, const Config & config = Confi
     GLTANG_Library * c = nullptr;
     EXPECT_EQ(gltang_library_create("c", &c), GLTANG_OK);
     struct { const char * name; GLTANG_NativeFn fn; } natives[] = {
-      {"node", n_node}, {"res", n_res}, {"point", n_point}, {"vcopy", n_vcopy}, {"plain", n_plain}, {"bare", n_bare}, {"bigv", n_bigv},
+      {"node", n_node}, {"res", n_res}, {"point", n_point}, {"vcopy", n_vcopy}, {"plain", n_plain}, {"bare", n_bare}, {"bigv", n_bigv}, {"wide", n_wide}, {"nulls", n_nulls},
+      {"push", n_push}, {"mset", n_mset}, {"setonly", n_setonly}, {"refusedalloc", n_refusedalloc}, {"addr", n_addr},
       {"failmake", n_failmake}, {"set", n_set}, {"setinner", n_setinner}, {"get", n_get}, {"cleared", n_cleared}, {"tag", n_tag},
       {"settag", n_settag}, {"mark", n_mark}, {"marked", n_marked}, {"collect", n_collect}, {"finals", n_finals},
       {"id", n_id}, {"fromid", n_fromid}, {"ihash", n_ihash}, {"same", n_same}, {"cellid", n_cellid},
@@ -615,6 +704,7 @@ Out run(const std::string & source, Probe & probe, const Config & config = Confi
     }
     out.jit = context.jit_stats();
     out.memory_peak = grcore_context_memory_peak(context.context);
+    out.fuel = grcore_context_fuel_used(context.context);
     if (context.is_error()) {
       out.error = context.error_kind();
     }
@@ -756,7 +846,7 @@ TEST(CollectorRegistry, RegistrationRefusesWhatTheModelCannotHold) {
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.weak_slots = twice; f.weak_slot_count = 2; })) << "an index twice";
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.weak_slots = five; f.weak_slot_count = 5; })) << "more indices than slots";
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.weak_slots = nullptr; f.weak_slot_count = 1; })) << "a count with no list";
-  EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.copy_semantics = static_cast<GLTANG_CopySemantics>(2); })) << "a semantics that is neither";
+  EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.copy_semantics = 2u; })) << "a semantics that is neither";
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.copy = copy_nothing; })) << "a copy on a reference type";
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) { f.copy_semantics = GLTANG_COPY_VALUE; f.finalizer = finalize_nothing; })) << "a value type with a finalizer and no copy";
   EXPECT_TRUE(refused([](GLTANG_TypeDescriptor & f) {
@@ -819,21 +909,32 @@ TEST(WeakSlots, EveryKindOfValueIsAcceptedOrRefusedAndARefusalChangesNothing) {
   const Row rows[] = {
     {"null", "got == null"}, {"true", "got == true"}, {"false", "got == false"}, {"f", "got() == 1"},
     {"\"s\"", "c.same(got, v)"}, {"c", "c.same(got, v)"}, {"c.node", "c.same(got, v)"}, {"r", "c.same(got, v)"},
-    {"c.node()", "c.same(got, v)"}, {"marked", "c.same(got, v)"},
+    {"c.node()", "c.same(got, v)"}, {"marked", "c.same(got, v)"}, {"tpl", "c.same(got, v)"},
     {"1", nullptr}, {"2305843009213693952", nullptr}, {"1.5", nullptr}, {"[1]", nullptr}, {"{k: 1}", nullptr},
     {"1 / 0", nullptr}, {"c.point()", nullptr}, {"c.vcopy()", nullptr},
   };
   const std::string invalid = std::to_string(static_cast<int>(GLTANG_ERR_INVALID));
+  Compiled tpl("1;");
+  ASSERT_TRUE(tpl.ok());
   for (const Row & row : rows) {
     Probe probe;
-    std::string source = std::string(USE) + "use random; function f() { return 1; } r = random.seeded(1); marked = c.node(); c.mark(marked); "
+    std::string source = std::string(USE) + "use tpl; use random; function f() { return 1; } r = random.seeded(1); marked = c.node(); c.mark(marked); "
                          "n = c.node(); keep = \"keep\"; c.set(n, 0, keep); v = " + row.expr + "; "
                          "s = c.set(n, 0, v); got = c.get(n, 0); "
                          "[s, c.set(n, 1, v), " + (row.check ? row.check : "got == keep") + "];";
-    Out o = run(source, probe);
+    Out o = run(source, probe, Config(), [&](Context & context, Probe &) {
+      ASSERT_EQ(gltang_library_add_template(context.library(), "tpl", tpl.program, GRCORE_UNLIMITED, GLTANG_SCOPE_EMPTY), GLTANG_OK);
+    });
     ASSERT_TRUE(o.finished) << source << " gave " << o.described;
     EXPECT_EQ(o.described, (row.check ? "[0, 0, true]" : "[" + invalid + ", 0, true]")) << row.expr;
   }
+}
+
+TEST(WeakSlots, ARefusedStoreAllocatesNothing) {
+  Probe probe;
+  Out o = run(USE "n = c.node(); [c.refusedalloc(n, 0, [1]), c.refusedalloc(n, 0, 1.5), c.refusedalloc(n, 2, c.point(1)), c.cellid(n, 0)];", probe);
+  ASSERT_TRUE(o.finished) << o.described;
+  EXPECT_EQ(o.described, "[0, 0, 0, 0]") << "a refusal made an object (a cell, or a copy)";
 }
 
 TEST(WeakSlots, ATargetHeldStronglyBesideTheWeakSlotLives) {
@@ -875,20 +976,19 @@ TEST(WeakSlots, TheInstanceKeepsItsCellAliveAndTheCellNeverKeepsItsTarget) {
 }
 
 TEST(WeakSlots, AWeakTargetThatMovesIsReadAtItsNewAddress) {
-  // Under the relocation arm every collection moves every unpinned object: the target, the cell, the instance.
-  // The first store into a weak slot makes the cell (a GC point) with the instance read again after it; the
-  // instance is reached through another's slot, so it is not an operand of the call, which would pin it.
-  Probe probe;
-  Config config = forced_torture();
-  Out o = run(USE "o = c.node(); c.set(o, 1, c.node()); x = c.res(11); y = c.node(); c.settag(y, 12); "
-              "s = [c.setinner(o, 1, 0, x), c.setinner(o, 1, 2, y)]; i = 0; while (i < 20) { [i]; i = i + 1; } c.collect(); "
-              "n = c.get(o, 1); "
-              "s + [c.tag(c.get(n, 0)), c.same(c.get(n, 0), x), c.tag(c.get(n, 2)), c.same(c.get(n, 2), y)];",
-              probe, config);
-  ASSERT_TRUE(o.finished) << o.described;
-  EXPECT_EQ(o.described, "[0, 0, 11, true, 12, true]");
-  if (relocation_requested()) {
-    EXPECT_GT(o.moved, 0u) << "the relocating heap moved nothing: the test saw no move";
+  // Under the relocation arm every collection moves every unpinned object: the target, the cell, the instance; the
+  // target's address is read before and after a collection, and differs then (it is the same otherwise). The first
+  // store into a weak slot makes the cell (a GC point) with the instance read again after it; the instance is
+  // reached through another's slot, so it is not an operand of the call, which would pin it.
+  for (const Config & arm : collector_arms()) {
+    Probe probe;
+    Out o = run(USE "o = c.node(); c.set(o, 1, c.node()); x = c.res(11); y = c.node(); c.settag(y, 12); "
+                "s = [c.setinner(o, 1, 0, x), c.setinner(o, 1, 2, y)]; before = c.addr(x); i = 0; while (i < 20) { [i]; i = i + 1; } c.collect(); "
+                "n = c.get(o, 1); "
+                "s + [c.tag(c.get(n, 0)), c.same(c.get(n, 0), x), c.tag(c.get(n, 2)), c.same(c.get(n, 2), y), c.addr(x) != before];",
+                probe, arm);
+    ASSERT_TRUE(o.finished) << o.described;
+    EXPECT_EQ(o.described, std::string("[0, 0, 11, true, 12, true, ") + (relocation_requested() ? "true" : "false") + "]");
   }
 }
 
@@ -896,10 +996,22 @@ TEST(WeakSlots, ASnapshotIsRefusedWhileACellExistsAndNamesTheType) {
   // The run pauses with a node whose weak slot has a cell: every take is refused, and the refusal names node. The
   // instance names itself through its own hook; a cell left behind by an instance that died (not yet collected)
   // names the type of the instance that made a cell first.
-  // The second program lets its instance go before it pauses, and makes no garbage that would start a collection,
-  // so the cell is still in the heap, unreachable. Torture would collect it at the first poll: it is off here.
-  for (const char * source : {USE "n = c.node(); c.set(n, 0, c.node()); i = 0; while (true) { i = i + 1; }",
-                              USE "n = c.node(); c.set(n, 0, c.node()); n = null; i = 0; while (true) { i = i + 1; }"}) {
+  // The heap refuses an image while it holds a cell, before any instance's hook runs, so the name comes from the
+  // execution's record of its cells: the type of the instance the oldest cell still in the heap was made for. The
+  // second program lets its instance go before it pauses, and makes no garbage that would start a collection, so the
+  // cell is still in the heap, unreachable (torture would collect it at the first poll: it is off here). The third
+  // makes a node's cell, collects it with its node, then makes a point's: the refusal names point, not node.
+  struct Case {
+    const char * source;
+    bool names_point;
+  };
+  const Case cases[] = {
+    {USE "n = c.node(); c.set(n, 0, c.node()); i = 0; while (true) { i = i + 1; }", false},
+    {USE "n = c.node(); c.set(n, 0, c.node()); n = null; i = 0; while (true) { i = i + 1; }", false},
+    {USE "n = c.node(); c.set(n, 0, c.node()); n = null; c.collect(); p = c.point(1); c.set(p, 2, c.node()); i = 0; while (true) { i = i + 1; }", true},
+  };
+  for (const Case & k : cases) {
+    const char * source = k.source;
     Probe probe;
     Config config;
     config.fuel = 2000;
@@ -912,7 +1024,9 @@ TEST(WeakSlots, ASnapshotIsRefusedWhileACellExistsAndNamesTheType) {
     GLTANG_Library * c = nullptr;
     ASSERT_EQ(gltang_library_create("c", &c), GLTANG_OK);
     ASSERT_EQ(gltang_library_add_native(c, "node", n_node, &probe), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(c, "point", n_point, &probe), GLTANG_OK);
     ASSERT_EQ(gltang_library_add_native(c, "set", n_set, &probe), GLTANG_OK);
+    ASSERT_EQ(gltang_library_add_native(c, "collect", n_collect, &probe), GLTANG_OK);
     ASSERT_EQ(gltang_library_add_library(context.library(), c), GLTANG_OK);
     gltang_library_release(c);
     ASSERT_EQ(gltang_execution_attach_types(context.execution, probe.registry), GLTANG_OK);
@@ -920,10 +1034,39 @@ TEST(WeakSlots, ASnapshotIsRefusedWhileACellExistsAndNamesTheType) {
     ASSERT_TRUE(context.paused()) << source << ": " << context.describe();
     GLTANG_Snapshot * snapshot = nullptr;
     EXPECT_EQ(gltang_snapshot_take(context.execution, &snapshot), GLTANG_ERR_UNSUPPORTED) << source;
-    EXPECT_TRUE(gltang_type_same(gltang_snapshot_refused_type(context.execution), probe.node)) << source;
+    EXPECT_TRUE(gltang_type_same(gltang_snapshot_refused_type(context.execution), k.names_point ? probe.point : probe.node)) << source;
     EXPECT_EQ(snapshot, nullptr);
     probe.context = nullptr;
   }
+}
+
+TEST(WeakSlots, OnceEveryCellIsCollectedASnapshotIsNoLongerRefusedForOne) {
+  // A cell made and collected with its instance leaves nothing to refuse: with no instance and no cell left, the take
+  // succeeds and names nothing.
+  Probe probe;
+  Config config;
+  config.fuel = 2000;
+  config.torture = 0;
+  Compiled compiled(USE "n = c.node(); c.set(n, 0, true); n = null; c.collect(); i = 0; while (true) { i = i + 1; }");
+  ASSERT_TRUE(compiled.ok());
+  Context context(compiled.program, config);
+  ASSERT_TRUE(context.ok());
+  probe.context = &context;
+  GLTANG_Library * c = nullptr;
+  ASSERT_EQ(gltang_library_create("c", &c), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(c, "node", n_node, &probe), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(c, "set", n_set, &probe), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_native(c, "collect", n_collect, &probe), GLTANG_OK);
+  ASSERT_EQ(gltang_library_add_library(context.library(), c), GLTANG_OK);
+  gltang_library_release(c);
+  ASSERT_EQ(gltang_execution_attach_types(context.execution, probe.registry), GLTANG_OK);
+  context.execute();
+  ASSERT_TRUE(context.paused()) << context.describe();
+  GLTANG_Snapshot * snapshot = nullptr;
+  EXPECT_EQ(gltang_snapshot_take(context.execution, &snapshot), GLTANG_OK);
+  EXPECT_EQ(gltang_snapshot_refused_type(context.execution), nullptr);
+  gltang_snapshot_release(snapshot);
+  probe.context = nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,6 +1376,66 @@ TEST(ValueTypes, ATypesCopyIsTheStoredValueAndAWrongAnswerIsHostFunctionFailed) 
   }
 }
 
+TEST(ValueTypes, AFailedCopyThroughTheHandleAPIStoresNothingAndIsTheCallsAnswer) {
+  // vcopy's `copy` answers `self`, another type's instance, or an error: a slot set, an array push and a map set of
+  // the instance each refuse with GLTANG_ERR_LIMIT and store nothing, and a callback that answers nothing of its own
+  // after one answers the copy's error.
+  const std::string limit = std::to_string(static_cast<int>(GLTANG_ERR_LIMIT));
+  struct Row {
+    int mode;
+    const char * error;
+  };
+  const Row rows[] = {{1, "Error: Host function failed"}, {2, "Error: Host function failed"}, {3, "Error: Divide by zero"}};
+  for (const Row & row : rows) {
+    Probe probe;
+    probe.copy_mode = row.mode;
+    Out o = run(USE "m = c.vcopy(42); n = c.node(); a = []; d = {k: 0}; "
+                "[c.set(n, 1, m), c.push(a, m), c.mset(d, m), c.get(n, 1) == null, a.size, d.k];",
+                probe);
+    ASSERT_TRUE(o.finished) << o.described;
+    EXPECT_EQ(o.described, "[" + limit + ", " + limit + ", " + limit + ", true, 0, 0]") << "mode " << row.mode;
+    Probe answering;
+    answering.copy_mode = row.mode;
+    Out e = run(USE "m = c.vcopy(42); n = c.node(); c.setonly(n, 1, m);", answering);
+    ASSERT_TRUE(e.finished) << e.described;
+    EXPECT_EQ(e.described, row.error) << "mode " << row.mode;
+  }
+  // And the copy that works stores the copy.
+  Probe probe;
+  Out o = run(USE "m = c.vcopy(42); n = c.node(); a = []; [c.set(n, 1, m), c.push(a, m), c.tag(c.get(n, 1)), c.tag(a[0])];", probe);
+  ASSERT_TRUE(o.finished) << o.described;
+  EXPECT_EQ(o.described, "[0, 0, 1042, 1042]");
+}
+
+TEST(ValueTypes, ASliceAndAConcatenationCopyTheInstancesTheyHold) {
+  Probe probe;
+  Out o = run(USE "x = [c.point(1)]; y = x + x; z = x[0:1]; c.settag(x[0], 2); "
+              "[c.tag(y[0]), c.tag(y[1]), c.tag(z[0]), c.same(y[0], y[1]), c.same(z[0], x[0])];", probe);
+  ASSERT_TRUE(o.finished) << o.described;
+  EXPECT_EQ(o.described, "[1, 1, 1, false, false]");
+}
+
+TEST(ValueTypes, ACopyIsChargedAsACallbackAndPacedAsAContainerCopy) {
+  // The fuel of a store that copies, against the same program storing a reference type's instance: the difference is
+  // the `copy` callback's charge, a native call's. And the default copy of an instance of 4,000 slots is paced as the
+  // copy of an array of 4,000 elements is: the two stores cost the same fuel.
+  Probe a, b;
+  Out with_copy = run(USE "m = c.vcopy(1); x = [m];", a);
+  Out reference = run(USE "m = c.node(1); x = [m];", b);
+  ASSERT_TRUE(with_copy.finished && reference.finished);
+  EXPECT_EQ(with_copy.fuel - reference.fuel, static_cast<uint64_t>(gltang_opcode_cost(GLTANG_OP_CALL)));
+  Probe d, e, f, g;
+  Out wide_store = run(USE "w = c.wide(); x = [w];", d);
+  Out wide_none = run(USE "w = c.wide(); x = [0];", e);
+  Out array_store = run(USE "w = c.nulls(4000); x = [w];", f);
+  Out array_none = run(USE "w = c.nulls(4000); x = [0];", g);
+  ASSERT_TRUE(wide_store.finished && wide_none.finished && array_store.finished && array_none.finished);
+  const uint64_t instance_copy = wide_store.fuel - wide_none.fuel;
+  const uint64_t array_copy = array_store.fuel - array_none.fuel;
+  EXPECT_GT(array_copy, static_cast<uint64_t>(gltang_opcode_cost(GLTANG_OP_ADOPT))) << "the array's copy was not paced: the comparison measures nothing";
+  EXPECT_EQ(instance_copy, array_copy);
+}
+
 TEST(ValueTypes, AValueTypeWithAFinalizerAndItsCopyAreEachFinalizedOnce) {
   Probe probe;
   Out o = run(USE "m = c.vcopy(8); a = [m, m]; m = null; a = null; c.collect(); c.finals();", probe, forced_torture());
@@ -1329,36 +1532,40 @@ TEST(ValueTypes, CompiledCodeStoresTheSameCopiesAsTheInterpreter) {
 }
 
 TEST(ValueTypes, AnOldDescriptorIsAReferenceTypeWithStrongSlotsAndNoFinalizer) {
-  Probe probe;
-  // Registered with the size of the descriptor before this story's members, and garbage where they would be.
-  GLTANG_TypeRegistry * r = nullptr;
-  ASSERT_EQ(gltang_type_registry_create(&r), GLTANG_OK);
-  GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
-  d.name = "old";
-  d.slot_count = 1;
-  d.byte_count = 8;
-  d.thread_safe = true;
-  d.size = offsetof(GLTANG_TypeDescriptor, copy_semantics);
-  d.copy_semantics = GLTANG_COPY_VALUE;
-  d.finalizer = finalize;
-  d.weak_slots = node_weak;
-  d.weak_slot_count = 2;
-  const GLTANG_Type * old = nullptr;
-  ASSERT_EQ(gltang_type_registry_add(r, &d, &old), GLTANG_OK);
-  static const GLTANG_Type * old_type = nullptr;
-  old_type = old;
-  Out o = run(USE "use o; m = o.old(); a = [m]; c.set(m, 0, c.node()); c.collect(); [c.same(a[0], m), c.get(m, 0) == null, c.finals()];", probe, Config(),
-              [&](Context & context, Probe &) {
-                ASSERT_EQ(gltang_execution_attach_types(context.execution, r), GLTANG_OK);
-                GLTANG_Library * lib = nullptr;
-                ASSERT_EQ(gltang_library_create("o", &lib), GLTANG_OK);
-                ASSERT_EQ(gltang_library_add_native(lib, "old", [](GLTANG_NativeCall * call, void *) { return make_tagged(call, old_type); }, nullptr), GLTANG_OK);
-                ASSERT_EQ(gltang_library_add_library(context.library(), lib), GLTANG_OK);
-                gltang_library_release(lib);
-              });
-  gltang_type_registry_release(r);
-  ASSERT_TRUE(o.finished) << o.described;
-  EXPECT_EQ(o.described, "[true, false, 0]");
+  // Registered with the size of the descriptor before this story's members (the guest calls' end) and before the guest
+  // calls' (story 6's end), with garbage where the new members would be: a reference type, strong slots, no finalizer.
+  const size_t sizes[] = {offsetof(GLTANG_TypeDescriptor, copy_semantics), offsetof(GLTANG_TypeDescriptor, resumable_ops)};
+  for (size_t size : sizes) {
+    Probe probe;
+    GLTANG_TypeRegistry * r = nullptr;
+    ASSERT_EQ(gltang_type_registry_create(&r), GLTANG_OK);
+    GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;
+    d.name = "old";
+    d.slot_count = 1;
+    d.byte_count = 8;
+    d.thread_safe = true;
+    d.size = size;
+    d.copy_semantics = GLTANG_COPY_VALUE;
+    d.finalizer = finalize;
+    d.weak_slots = node_weak;
+    d.weak_slot_count = 2;
+    const GLTANG_Type * old = nullptr;
+    ASSERT_EQ(gltang_type_registry_add(r, &d, &old), GLTANG_OK);
+    static const GLTANG_Type * old_type = nullptr;
+    old_type = old;
+    Out o = run(USE "use o; m = o.old(); a = [m]; c.set(m, 0, c.node()); c.collect(); [c.same(a[0], m), c.get(m, 0) == null, c.finals()];", probe, Config(),
+                [&](Context & context, Probe &) {
+                  ASSERT_EQ(gltang_execution_attach_types(context.execution, r), GLTANG_OK);
+                  GLTANG_Library * lib = nullptr;
+                  ASSERT_EQ(gltang_library_create("o", &lib), GLTANG_OK);
+                  ASSERT_EQ(gltang_library_add_native(lib, "old", [](GLTANG_NativeCall * call, void *) { return make_tagged(call, old_type); }, nullptr), GLTANG_OK);
+                  ASSERT_EQ(gltang_library_add_library(context.library(), lib), GLTANG_OK);
+                  gltang_library_release(lib);
+                });
+    gltang_type_registry_release(r);
+    ASSERT_TRUE(o.finished) << o.described;
+    EXPECT_EQ(o.described, "[true, false, 0]") << "size " << size;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,14 @@
+# 370 a refused weak store makes an object first
+# defect: a value a weak slot refuses still makes a cell before it is refused
+# caught by: the refused-store allocation count (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -796,6 +796,7 @@
+ static GLTANG_Result weak_slot_set(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Value v) {
+   GLTANG_Execution * exec = call->exec;
+   if (!weak_storable(v)) {
++    (void)gltang_vm_weak_cell_make(exec, custom_of(call, handle)->type, GLTANG_V_NULL, 0u); /* planted */
+     return GLTANG_ERR_INVALID;
+   }
+   const uint32_t flags = gltang_v_is_object(v) ? GLTANG_WEAK_FLAG_HAD_TARGET : 0u;

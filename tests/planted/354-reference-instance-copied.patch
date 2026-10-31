@@ -4,7 +4,7 @@
 #
 --- a/src/vm/vm_internal.h
 +++ b/src/vm/vm_internal.h
-@@ -857,7 +857,7 @@
+@@ -865,7 +865,7 @@
    }
    const uint32_t kind = *(const uint32_t *)(const void *)(uintptr_t)v;
    return kind == GLTANG_OBJ_ARRAY || kind == GLTANG_OBJ_MAP ||

@@ -1,0 +1,15 @@
+# 368 an array concatenation copies no instance of a value type
+# defect: the elements of `a + b` are copied by the container test, so a value type in either array is shared with the result
+# caught by: the slice-and-concatenation test (testCustom_collector)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -186,7 +186,7 @@
+   size_t n = (size_t)gltang_vm_array(gltang_vm_temp_at(exec, source))->length;
+   for (size_t i = 0; i < n; ++i) {
+     GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, source))->store.typed->slots[i];
+-    if (gltang_vm_is_copied(element)) {
++    if (gltang_vm_is_container(element)) { /* planted */
+       element = gltang_vm_deep_copy(exec, element);
+       if (element == GLTANG_V_UNWIND) {
+         *failure = GLTANG_V_UNWIND;

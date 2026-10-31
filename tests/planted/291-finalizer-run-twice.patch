@@ -4,7 +4,7 @@
 #
 --- a/src/vm/custom.c
 +++ b/src/vm/custom.c
-@@ -207,6 +207,7 @@
+@@ -208,6 +208,7 @@
    GLTANG_CustomObject * custom = payload;
    const GLTANG_Type * type = custom->type;
    type->descriptor.finalizer(type->descriptor.user, gltang_custom_bytes(custom), type->descriptor.byte_count);

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -807,7 +807,7 @@
+@@ -816,7 +816,7 @@
    if (is_failure(call, made)) {
      return failed_value(call, made);
    }

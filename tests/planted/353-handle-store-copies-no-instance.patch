@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -507,7 +507,7 @@
+@@ -508,7 +508,7 @@
  static size_t hold_stored_copy(GLTANG_NativeCall * call, GLTANG_Value value, GLTANG_Result * r) {
    GLTANG_Execution * exec = call->exec;
    size_t mark = gltang_vm_temp_mark(exec);

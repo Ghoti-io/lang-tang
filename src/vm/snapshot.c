@@ -1064,9 +1064,11 @@ GLTANG_Result gltang_snapshot_take(GLTANG_Execution * execution, GLTANG_Snapshot
     // The heap refuses any image while it holds an object of a type with a
     // weak spec (the cell of a weak slot, `lang-tang weak cell`), live or not
     // yet collected, before any hook has run: the refusal names the type of
-    // the first instance that made a cell. (Story 8 does not lift this.)
-    if (execution->handles && execution->handles->weak_owner && r == GRCORE_ERR_INVALID) {
-      execution->handles->snapshot_refused = execution->handles->weak_owner;
+    // the instance the oldest such cell was made for. A refusal for any other
+    // reason, with no cell in the heap, is not one. (Story 8 does not lift this.)
+    const GLTANG_Type * owner = r == GRCORE_ERR_INVALID ? gltang_vm_weak_cell_owner(execution) : NULL;
+    if (owner) {
+      execution->handles->snapshot_refused = owner;
       return GLTANG_ERR_UNSUPPORTED;
     }
     return from_core(r);

@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -846,7 +846,7 @@
+@@ -855,7 +855,7 @@
    if (gltang_type_weak_slot(custom->type, index)) {
      // Cleared only if it had a target and lost it: never set, emptied with null, or holding an immediate is not.
      const GLTANG_WeakCell * cell = weak_cell(custom, index);

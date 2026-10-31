@@ -1,0 +1,15 @@
+# 376 a snapshot refused by a cell names the oldest cell ever made
+# defect: the owner of the first record is named whether or not its cell is still in the heap, so a later cell's type is misnamed and a refusal with no cell is reported as one
+# caught by: the snapshot tests (a later cell's type; no cell left) (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -256,7 +256,7 @@
+   const GLTANG_HandleState * hs = exec->handles;
+   for (size_t i = 0; hs && i < hs->weak_cell_count; ++i) {
+     void * object = NULL;
+-    if (grheap_object_of_id(exec->heap, hs->weak_cells[i].id, &object) == GRHEAP_OK) {
++    if (true || grheap_object_of_id(exec->heap, hs->weak_cells[i].id, &object) == GRHEAP_OK) { /* planted */
+       return hs->weak_cells[i].owner;
+     }
+   }

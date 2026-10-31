@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -120,7 +120,7 @@
+@@ -121,7 +121,7 @@
      // The instances gltang_handle_custom_bytes pinned for this callback: the pointers it handed out end here.
      const size_t pin_base = hs->frames[call->frame_floor].pin_base;
      while (hs->pin_count > pin_base) {

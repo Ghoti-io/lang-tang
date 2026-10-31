@@ -534,6 +534,12 @@ typedef struct GLTANG_GuestRequest {
   GLTANG_Value args[GLTANG_GUEST_CALL_ARGS_MAX];
 } GLTANG_GuestRequest;
 
+/** @brief A weak cell the execution made: its stable ID (held weakly by the heap, so it is forgotten when the cell dies) and the type of the instance it was made for. */
+typedef struct GLTANG_WeakRecord {
+  uint64_t id;
+  const GLTANG_Type * owner;
+} GLTANG_WeakRecord;
+
 /** @brief What the handle API keeps for an execution (handle.c); made when a callback first asks for a handle. */
 typedef struct GLTANG_HandleState {
   GLTANG_HostScope * frames;    ///< Handle frames of the callbacks running, innermost last; a callback's own start at its `frame_floor`.
@@ -567,7 +573,9 @@ typedef struct GLTANG_HandleState {
   void ** pins;                           ///< Instances gltang_handle_custom_bytes pinned (grheap_pin), innermost callback's last; unpinned when the scope that pinned closes.
   size_t pin_count;
   size_t pin_capacity;
-  const GLTANG_Type * weak_owner;         ///< The type of the first instance that made a weak cell, or NULL: what a snapshot refused by a cell names (snapshot.c).
+  GLTANG_WeakRecord * weak_cells;         ///< Every weak cell made, by stable ID, with its instance's type: what a snapshot refused by a cell names (snapshot.c). Dead ones are dropped when it fills.
+  size_t weak_cell_count;
+  size_t weak_cell_capacity;
 } GLTANG_HandleState;
 
 struct GLTANG_Execution {
@@ -1159,6 +1167,9 @@ GLTANG_Value gltang_vm_custom_host_copy(GLTANG_Execution * exec, GLTANG_Value v,
  *   is the type of the instance the cell is for (snapshot.c names it when an image is refused).
  */
 GLTANG_Value gltang_vm_weak_cell_make(GLTANG_Execution * exec, const GLTANG_Type * owner, GLTANG_Value target, uint32_t flags);
+
+/** @brief The type of the instance of the oldest weak cell still in the heap (live or not yet collected), or NULL when none is. Not a GC point. */
+const GLTANG_Type * gltang_vm_weak_cell_owner(const GLTANG_Execution * exec);
 
 /**
  * @brief A binary operator or comparison with a custom operand, by the

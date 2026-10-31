@@ -501,9 +501,9 @@ GLTANG_Result gltang_handle_make_map(GLTANG_NativeCall * call, size_t capacity, 
 
 /**
  * The copy of `value` that is stored into a container (the language copies a
- * container it stores), held on the temporaries above the window until the
- * caller has stored it. Returns the mark to release to, or SIZE_MAX with the
- * callback's result set.
+ * container, and an instance of a value type, it stores), held on the
+ * temporaries above the window until the caller has stored it. Returns the
+ * mark to release to, or SIZE_MAX with the callback's result set.
  */
 static size_t hold_stored_copy(GLTANG_NativeCall * call, GLTANG_Value value, GLTANG_Result * r) {
   GLTANG_Execution * exec = call->exec;
@@ -511,6 +511,14 @@ static size_t hold_stored_copy(GLTANG_NativeCall * call, GLTANG_Value value, GLT
   GLTANG_Value copy = gltang_vm_op_adopt(exec, value);
   if (is_failure(call, copy)) {
     *r = failed_value(call, copy);
+    return SIZE_MAX;
+  }
+  if (copy != value && gltang_vm_is_error(copy)) {
+    // The copy failed with an error of its own (a value type's `copy` answered one, or no copy; a container or an
+    // instance past the depth limit). Nothing is stored, and the error is the callback's answer, as a guest store
+    // makes it the operation's value (ops.c); an error stored as it is was the source itself, and is not this.
+    gltang_call_return_error(call, gltang_vm_error_kind(copy));
+    *r = GLTANG_ERR_LIMIT;
     return SIZE_MAX;
   }
   if (!gltang_vm_temp_push(exec, copy)) {
@@ -1240,6 +1248,7 @@ void gltang_vm_handles_destroy(GLTANG_Execution * exec) {
   }
   gcu_allocator_free(exec->allocator, hs->owned_members);
   gcu_allocator_free(exec->allocator, hs->pins);   // every pin was let go when its scope closed
+  gcu_allocator_free(exec->allocator, hs->weak_cells);
   // Last: an instance's type lives in its registry, and the heap's objects are
   // unreachable by now. This runs from the execution's key destructor, before
   // the heap is destroyed (the context destroys its keys in reverse order of

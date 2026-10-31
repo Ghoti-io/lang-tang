@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -953,7 +953,8 @@
+@@ -962,7 +962,8 @@
    if (!custom || !out_hash) {
      return GLTANG_ERR_INVALID;
    }

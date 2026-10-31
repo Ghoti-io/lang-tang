@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -897,7 +897,7 @@
+@@ -906,7 +906,7 @@
      return GLTANG_ERR_INVALID;
    }
    const size_t size = custom->type->descriptor.byte_count;

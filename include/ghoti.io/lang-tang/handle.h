@@ -470,7 +470,17 @@ GLTANG_API GLTANG_Result gltang_handle_make_concat(GLTANG_NativeCall * call,
 GLTANG_API GLTANG_Result gltang_handle_make_array(
     GLTANG_NativeCall * call, size_t capacity, GLTANG_Handle * out);
 
-/** @brief Appends a copy of `element` to `array`. @may_gc */
+/**
+ * @brief Appends a copy of `element` to `array` (a container or an instance of
+ *   a value type is copied; anything else is the value itself).
+ *
+ * @may_gc
+ * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not valid or
+ *   not an array; ::GLTANG_ERR_LIMIT as for every constructor, and when the
+ *   copy fails with an error (as for ::gltang_handle_custom_slot_set): nothing
+ *   is appended, and the call's answer becomes that error unless the callback
+ *   answers otherwise.
+ */
 GLTANG_API GLTANG_Result gltang_handle_array_push(GLTANG_NativeCall * call,
     GLTANG_Handle array, GLTANG_Handle element);
 
@@ -480,7 +490,10 @@ GLTANG_API GLTANG_Result gltang_handle_make_map(
 
 /**
  * @brief Sets `key` in `map` to a copy of `value`; a key set twice keeps its
- *   first position and takes the last value.
+ *   first position and takes the last value. A copy that fails with an error
+ *   (as for ::gltang_handle_custom_slot_set) sets nothing, makes the error the
+ *   call's answer unless the callback answers otherwise, and is
+ *   ::GLTANG_ERR_LIMIT.
  *
  * @may_gc
  * @param key UTF-8, `key_length` bytes.
@@ -597,7 +610,11 @@ GLTANG_API GLTANG_Result gltang_handle_custom_slot_get(GLTANG_NativeCall * call,
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not valid or
  *   not a custom value, an index past its slots, or a value a weak slot does
  *   not accept (a number, an array, a map, an error, an instance of a value
- *   type: nothing is changed then); ::GLTANG_ERR_LIMIT as for every constructor.
+ *   type: nothing is changed then); ::GLTANG_ERR_LIMIT as for every
+ *   constructor, and when the copy of the value fails with an error (a value
+ *   type's `copy` answered one, or no copy; a container or an instance past
+ *   the depth limit): nothing is stored, and the call's answer becomes that
+ *   error unless the callback answers otherwise.
  */
 GLTANG_API GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call,
     GLTANG_Handle handle, size_t index, GLTANG_Handle value);
@@ -633,8 +650,8 @@ GLTANG_API GLTANG_Result gltang_handle_custom_slot_cleared(
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a handle that is not a custom
  *   value or a NULL output; ::GLTANG_ERR_LIMIT when the instance cannot be
  *   pinned (it has the most pins an object takes, or the pin's memory was
- *   refused). A type with no raw bytes answers its address with a size of 0
- *   and pins nothing.
+ *   refused). A type with no raw bytes answers a pointer to its (empty) bytes
+ *   with a size of 0, and pins nothing.
  */
 GLTANG_API GLTANG_Result gltang_handle_custom_bytes(GLTANG_NativeCall * call,
     GLTANG_Handle handle, void ** out_bytes, size_t * out_size);
@@ -642,7 +659,8 @@ GLTANG_API GLTANG_Result gltang_handle_custom_bytes(GLTANG_NativeCall * call,
 /**
  * @brief A custom value's stable ID: a number, from 1, issued on first request
  *   and never reused, that names the instance whatever the collector does with
- *   its address (AD-12). It holds the instance weakly: once the instance dies,
+ *   its address (AD-12). IDs are the execution's own (each has its heap): an
+ *   ID from another execution names nothing here, or another instance. It holds the instance weakly: once the instance dies,
  *   ::gltang_handle_custom_from_id refuses it. A collection forgets the ID of
  *   an instance before its finalizer runs.
  *

@@ -1,0 +1,15 @@
+# 369 a slice copies no instance of a value type
+# defect: the elements of `a[i:j]` are copied by the container test, so a value type in the slice is shared with the source
+# caught by: the slice-and-concatenation test (testCustom_collector)
+#
+--- a/src/vm/ops.c
++++ b/src/vm/ops.c
+@@ -854,7 +854,7 @@
+   int64_t i = start;
+   for (int64_t k = 0; k < count && st == GLTANG_ST_OK; ++k) {
+     GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, mark))->store.typed->slots[i];
+-    if (gltang_vm_is_copied(element)) {
++    if (gltang_vm_is_container(element)) { /* planted */
+       GLTANG_Value copy = gltang_vm_deep_copy(exec, element);
+       if (copy == GLTANG_V_UNWIND) {
+         st = GLTANG_ST_UNWIND;

@@ -1,0 +1,15 @@
+# 374 a store through an existing cell bypasses the barrier
+# defect: the second store into a weak slot writes the cell's target with a plain assignment, which barrier-verify sees
+# caught by: barrier-verify in the forced torture arm of the never-set test (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -803,7 +803,7 @@
+   GLTANG_WeakCell * cell = weak_cell(holder, index);
+   if (cell) {
+     // Null empties it: "never set" again, not "cleared".
+-    (void)grheap_store_word(exec->heap, cell, &cell->target, v);
++    cell->target = v; /* planted */
+     cell->flags = flags;
+     return GLTANG_OK;
+   }

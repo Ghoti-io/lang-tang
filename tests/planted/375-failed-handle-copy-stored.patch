@@ -1,0 +1,15 @@
+# 375 the handle API stores a failed copy and answers OK
+# defect: a value type whose `copy` fails is stored as its error value by slot_set, array_push and map_set, which report success
+# caught by: the failed-copy test of the handle API (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -513,7 +513,7 @@
+     *r = failed_value(call, copy);
+     return SIZE_MAX;
+   }
+-  if (copy != value && gltang_vm_is_error(copy)) {
++  if (false && copy != value && gltang_vm_is_error(copy)) { /* planted */
+     // The copy failed with an error of its own (a value type's `copy` answered one, or no copy; a container or an
+     // instance past the depth limit). Nothing is stored, and the error is the callback's answer, as a guest store
+     // makes it the operation's value (ops.c); an error stored as it is was the source itself, and is not this.
