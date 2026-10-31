@@ -1764,7 +1764,10 @@ static bool bench_wget(GLTANG_NativeCall * call, void * user) {
   return true;
 }
 
-/* nodes(k, weak): an array of k nodes, each with its weak slot 0 set to one shared target when `weak` is true. */
+/*
+ * nodes(k, weak): an array of k nodes, each with its weak slot 0 set to one shared target when `weak` is true, and the
+ * target last, so that it stays reachable and every cell stays live through the collections.
+ */
 static bool bench_nodes(GLTANG_NativeCall * call, void * user) {
   (void)user;
   GLTANG_Handle array, target;
@@ -1784,6 +1787,9 @@ static bool bench_nodes(GLTANG_NativeCall * call, void * user) {
     if (gltang_handle_array_push(call, array, n) != GLTANG_OK || gltang_handle_pop_frame(call) != GLTANG_OK) {
       return false;
     }
+  }
+  if (gltang_handle_array_push(call, array, target) != GLTANG_OK) {
+    return false;
   }
   gltang_call_return_handle(call, array);
   return true;
@@ -1872,7 +1878,13 @@ static uint64_t collector_case(const char * source, int64_t expected, Setup setu
 }
 
 static uint64_t collector_make_final_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; m = null; for (i = 0; i < 1000; i += 1) { m = c.res(i); } c.tag(m);", 999, setup_collector, iterations, elapsed);
+  const uint64_t before = bench_finalized;
+  uint64_t sink = collector_case("use c; m = null; for (i = 0; i < 1000; i += 1) { m = c.res(i); } c.tag(m);", 999, setup_collector, iterations, elapsed);
+  /* Every instance is finalized by the time its engine is closed: a finalizer that did not run would not be measured. */
+  if (bench_finalized - before != iterations * 1000u) {
+    setup_failed("a finalizer that did not run once per instance");
+  }
+  return sink;
 }
 
 static uint64_t collector_weak_run(uint64_t iterations, double * elapsed) {
@@ -1894,16 +1906,21 @@ static void setup_collector_jit_on(GLTANG_Execution * execution) {
 }
 
 static uint64_t collector_value_store_compiled_run(uint64_t iterations, double * elapsed) {
-  return collector_case(VALUE_STORE_SOURCE, 1000, setup_collector_jit_on, iterations, elapsed);
+  uint64_t sink = collector_case(VALUE_STORE_SOURCE, 1000, setup_collector_jit_on, iterations, elapsed);
+  /* The row is the compiled store only if compiled code ran, as every compiled row of this harness requires. */
+  if (last_jit_stats.functions_compiled == 0 || last_jit_stats.entries == 0) {
+    setup_failed("a compiled row that never entered compiled code");
+  }
+  return sink;
 }
 #endif
 
 static uint64_t collector_collect_weak_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; keep = c.nodes(1000, true); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1000, setup_collector, iterations, elapsed);
+  return collector_case("use c; keep = c.nodes(1000, true); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
 }
 
 static uint64_t collector_collect_plain_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; keep = c.nodes(1000, false); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1000, setup_collector, iterations, elapsed);
+  return collector_case("use c; keep = c.nodes(1000, false); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
 }
 
 static uint64_t collector_id_run(uint64_t iterations, double * elapsed) {
