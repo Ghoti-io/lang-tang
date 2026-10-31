@@ -1,0 +1,15 @@
+# 359 registration accepts a value type with a finalizer and no `copy`
+# defect: the default copy would duplicate what the bytes name, and the finalizer would release it twice
+# caught by: the registration refusals (testCustom_collector)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -259,7 +259,7 @@
+     return GLTANG_ERR_INVALID;
+   }
+   const bool value_type = copy.copy_semantics == GLTANG_COPY_VALUE;
+-  if ((copy.copy && !value_type) || (value_type && copy.finalizer && !copy.copy)) {
++  if ((copy.copy && !value_type) || (value_type && copy.finalizer && !copy.copy && false) /* planted */) {
+     return GLTANG_ERR_INVALID;
+   }
+   if (copy.weak_slot_count && !copy.weak_slots) {

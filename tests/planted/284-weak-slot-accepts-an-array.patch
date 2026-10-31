@@ -1,0 +1,14 @@
+# 284 a weak slot accepts an array
+# defect: an array is stored in a weak slot, where it is a value nothing else holds (a container is copied when stored)
+# caught by: the every-kind test of weak slots (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -771,6 +771,7 @@
+   }
+   switch ((GLTANG_ObjectKind)gltang_object_kind(v)) {
+     case GLTANG_OBJ_STRING:
++    case GLTANG_OBJ_ARRAY: /* planted */
+     case GLTANG_OBJ_LIBRARY:
+     case GLTANG_OBJ_NATIVE:
+     case GLTANG_OBJ_TEMPLATE:

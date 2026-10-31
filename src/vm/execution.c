@@ -532,6 +532,13 @@ static void release_parts(GLTANG_Execution * exec) {
   exec->program = NULL;
 }
 
+/*
+ * The context destroys its keys in reverse order of registration, so this runs before the heap's destructor, which
+ * runs the destroy hook of every object left in it: the finalizers of host-defined instances (custom.c) run after the
+ * execution has released its type registries here. Each such instance holds a reference to its registry of its own
+ * for that, so nothing here forces a collection first (which could not reach a pinned or conservatively found object
+ * anyway).
+ */
 static void key_destroy(GRCORE_Context * context, void * value) {
   (void)context;
   GLTANG_Execution * exec = value;

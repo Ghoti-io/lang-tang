@@ -1,0 +1,15 @@
+# 287 the bytes pointer's pin is not let go when the callback's scope closes
+# defect: scope close forgets its pins without unpinning them, so the instance stays pinned for ever
+# caught by: the pin count after the bytes-pointer callbacks (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -120,7 +120,7 @@
+     // The instances gltang_handle_custom_bytes pinned for this callback: the pointers it handed out end here.
+     const size_t pin_base = hs->frames[call->frame_floor].pin_base;
+     while (hs->pin_count > pin_base) {
+-      (void)grheap_unpin(exec->heap, hs->pins[--hs->pin_count]);
++      --hs->pin_count; /* planted */
+     }
+     gltang_vm_temp_release(exec, hs->frames[call->frame_floor].base);
+     hs->frame_count = call->frame_floor;

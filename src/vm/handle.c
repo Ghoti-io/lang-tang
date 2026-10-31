@@ -44,6 +44,7 @@
 #include <ghoti.io/lang-tang/macros.h>
 
 #include <string.h>
+#include <ghoti.io/runtime-heap/id.h>
 #include "../library/continuations.h"
 #include "vm_internal.h"
 
@@ -91,6 +92,7 @@ static bool frame_push(GLTANG_Execution * exec) {
   f->serial = ++hs->scope_serial;
   f->base = exec->temp_count;
   f->count = 0;
+  f->pin_base = hs->pin_count;
   return true;
 }
 
@@ -116,6 +118,11 @@ void gltang_vm_scope_close(GLTANG_NativeCall * call) {
   GLTANG_Execution * exec = call->exec;
   GLTANG_HandleState * hs = exec->handles;
   if (hs->frame_count > call->frame_floor) {
+    // The instances gltang_handle_custom_bytes pinned for this callback: the pointers it handed out end here.
+    const size_t pin_base = hs->frames[call->frame_floor].pin_base;
+    while (hs->pin_count > pin_base) {
+      (void)grheap_unpin(exec->heap, hs->pins[--hs->pin_count]);
+    }
     gltang_vm_temp_release(exec, hs->frames[call->frame_floor].base);
     hs->frame_count = call->frame_floor;
   }
@@ -729,17 +736,81 @@ const GLTANG_Type * gltang_handle_custom_type(const GLTANG_NativeCall * call, GL
   return custom ? custom->type : NULL;
 }
 
+/** The cell of weak slot `index`, or NULL while it was never stored into. */
+static GLTANG_WeakCell * weak_cell(const GLTANG_CustomObject * custom, size_t index) {
+  GLTANG_Value cell = custom->slots[index];
+  return cell ? (GLTANG_WeakCell *)gltang_object(cell) : NULL;
+}
+
 GLTANG_Result gltang_handle_custom_slot_get(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Handle * out) {
   const GLTANG_CustomObject * custom = custom_of(call, handle);
   if (!custom || !out || index >= custom->slot_count) {
     return GLTANG_ERR_INVALID;
   }
+  GLTANG_Value v = custom->slots[index];
+  if (gltang_type_weak_slot(custom->type, index)) {
+    // A weak slot holds its cell: the value is the cell's target, null when it was never set or was cleared.
+    const GLTANG_WeakCell * cell = weak_cell(custom, index);
+    v = cell ? cell->target : GLTANG_V_NULL;
+  }
   GLTANG_Handle h;
-  GLTANG_Result r = push_handle(call, custom->slots[index], &h);
+  GLTANG_Result r = push_handle(call, v, &h);
   if (r == GLTANG_OK) {
     *out = h;
   }
   return r;
+}
+
+/**
+ * Whether a weak slot may hold `v`: a value that is never copied or boxed when it is stored, so that the slot's
+ * target is the very value the host stored and something else can hold it (type.h, "The collector model").
+ */
+static bool weak_storable(GLTANG_Value v) {
+  if (!gltang_v_is_object(v)) {
+    // Null, a boolean or a function; an integer is a number, refused whether it is inline or boxed.
+    return !gltang_v_is_small_int(v);
+  }
+  switch ((GLTANG_ObjectKind)gltang_object_kind(v)) {
+    case GLTANG_OBJ_STRING:
+    case GLTANG_OBJ_LIBRARY:
+    case GLTANG_OBJ_NATIVE:
+    case GLTANG_OBJ_TEMPLATE:
+    case GLTANG_OBJ_RNG:
+      return true;
+    case GLTANG_OBJ_CUSTOM:
+      return (gltang_vm_custom(v)->flags & GLTANG_CUSTOM_FLAG_VALUE) == 0;
+    default:
+      return false;
+  }
+}
+
+/** Stores `v` into weak slot `index` of the instance `handle` names: through its cell, made at the first non-null store. */
+static GLTANG_Result weak_slot_set(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Value v) {
+  GLTANG_Execution * exec = call->exec;
+  if (!weak_storable(v)) {
+    return GLTANG_ERR_INVALID;
+  }
+  const uint32_t flags = gltang_v_is_object(v) ? GLTANG_WEAK_FLAG_HAD_TARGET : 0u;
+  GLTANG_CustomObject * holder = custom_of(call, handle);
+  GLTANG_WeakCell * cell = weak_cell(holder, index);
+  if (cell) {
+    // Null empties it: "never set" again, not "cleared".
+    (void)grheap_store_word(exec->heap, cell, &cell->target, v);
+    cell->flags = flags;
+    return GLTANG_OK;
+  }
+  if (v == GLTANG_V_NULL) {
+    return GLTANG_OK;   // never set, and still not: no cell is made for it
+  }
+  // The first store makes the cell, a GC point: the value is held by the cell's maker, and the instance is read again
+  // from its handle after it.
+  GLTANG_Value made = gltang_vm_weak_cell_make(exec, holder->type, v, flags);
+  if (is_failure(call, made)) {
+    return failed_value(call, made);
+  }
+  holder = custom_of(call, handle);
+  (void)grheap_store_word(exec->heap, holder, &holder->slots[index], made);
+  return GLTANG_OK;
 }
 
 GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, GLTANG_Handle value) {
@@ -749,8 +820,12 @@ GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call, GLTANG_Han
   if (!custom || !ok_v || index >= custom->slot_count) {
     return GLTANG_ERR_INVALID;
   }
-  // A container is copied as every store of one is; the copy is a GC point, so
-  // the instance is read again from its handle after it.
+  if (gltang_type_weak_slot(custom->type, index)) {
+    return weak_slot_set(call, handle, index, v);
+  }
+  // A container, or an instance of a value type, is copied as every store of
+  // one is; the copy is a GC point, so the instance is read again from its
+  // handle after it.
   GLTANG_Result r;
   size_t mark = hold_stored_copy(call, v, &r);
   if (mark == SIZE_MAX) {
@@ -760,6 +835,21 @@ GLTANG_Result gltang_handle_custom_slot_set(GLTANG_NativeCall * call, GLTANG_Han
   // A slot is traced, so the store goes through the barrier (AD-11).
   (void)grheap_store_word(call->exec->heap, holder, &holder->slots[index], gltang_vm_temp_at(call->exec, mark));
   gltang_vm_temp_release(call->exec, mark);
+  return GLTANG_OK;
+}
+
+GLTANG_Result gltang_handle_custom_slot_cleared(const GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index, bool * out_cleared) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || !out_cleared || index >= custom->slot_count) {
+    return GLTANG_ERR_INVALID;
+  }
+  bool cleared = false;
+  if (gltang_type_weak_slot(custom->type, index)) {
+    // Cleared only if it had a target and lost it: never set, emptied with null, or holding an immediate is not.
+    const GLTANG_WeakCell * cell = weak_cell(custom, index);
+    cleared = cell && (cell->flags & GLTANG_WEAK_FLAG_HAD_TARGET) && cell->target == GLTANG_V_NULL;
+  }
+  *out_cleared = cleared;
   return GLTANG_OK;
 }
 
@@ -792,6 +882,99 @@ GLTANG_Result gltang_handle_custom_write_bytes(GLTANG_NativeCall * call, GLTANG_
   return GLTANG_OK;
 }
 
+/** Whether `object` is one of the operands of the callback: the bracket's conservative segment pins those. */
+static bool is_operand(const GLTANG_NativeCall * call, const void * object) {
+  for (size_t i = 0; i < call->argc; ++i) {
+    if (call->args[i] == gltang_value_of(object)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+GLTANG_Result gltang_handle_custom_bytes(GLTANG_NativeCall * call, GLTANG_Handle handle, void ** out_bytes, size_t * out_size) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || !out_bytes || !out_size) {
+    return GLTANG_ERR_INVALID;
+  }
+  const size_t size = custom->type->descriptor.byte_count;
+  if (size && !is_operand(call, custom)) {
+    // An instance the callback reached on its own (a slot, a container, one it made) is pinned for the rest of the
+    // callback, once however many times it is asked for, and let go when the callback's scope closes. An operand is
+    // pinned already, by the bracket's segment, and costs nothing here.
+    GLTANG_Execution * exec = call->exec;
+    GLTANG_HandleState * hs = exec->handles;
+    const size_t pin_base = hs->frames[call->frame_floor].pin_base;
+    bool pinned = false;
+    for (size_t i = pin_base; i < hs->pin_count && !pinned; ++i) {
+      pinned = hs->pins[i] == (void *)custom;
+    }
+    if (!pinned) {
+      if (hs->pin_count == hs->pin_capacity) {
+        size_t grown = hs->pin_capacity ? hs->pin_capacity * 2u : 8u;
+        void ** bigger = gcu_allocator_realloc(exec->allocator, hs->pins, grown * sizeof(*bigger));
+        if (!bigger) {
+          return GLTANG_ERR_LIMIT;
+        }
+        hs->pins = bigger;
+        hs->pin_capacity = grown;
+      }
+      if (grheap_pin(exec->heap, custom) != GRHEAP_OK) {
+        return GLTANG_ERR_LIMIT;   // the object's pin count is full, or the pin table's memory was refused
+      }
+      hs->pins[hs->pin_count++] = custom;
+    }
+  }
+  *out_bytes = gltang_custom_bytes(custom);
+  *out_size = size;
+  return GLTANG_OK;
+}
+
+/** The heap's answer as the handle API's. */
+static GLTANG_Result from_heap(GRHEAP_Result r) {
+  switch (r) {
+    case GRHEAP_OK: return GLTANG_OK;
+    case GRHEAP_ERR_LIMIT: return GLTANG_ERR_LIMIT;
+    case GRHEAP_ERR_OOM: return GLTANG_ERR_OOM;
+    default: return GLTANG_ERR_INVALID;
+  }
+}
+
+GLTANG_Result gltang_handle_custom_id(GLTANG_NativeCall * call, GLTANG_Handle handle, uint64_t * out_id) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || !out_id) {
+    return GLTANG_ERR_INVALID;
+  }
+  // The heap's stable ID (AD-12): never the address, which a collector may change.
+  return from_heap(grheap_id_of(call->exec->heap, custom, out_id));
+}
+
+GLTANG_Result gltang_handle_custom_identity_hash(GLTANG_NativeCall * call, GLTANG_Handle handle, uint64_t * out_hash) {
+  GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || !out_hash) {
+    return GLTANG_ERR_INVALID;
+  }
+  return from_heap(grheap_identity_hash(call->exec->heap, custom, out_hash));
+}
+
+GLTANG_Result gltang_handle_custom_from_id(GLTANG_NativeCall * call, uint64_t id, GLTANG_Handle * out) {
+  if (!call || !out) {
+    return GLTANG_ERR_INVALID;
+  }
+  void * object = NULL;
+  // An ID never issued, or whose object is dead (the heap forgets it when it frees the object), is refused; so is an
+  // ID of an object that is not an instance (the heap issues IDs to whoever asks).
+  if (grheap_object_of_id(call->exec->heap, id, &object) != GRHEAP_OK || gltang_object_kind(gltang_value_of(object)) != GLTANG_OBJ_CUSTOM) {
+    return GLTANG_ERR_INVALID;
+  }
+  GLTANG_Handle h;
+  GLTANG_Result r = push_handle(call, gltang_value_of(object), &h);
+  if (r == GLTANG_OK) {
+    *out = h;
+  }
+  return r;
+}
+
 GLTANG_Result gltang_handle_custom_set_error(GLTANG_NativeCall * call, GLTANG_Handle handle, bool is_error) {
   GLTANG_CustomObject * custom = custom_of(call, handle);
   if (!custom) {
@@ -817,6 +1000,15 @@ void * gltang_vm_test_handle_object(const GLTANG_NativeCall * call, GLTANG_Handl
   bool ok;
   GLTANG_Value v = gltang_vm_handle_value(call, handle, &ok);
   return ok && gltang_v_is_object(v) ? gltang_object(v) : NULL;
+}
+
+/* For the tests only; declared in vm/test_hooks.h. */
+void * gltang_vm_test_weak_cell(const GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index) {
+  const GLTANG_CustomObject * custom = custom_of(call, handle);
+  if (!custom || index >= custom->slot_count || !gltang_type_weak_slot(custom->type, index)) {
+    return NULL;
+  }
+  return weak_cell(custom, index);
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,8 +1239,14 @@ void gltang_vm_handles_destroy(GLTANG_Execution * exec) {
     gcu_allocator_free(exec->allocator, hs->owned_members[i]);
   }
   gcu_allocator_free(exec->allocator, hs->owned_members);
+  gcu_allocator_free(exec->allocator, hs->pins);   // every pin was let go when its scope closed
   // Last: an instance's type lives in its registry, and the heap's objects are
-  // gone or unreachable by now.
+  // unreachable by now. This runs from the execution's key destructor, before
+  // the heap is destroyed (the context destroys its keys in reverse order of
+  // registration), so the destroy hooks of the instances still in the heap run
+  // after these references are gone: an instance of a type with a finalizer
+  // holds a reference of its own (custom.c, gltang_vm_make_custom), which is
+  // what keeps its registry for the hook.
   for (size_t i = 0; i < hs->registry_count; ++i) {
     gltang_type_registry_release(hs->registries[i]);
   }

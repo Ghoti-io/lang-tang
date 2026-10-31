@@ -842,7 +842,7 @@ endif
 # one patch from tests/planted/ at a time, and requires the test named for it
 # to fail and, with the patch out, to pass. Nothing in this tree is changed.
 # `make test` runs the quick cases (about a minute); the two torture cases are
-# part of `make test-torture`; `make check-planted` runs the hundred and eighty-six that need neither a relocation heap nor ThreadSanitizer (the relocation cases, 13, 14, 15, 20, 27, 46, 117 and 168, need a relocation heap and run in the relocation arm).
+# part of `make test-torture`; `make check-planted` runs the hundred and eighty-six that need neither a relocation heap nor ThreadSanitizer (the relocation cases, 13, 14, 15, 20, 27, 46, 117, 168, 285, 286 and 360, need a relocation heap and run in the relocation arm).
 ####################################################################
 
 PLANTED_ENV = PLANTED_JIT="$(JIT)" PLANTED_PREFIX="$(PREFIX)" PLANTED_LIBDIR="$(LIB_INSTALL_PATH)/$(SUITE)" PKG_CONFIG_PATH="$(PKG_CONFIG_PATH_ENV)"
@@ -856,7 +856,7 @@ ifeq ($(OS_NAME), Windows)
 check-planted-quick check-planted-slow check-planted check-planted-selftest: ## Skipped on Windows
 	@printf '%s: skipped on Windows (the planted defects need patch and the ctang oracle, which a Windows build has neither of)\n' "$@"
 else
-check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16, 17, 19, 21 to 26, 28 to 45, 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 267, 269 to 277 and 300 to 335 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots, the three of the float bits channel (32 and 33 invisible in the text of a float, 34 a NaN that prints as `nan`), the floats carried raw, the seventeen of float and division operations compiled, the host-described values, handles, host context, custom kind, the template operations compiled, the bench's template policy, and the position written only at a poll and the cheaper entry into compiled code of spec-template-compiled story 4b, story 4d's fast paths of a text, a short string's print and a map's attribute, and story 4g's print, concatenation and cast to string of a raw float, and the iteration, calls, casts, truthiness, print and to-string, error mark and attributes of built-in kinds of host-defined types of spec-tang-host-extensibility story 6, and the guest calls of host callbacks of story 9)
+check-planted-quick: ## Planted defects 03 to 09, 11, 12, 16, 17, 19, 21 to 26, 28 to 45, 47 to 116, 118 to 132, 134 to 167, 169 to 177 and 179 to 267, 269 to 284, 287 to 339, 341 to 359 and 361 to 367 (phase shuffle, native gate, frame observer, oracle, the JIT, its calls and its library calls, the two of snapshots, the three of the float bits channel (32 and 33 invisible in the text of a float, 34 a NaN that prints as `nan`), the floats carried raw, the seventeen of float and division operations compiled, the host-described values, handles, host context, custom kind, the template operations compiled, the bench's template policy, and the position written only at a poll and the cheaper entry into compiled code of spec-template-compiled story 4b, story 4d's fast paths of a text, a short string's print and a map's attribute, and story 4g's print, concatenation and cast to string of a raw float, and the iteration, calls, casts, truthiness, print and to-string, error mark and attributes of built-in kinds of host-defined types of spec-tang-host-extensibility story 6, and the guest calls of host callbacks of story 9, and the collector model of host types of story 7)
 	@$(PLANTED_ENV) tools/check-planted.sh --quick
 
 check-planted-slow: ## Planted defects 01 and 02 (missing root, missing gc_store) under GC torture, and the script's own self-test
@@ -876,7 +876,7 @@ endif
 check-planted-selftest: ## The script fails on a patch that matches nothing and on one that breaks nothing
 	@$(PLANTED_ENV) tools/check-planted.sh --selftest
 
-check-planted-relocate: ## Planted defects 13, 14, 15, 20, 27, 46, 117 and 168 (a reference visited and not updated, or not pinned), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
+check-planted-relocate: ## Planted defects 13, 14, 15, 20, 27, 46, 117, 168, 285, 286 and 360 (a reference visited and not updated, or not pinned, or an address taken for an identity), caught by relocation and by nothing else (needs RELOCATE_PREFIX)
 ifndef RELOCATE_PREFIX
 	@printf 'check-planted-relocate: RELOCATE_PREFIX is needed (the prefix of a runtime-heap built with RELOCATE=yes)\n' >&2; exit 1
 else
@@ -935,7 +935,7 @@ endif
 #   under torture an allocation also collects, which only makes it slower.
 TORTURE_EXCLUDED :=
 TORTURE_SUITES := $(filter-out $(TORTURE_EXCLUDED),$(TEST_NAMES))
-TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks testHost_context testCustom testCustom_ops testCustom_reentry testJit_templates
+TORTURE_BOUNDED := testExecute_simple testExecute_complex testEngine testCompile testLibrary testRandom testErrors testTemplate testGen testObserver testNative_gate testExec_corpus testJit_calls testNative_calls testHost_values testHandles testHost_callbacks testHost_context testCustom testCustom_ops testCustom_reentry testCustom_collector testJit_templates
 
 # With the JIT built, `make test` is two arms. The JIT arm is everything below,
 # and then the same unit suites once more with every execution tiering up at

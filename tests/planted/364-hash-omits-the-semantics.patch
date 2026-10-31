@@ -1,0 +1,20 @@
+# 364 the table hash leaves out the copy semantics
+# defect: a value type and the same reference type hash the same
+# caught by: the table-hash test (testCustom_collector)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -172,12 +172,11 @@
+     h = fnv_u64(h, t->resumable);
+     h = gltang_continuations_hash(h, t->continuations, t->continuation_count);
+   }
+-  if (t->value_type || t->finalizable || t->weak_count) {
++  if (t->finalizable || t->weak_count) { /* planted */
+     // The collector's members, likewise only when declared: the semantics, whether there is a finalizer (its
+     // address is not a name), and each weak slot's index in increasing order. A `copy` is an operation, so it is in
+     // `operations` above.
+     h = fnv_u64(h, UINT64_C(0x636f6c6c));  // "coll": keeps this run of numbers apart from the guest calls'
+-    h = fnv_u64(h, t->value_type ? 1u : 0u);
+     h = fnv_u64(h, t->finalizable ? 1u : 0u);
+     h = fnv_u64(h, t->weak_count);
+     for (uint32_t i = 0; i < t->descriptor.slot_count; ++i) {

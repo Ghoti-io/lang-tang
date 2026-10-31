@@ -1,0 +1,17 @@
+# 356 the default copy leaves the raw bytes out
+# defect: the copy's raw bytes are zero
+# caught by: the default-copy test (testCustom_collector)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -446,9 +446,7 @@
+     // Plain data, and a flag in the header: copied as they are, with no barrier.
+     GLTANG_CustomObject * source = gltang_vm_custom(gltang_vm_temp_at(exec, mark));
+     GLTANG_CustomObject * target = gltang_vm_custom(gltang_vm_temp_at(exec, mark + 1u));
+-    if (type->descriptor.byte_count) {
+-      memcpy(gltang_custom_bytes(target), gltang_custom_bytes(source), type->descriptor.byte_count);
+-    }
++    /* planted: the bytes are not copied */
+     target->flags = (uint16_t)(target->flags | (source->flags & GLTANG_CUSTOM_FLAG_ERROR));
+   }
+   copy = gltang_vm_temp_at(exec, mark + 1u);

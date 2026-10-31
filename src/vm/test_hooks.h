@@ -143,6 +143,21 @@ GLTANG_Result gltang_vm_test_add_native(GLTANG_Library * library, const char * n
  */
 void * gltang_vm_test_handle_object(const GLTANG_NativeCall * call, GLTANG_Handle handle);
 
+/**
+ * The cell of weak slot `index` of the instance `handle` names (vm_internal.h, GLTANG_WeakCell), or NULL when
+ * the slot is not weak or was never stored into: the collector tests watch its life by its stable ID.
+ */
+void * gltang_vm_test_weak_cell(const GLTANG_NativeCall * call, GLTANG_Handle handle, size_t index);
+
+/**
+ * How many type registries the process has freed: a finalizer reads it to see that its registry was not freed
+ * before it ran (the collector model's teardown order).
+ */
+uint64_t gltang_vm_test_registries_freed(void);
+
+/** How many times the destroy hook of an instance of a type with a finalizer has run in the process. */
+uint64_t gltang_vm_test_custom_destroys(void);
+
 #ifdef __cplusplus
 }
 #endif

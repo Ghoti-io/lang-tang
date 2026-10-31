@@ -1,0 +1,25 @@
+# 366 every instance is made with the finalizable heap type
+# defect: an instance of a type that declares nothing new has a destroy hook to run when it dies
+# caught by: the declared-nothing counting test (no destroy hook run) (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -171,7 +171,7 @@
+   size_t bytes = sizeof(GLTANG_CustomObject) + (size_t)slots * sizeof(GLTANG_Value) + (size_t)type->descriptor.byte_count;
+   void * object;
+   // A type with a finalizer has the heap type whose destroy hook runs it; any other has none, and costs nothing for it.
+-  GLTANG_Status st = gltang_vm_alloc(exec, type->finalizable ? &gltang_type_custom_final : &gltang_type_custom, bytes, &object);
++  GLTANG_Status st = gltang_vm_alloc(exec, &gltang_type_custom_final, bytes, &object); /* planted */
+   if (st != GLTANG_ST_OK) {
+     return gltang_vm_failure_value(exec, st);
+   }
+@@ -206,6 +206,9 @@
+   // touched, and nothing is allocated in the heap. The instance's ID is already forgotten.
+   GLTANG_CustomObject * custom = payload;
+   const GLTANG_Type * type = custom->type;
++  if (!type->finalizable) {
++    return;
++  }
+   type->descriptor.finalizer(type->descriptor.user, gltang_custom_bytes(custom), type->descriptor.byte_count);
+   // Last: the registry holds the type, its descriptor and the module the finalizer is in. This can be the last
+   // reference, which frees the registry with the process allocator it was made with.

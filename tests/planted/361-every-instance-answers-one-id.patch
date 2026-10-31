@@ -1,0 +1,17 @@
+# 361 every instance answers the same ID
+# defect: an ID is issued twice: two instances cannot be told apart by it
+# caught by: the identity test (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -945,7 +945,9 @@
+     return GLTANG_ERR_INVALID;
+   }
+   // The heap's stable ID (AD-12): never the address, which a collector may change.
+-  return from_heap(grheap_id_of(call->exec->heap, custom, out_id));
++  GLTANG_Result r = from_heap(grheap_id_of(call->exec->heap, custom, out_id));
++  *out_id = 1; /* planted */
++  return r;
+ }
+ 
+ GLTANG_Result gltang_handle_custom_identity_hash(GLTANG_NativeCall * call, GLTANG_Handle handle, uint64_t * out_hash) {

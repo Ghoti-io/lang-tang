@@ -354,7 +354,12 @@ static GRJIT_NativeResult thunk_map(void * context, uint64_t execution, uint64_t
   return literal_made(exec, gltang_vm_map_new(exec, (size_t)count));
 }
 
-/** `ADOPT` of a container (compiled code tests that it is one: of anything else `ADOPT` does nothing, and calls nothing): the interpreter's deep copy, which paces. */
+/**
+ * `ADOPT` of a container or of an instance of a value type (compiled code tests that it is one: of anything else
+ * `ADOPT` does nothing, and calls nothing): the interpreter's deep copy, which paces, and which for an instance may run
+ * its type's `copy` (a callback that cannot ask for a guest call, so nothing here suspends). Given an instance of a
+ * reference type, the copy answers it as it is.
+ */
 static GRJIT_NativeResult thunk_adopt(void * context, uint64_t execution, uint64_t value) {
   GLTANG_Execution * exec = execution_from(context, execution);
   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];

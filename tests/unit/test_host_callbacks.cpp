@@ -172,6 +172,15 @@ TEST(HandleLabels, ANoGcFunctionNeverCollectsUnderTortureAndAMayGcOneThatAllocat
   CASE(gltang_handle_custom_write_bytes, false, (void)gltang_handle_custom_write_bytes(call, c, 0, bytes, sizeof bytes));
   CASE(gltang_handle_custom_set_error, false, (void)gltang_handle_custom_set_error(call, c, true));
   CASE(gltang_handle_custom_is_error, false, (void)gltang_handle_custom_is_error(call, c));
+  bool cleared = false;
+  void * in_place = nullptr;
+  size_t in_place_size = 0;
+  uint64_t id = 0;
+  CASE(gltang_handle_custom_slot_cleared, false, (void)gltang_handle_custom_slot_cleared(call, c, 0, &cleared));
+  CASE(gltang_handle_custom_bytes, false, (void)gltang_handle_custom_bytes(call, c, &in_place, &in_place_size));
+  CASE(gltang_handle_custom_id, false, (void)gltang_handle_custom_id(call, c, &id));
+  CASE(gltang_handle_custom_identity_hash, false, (void)gltang_handle_custom_identity_hash(call, c, &id));
+  CASE(gltang_handle_custom_from_id, false, (void)gltang_handle_custom_from_id(call, id, &out));
 #undef CASE
 
   std::set<std::string> measured;

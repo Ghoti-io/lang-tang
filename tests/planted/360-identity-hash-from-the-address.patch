@@ -1,0 +1,16 @@
+# 360 the identity hash is a hash of the address
+# defect: the hash changes when the collector moves the instance
+# caught by: the identity test under relocation torture (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -953,7 +953,8 @@
+   if (!custom || !out_hash) {
+     return GLTANG_ERR_INVALID;
+   }
+-  return from_heap(grheap_identity_hash(call->exec->heap, custom, out_hash));
++  *out_hash = (uint64_t)(uintptr_t)custom * UINT64_C(0x9e3779b97f4a7c15); /* planted */
++  return GLTANG_OK;
+ }
+ 
+ GLTANG_Result gltang_handle_custom_from_id(GLTANG_NativeCall * call, uint64_t id, GLTANG_Handle * out) {

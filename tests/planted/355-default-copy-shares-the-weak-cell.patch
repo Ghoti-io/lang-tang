@@ -1,0 +1,16 @@
+# 355 the default copy shares the original's weak cells
+# defect: the copy's weak slot holds the original's cell, so a store into one changes the other
+# caught by: the default-copy test (testCustom_collector)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -425,7 +425,8 @@
+       }
+       // A cell of the copy's own: sharing the source's would let a store into one slot change the other.
+       const GLTANG_WeakCell * cell = gltang_object(slot);
+-      child = gltang_vm_weak_cell_make(exec, type, cell->target, cell->flags);
++      child = slot; /* planted */
++      (void)cell;
+       if (!gltang_v_is_kind(child, GLTANG_OBJ_WEAK)) {
+         *fail = failed_with(child);
+       }

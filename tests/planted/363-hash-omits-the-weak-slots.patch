@@ -1,0 +1,19 @@
+# 363 the table hash leaves out which slots are weak
+# defect: two types that differ only in which slot is weak hash the same, and so are one type to a registry clash check
+# caught by: the table-hash test (testCustom_collector)
+#
+--- a/src/library/types.c
++++ b/src/library/types.c
+@@ -180,11 +180,7 @@
+     h = fnv_u64(h, t->value_type ? 1u : 0u);
+     h = fnv_u64(h, t->finalizable ? 1u : 0u);
+     h = fnv_u64(h, t->weak_count);
+-    for (uint32_t i = 0; i < t->descriptor.slot_count; ++i) {
+-      if (gltang_type_weak_slot(t, i)) {
+-        h = fnv_u64(h, i);
+-      }
+-    }
++    /* planted: the weak slots' indices are not folded in */
+   }
+   return h;
+ }

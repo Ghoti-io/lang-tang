@@ -2323,15 +2323,20 @@ static void emit_cast_call(Ctx * c, uint32_t i, uint32_t d, uint32_t a) {
 }
 
 /**
- * `ADOPT`: of a container, the interpreter's copy (a call, which allocates and paces); of any other
- * value nothing, inline, as the interpreter does nothing (a host-defined value is stored as a
- * reference). The test is the interpreter's `gltang_vm_is_container`: a non-null pointer whose
- * object's kind word is an array's or a map's.
+ * `ADOPT`: of a container or of an instance of a value type, the interpreter's copy (a call, which
+ * allocates and paces, and for an instance may run its type's `copy`); of any other value nothing,
+ * inline, as the interpreter does nothing (an instance of a reference type is stored as a
+ * reference). The test is the interpreter's `gltang_vm_is_copied`: a non-null pointer whose
+ * object's kind word is an array's or a map's, or an instance's whose header has the value flag.
+ * This is the one operation on an instance that compiled code does itself: it is inline, not a
+ * dispatch to the instance's type, and leaving it out would store an instance of a value type
+ * uncopied under the JIT.
  */
 static void emit_adopt(Ctx * c, uint32_t i, uint32_t d) {
   GRJIT_VReg * t = c->tmp;
-  GRJIT_BlockId object, copy, plain, join;
+  GRJIT_BlockId object, instance, copy, plain, join;
   new_block(c, &object);
+  new_block(c, &instance);
   new_block(c, &copy);
   new_block(c, &plain);
   new_block(c, &join);
@@ -2348,6 +2353,16 @@ static void emit_adopt(Ctx * c, uint32_t i, uint32_t d) {
   cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_ARRAY));
   cmp(c, GRJIT_CMP_EQ, t[TMP_D], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_MAP));
   bin(c, GRJIT_OP_OR, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
+  B(grjit_builder_br_if(c->b, V(t[TMP_C]), copy, instance));
+  c->open = false;
+  set_block(c, instance);
+  // An instance: copied when its header's flags (vm_internal.h, GLTANG_CustomObject) have the value bit. The flags
+  // are read before the kind is known, which is safe: bytes 4 to 7 of every object are its own header's.
+  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_CUSTOM));
+  B(grjit_builder_load(c->b, t[TMP_X], c->stack[d - 1u], (int32_t)offsetof(GLTANG_CustomObject, flags), 16, false));
+  bin(c, GRJIT_OP_AND, t[TMP_D], V(t[TMP_X]), I((int64_t)GLTANG_CUSTOM_FLAG_VALUE));
+  cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_D]), I(0));
+  bin(c, GRJIT_OP_AND, t[TMP_C], V(t[TMP_C]), V(t[TMP_D]));
   B(grjit_builder_br_if(c->b, V(t[TMP_C]), copy, plain));
   c->open = false;
   set_block(c, plain);

@@ -4,8 +4,8 @@
 #
 --- a/src/vm/value.c
 +++ b/src/vm/value.c
-@@ -67,9 +67,8 @@
- // image refuses it by name (custom.c) until story 8 gives types their hooks.
+@@ -69,9 +69,8 @@
+ // instance keeps alive, and the cell's target is the heap's to clear.
  static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
    GLTANG_CustomObject * object = payload;
 -  for (uint32_t i = 0; i < object->slot_count; ++i) {

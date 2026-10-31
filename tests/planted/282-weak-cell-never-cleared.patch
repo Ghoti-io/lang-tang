@@ -1,0 +1,19 @@
+# 282 the cell's heap type has no weak spec
+# defect: nothing clears a weak slot whose target died: the slot keeps a pointer to a freed object
+# caught by: the weak-slot tests (a dead target reads null and cleared) (testCustom_collector)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -88,10 +88,10 @@
+ // callback when it clears: no host code can run there. An image cannot hold
+ // a type with a weak spec, so its snapshot hook would never run (snapshot.c
+ // names the refusal).
+-static const GRHEAP_WeakSpec weak_cell_spec = {GRHEAP_WEAK_CELL, offsetof(GLTANG_WeakCell, target), 0, 0, true, NULL};
++__attribute__((unused)) static const GRHEAP_WeakSpec weak_cell_spec = {GRHEAP_WEAK_CELL, offsetof(GLTANG_WeakCell, target), 0, 0, true, NULL};
+ _Static_assert(offsetof(GLTANG_WeakCell, target) % 8u == 0, "the heap reads a weak slot at an 8-byte-aligned offset");
+ 
+-const GRHEAP_Type gltang_type_weak_cell = GRHEAP_TYPE_INIT("lang-tang weak cell", sizeof(GLTANG_WeakCell), NULL, NULL, &weak_cell_spec, NULL, NULL);
++const GRHEAP_Type gltang_type_weak_cell = GRHEAP_TYPE_INIT("lang-tang weak cell", sizeof(GLTANG_WeakCell), NULL, NULL, NULL, NULL, NULL); /* planted */
+ 
+ const GRHEAP_Type gltang_type_integer = GRHEAP_TYPE_INIT("lang-tang integer", sizeof(GLTANG_IntegerObject), NULL, NULL, NULL, NULL, NULL);
+ const GRHEAP_Type gltang_type_float = GRHEAP_TYPE_INIT("lang-tang float", sizeof(GLTANG_FloatObject), NULL, NULL, NULL, NULL, NULL);

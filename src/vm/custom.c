@@ -170,7 +170,8 @@ GLTANG_Value gltang_vm_make_custom(GLTANG_Execution * exec, const GLTANG_Type * 
   uint32_t slots = type->descriptor.slot_count;
   size_t bytes = sizeof(GLTANG_CustomObject) + (size_t)slots * sizeof(GLTANG_Value) + (size_t)type->descriptor.byte_count;
   void * object;
-  GLTANG_Status st = gltang_vm_alloc(exec, &gltang_type_custom, bytes, &object);
+  // A type with a finalizer has the heap type whose destroy hook runs it; any other has none, and costs nothing for it.
+  GLTANG_Status st = gltang_vm_alloc(exec, type->finalizable ? &gltang_type_custom_final : &gltang_type_custom, bytes, &object);
   if (st != GLTANG_ST_OK) {
     return gltang_vm_failure_value(exec, st);
   }
@@ -179,8 +180,62 @@ GLTANG_Value gltang_vm_make_custom(GLTANG_Execution * exec, const GLTANG_Type * 
   custom->kind = GLTANG_OBJ_CUSTOM;
   _Static_assert(GLTANG_TYPE_SLOTS_MAX <= UINT16_MAX, "an instance's slot count is kept in 16 bits");
   custom->slot_count = (uint16_t)slots;
+  custom->flags = type->value_type ? (uint16_t)GLTANG_CUSTOM_FLAG_VALUE : (uint16_t)0u;
   custom->type = type;
+  if (type->finalizable) {
+    // The registry outlives the finalizer: the execution lets its own references go (release_parts) before the
+    // heap is destroyed and runs the destroy hooks, and a host may have let its own go before that. Taken before
+    // the next GC point, so the destroy hook never meets an instance without it.
+    (void)gltang_type_registry_retain((GLTANG_TypeRegistry *)(uintptr_t)type->registry);
+  }
   return gltang_value_of(custom);
+}
+
+/** Destroy hooks run so far in the process: read by the tests only (test_hooks.h), to see that a type with no finalizer has none. */
+static atomic_uint_fast64_t custom_destroys = 0;
+
+/* For the tests only; declared in vm/test_hooks.h. */
+uint64_t gltang_vm_test_custom_destroys(void) {
+  return (uint64_t)atomic_load_explicit(&custom_destroys, memory_order_relaxed);
+}
+
+void gltang_vm_custom_destroy(void * payload) {
+  atomic_fetch_add_explicit(&custom_destroys, 1, memory_order_relaxed);
+  // The heap's destroy hook (gltang_type_custom_final): once per instance, when a collection finds it unreachable or
+  // the context is destroyed, never for the old copy of a moved object. Plain C: no heap object but this payload is
+  // touched, and nothing is allocated in the heap. The instance's ID is already forgotten.
+  GLTANG_CustomObject * custom = payload;
+  const GLTANG_Type * type = custom->type;
+  type->descriptor.finalizer(type->descriptor.user, gltang_custom_bytes(custom), type->descriptor.byte_count);
+  // Last: the registry holds the type, its descriptor and the module the finalizer is in. This can be the last
+  // reference, which frees the registry with the process allocator it was made with.
+  gltang_type_registry_release((GLTANG_TypeRegistry *)(uintptr_t)type->registry);
+}
+
+GLTANG_Value gltang_vm_weak_cell_make(GLTANG_Execution * exec, const GLTANG_Type * owner, GLTANG_Value target, uint32_t flags) {
+  // The target is held across the allocation (a collection there could free or move it): it is weakly held only
+  // once it is in the cell.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, target)) {
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  void * object;
+  GLTANG_Status st = gltang_vm_alloc(exec, &gltang_type_weak_cell, sizeof(GLTANG_WeakCell), &object);
+  if (st != GLTANG_ST_OK) {
+    gltang_vm_temp_release(exec, mark);
+    return gltang_vm_failure_value(exec, st);
+  }
+  GLTANG_WeakCell * cell = object;
+  cell->kind = GLTANG_OBJ_WEAK;
+  cell->flags = flags;
+  // The weak slot is a slot of a heap object: written through the barrier.
+  (void)grheap_store_word(exec->heap, cell, &cell->target, gltang_vm_temp_at(exec, mark));
+  gltang_vm_temp_release(exec, mark);
+  GLTANG_HandleState * hs = exec->handles;
+  if (hs && !hs->weak_owner) {
+    hs->weak_owner = owner;
+  }
+  return gltang_value_of(cell);
 }
 
 GRHEAP_Result gltang_vm_custom_snapshot(GRCORE_Context * context, void * payload, GRHEAP_ImageWriter * writer) {
@@ -266,6 +321,7 @@ static GLTANG_OpStatus run_callback(GLTANG_NativeCall * call, const OpCall * oc,
     }
     case GLTANG_TYPE_OP_PRINT: return d->print(call, user, h[0]);
     case GLTANG_TYPE_OP_TO_STRING: return d->to_string(call, user, h[0]);
+    case GLTANG_TYPE_OP_COPY: return d->copy(call, user, h[0]);
     case GLTANG_TYPE_OP_COUNT: break;
   }
   return GLTANG_OP_ERROR;
@@ -1076,6 +1132,48 @@ GLTANG_Value gltang_vm_custom_text(GLTANG_Execution * exec, GLTANG_Value v, bool
   }
   *declined = true;
   return GLTANG_V_NULL;
+}
+
+/**
+ * The bracket of one callback that is never continued and never suspends: a value type's `copy`, made inside the
+ * language's container copy (a C loop with no instruction to run again). It is entered directly, not through
+ * `invoke`, because the copy can happen inside an instruction that is running again to continue a pending record
+ * (its operand is stored before the record's step is reached), and the record is not this callback's.
+ */
+static GLTANG_Value __attribute__((noinline)) bracket_once(GLTANG_Execution * exec, const OpCall * oc, const GLTANG_Value * args, bool * declined) {
+  *declined = false;
+  return bracket_entry(exec, oc, args, declined, 0);
+}
+
+GLTANG_Value gltang_vm_custom_host_copy(GLTANG_Execution * exec, GLTANG_Value v, bool * declined) {
+  const GLTANG_Type * type = gltang_vm_custom(v)->type;
+  if (!gltang_type_has(type, GLTANG_TYPE_OP_COPY)) {
+    *declined = true;
+    return GLTANG_V_NULL;
+  }
+  // `v` is held here as well as by the bracket's segment, so that it can be compared with the answer afterwards.
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    *declined = false;
+    return exec->roots[GLTANG_ROOT_OOM];
+  }
+  bool errored = false;
+  OpCall oc = OPCALL(type, GLTANG_TYPE_OP_COPY, 1, true, false);
+  OpExtra extra = {GLTANG_CAST_TARGET_INT, NULL, NULL, &errored};
+  oc.extra = &extra;
+  GLTANG_Value args[1] = {v};
+  GLTANG_Value r = bracket_once(exec, &oc, args, declined);
+  GLTANG_Value self = gltang_vm_temp_at(exec, mark);
+  gltang_vm_temp_release(exec, mark);
+  if (*declined || errored || r == GLTANG_V_UNWIND) {
+    return r;
+  }
+  // A new instance of its own type, and not `self`: anything else would store the original, or a value of another
+  // type, where a copy was asked for.
+  if (!gltang_v_is_custom(r) || gltang_vm_custom(r)->type != type || r == self) {
+    return MAKE_ERROR(GLTANG_ERROR_HOST_FAILED);
+  }
+  return r;
 }
 
 GLTANG_Value gltang_vm_host_attribute(GLTANG_Execution * exec, GLTANG_Value container, const char * name, size_t length, bool * found) {

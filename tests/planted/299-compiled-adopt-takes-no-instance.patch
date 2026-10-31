@@ -1,0 +1,15 @@
+# 299 compiled code's ADOPT does not test for an instance
+# defect: emit_adopt's kind test sees only arrays and maps, so compiled code stores a value type uncopied without calling the helper
+# caught by: the JIT differential of value-type stores (testCustom_collector)
+#
+--- a/src/jit/build.c
++++ b/src/jit/build.c
+@@ -2358,7 +2358,7 @@
+   set_block(c, instance);
+   // An instance: copied when its header's flags (vm_internal.h, GLTANG_CustomObject) have the value bit. The flags
+   // are read before the kind is known, which is safe: bytes 4 to 7 of every object are its own header's.
+-  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I((int64_t)GLTANG_OBJ_CUSTOM));
++  cmp(c, GRJIT_CMP_EQ, t[TMP_C], V(t[TMP_X]), I(-1)); /* planted */
+   B(grjit_builder_load(c->b, t[TMP_X], c->stack[d - 1u], (int32_t)offsetof(GLTANG_CustomObject, flags), 16, false));
+   bin(c, GRJIT_OP_AND, t[TMP_D], V(t[TMP_X]), I((int64_t)GLTANG_CUSTOM_FLAG_VALUE));
+   cmp(c, GRJIT_CMP_NE, t[TMP_D], V(t[TMP_D]), I(0));

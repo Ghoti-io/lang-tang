@@ -175,7 +175,8 @@ typedef enum {
   GLTANG_OBJ_TEMPLATE,      ///< A template: a pointer to its library member.
   GLTANG_OBJ_RNG,           ///< A random number generator, its state inline.
   GLTANG_OBJ_CUSTOM,        ///< An instance of a host-defined type (custom.c).
-  GLTANG_OBJ_PENDING        ///< A guest call a host callback asked for (pending.c): never a language value.
+  GLTANG_OBJ_PENDING,       ///< A guest call a host callback asked for (pending.c): never a language value.
+  GLTANG_OBJ_WEAK           ///< The cell of an instance's weak slot (handle.c): never a language value.
 } GLTANG_ObjectKind;
 
 typedef struct GLTANG_IntegerObject {
@@ -329,6 +330,29 @@ typedef struct GLTANG_PendingObject {
 
 /** @brief The instance stands for an error (handle.h): falsy, and it contaminates as an engine error value does, but it is none. */
 #define GLTANG_CUSTOM_FLAG_ERROR 0x1u
+/** @brief The instance's type has value semantics (type.h): it is copied where a container is. Set when it is made, so the copy predicate reads no type. */
+#define GLTANG_CUSTOM_FLAG_VALUE 0x2u
+
+/**
+ * @brief The cell of an instance's weak slot (type.h, "The collector model").
+ *
+ * The heap has one weak cell per heap type, at a fixed offset, and every
+ * instance shares one heap type, so a weak slot cannot be a slot of the
+ * instance: it is a strong slot holding this object, whose heap type
+ * (gltang_type_weak_cell) declares `target` its weak cell. The instance's trace
+ * reports the slot, which keeps the cell alive, and never the cell's target. The
+ * collector clears `target` (to 0, null) when nothing else holds it, after
+ * marking and before the sweep; an immediate (a boolean, a function) is never
+ * cleared. `target` is written with grheap_store_word.
+ */
+typedef struct GLTANG_WeakCell {
+  uint32_t kind;
+  uint32_t flags;               ///< GLTANG_WEAK_FLAG_*.
+  GLTANG_Value target;          ///< The weak slot: an encoded value, at an 8-byte-aligned offset.
+} GLTANG_WeakCell;
+
+/** @brief GLTANG_WeakCell::flags: a heap object was stored, so a null `target` means the collector cleared it, not that it was never set. */
+#define GLTANG_WEAK_FLAG_HAD_TARGET 0x1u
 
 /** @brief Where an instance's raw bytes start. */
 static inline unsigned char * gltang_custom_bytes(GLTANG_CustomObject * object) {
@@ -360,6 +384,7 @@ typedef struct GLTANG_HostScope {
   uint32_t serial;              ///< 0: none open. Never reused within an execution.
   size_t base;                  ///< GLTANG_Execution::temp_count when it opened.
   size_t count;                 ///< Handles made in it.
+  size_t pin_base;              ///< GLTANG_HandleState::pin_count when it opened: a callback's pins (its first frame's) are let go when its scope closes.
 } GLTANG_HostScope;
 
 /** @brief What a host function is given; see library.h. */
@@ -539,6 +564,10 @@ typedef struct GLTANG_HandleState {
   GLTANG_GuestRequest request;            ///< The request the callback running has made, read at once when it returns (custom.c, libvalue.c).
   uint64_t nested_requests;               ///< Requests run as a nested activation (a site inside a C loop); zero at every instruction site.
   uint64_t suspensions;                   ///< Requests that suspended: a pending record was made.
+  void ** pins;                           ///< Instances gltang_handle_custom_bytes pinned (grheap_pin), innermost callback's last; unpinned when the scope that pinned closes.
+  size_t pin_count;
+  size_t pin_capacity;
+  const GLTANG_Type * weak_owner;         ///< The type of the first instance that made a weak cell, or NULL: what a snapshot refused by a cell names (snapshot.c).
 } GLTANG_HandleState;
 
 struct GLTANG_Execution {
@@ -782,6 +811,8 @@ extern const GRHEAP_Type gltang_type_native;
 extern const GRHEAP_Type gltang_type_template;
 extern const GRHEAP_Type gltang_type_rng;
 extern const GRHEAP_Type gltang_type_custom;
+extern const GRHEAP_Type gltang_type_custom_final;
+extern const GRHEAP_Type gltang_type_weak_cell;
 extern const GRHEAP_Type gltang_type_pending;
 
 /**
@@ -812,6 +843,22 @@ static inline bool gltang_vm_binary_may_pace(GLTANG_Value a, GLTANG_Value b) {
   return !gltang_v_is_number(a) || !gltang_v_is_number(b);
 }
 bool gltang_vm_is_container(GLTANG_Value v);
+
+/**
+ * @brief Whether a stored copy of `v` is a new value: an array, a map, or an
+ *   instance of a value type (type.h). Every site that copies a value it stores
+ *   (`ADOPT`, the elements of a copy, the handle API's stores, a slice's and a
+ *   concatenation's elements) asks this; gltang_vm_is_container is for the
+ *   places that need an array's or a map's structure.
+ */
+static inline bool gltang_vm_is_copied(GLTANG_Value v) {
+  if (v == 0 || (v & GLTANG_TAG_MASK) != 0) {
+    return false;
+  }
+  const uint32_t kind = *(const uint32_t *)(const void *)(uintptr_t)v;
+  return kind == GLTANG_OBJ_ARRAY || kind == GLTANG_OBJ_MAP ||
+         (kind == GLTANG_OBJ_CUSTOM && (((const GLTANG_CustomObject *)(const void *)(uintptr_t)v)->flags & GLTANG_CUSTOM_FLAG_VALUE) != 0);
+}
 int64_t gltang_vm_int(GLTANG_Value v);
 double gltang_vm_float(GLTANG_Value v);
 double gltang_vm_number(GLTANG_Value v);
@@ -1088,8 +1135,30 @@ GLTANG_HandleState * gltang_vm_handle_state(GLTANG_Execution * exec);
 /** @brief Whether a type's registry is attached to the execution. */
 bool gltang_vm_type_attached(const GLTANG_Execution * exec, const GLTANG_Type * type);
 
-/** @brief A new instance of `type`, zero-filled; a failure value when it cannot be made. A GC point. */
+/**
+ * @brief A new instance of `type`, zero-filled; a failure value when it cannot be made. A GC point.
+ *   An instance of a type with a finalizer is of gltang_type_custom_final and takes a reference to
+ *   the type's registry, which its destroy hook lets go after the finalizer.
+ */
 GLTANG_Value gltang_vm_make_custom(GLTANG_Execution * exec, const GLTANG_Type * type);
+
+/** @brief The finalizable heap type's destroy hook: runs the type's finalizer on the bytes, then lets the registry go. Plain C. */
+void gltang_vm_custom_destroy(void * payload);
+
+/**
+ * @brief The copy of an instance of a value type by its type's `copy` operation (type.h), through the
+ *   operation bracket; `*declined` when the type has none or it declined (nothing is made then). Any
+ *   other answer than a new instance of the same type is `Host function failed`. A GC point; `v` is
+ *   held across it by the caller's temporaries as well as by the bracket.
+ */
+GLTANG_Value gltang_vm_custom_host_copy(GLTANG_Execution * exec, GLTANG_Value v, bool * declined);
+
+/**
+ * @brief A new weak cell holding `target` (any value a weak slot accepts) and `flags`; a failure
+ *   value when it cannot be made. A GC point: `target` is held across the allocation here. `owner`
+ *   is the type of the instance the cell is for (snapshot.c names it when an image is refused).
+ */
+GLTANG_Value gltang_vm_weak_cell_make(GLTANG_Execution * exec, const GLTANG_Type * owner, GLTANG_Value target, uint32_t flags);
 
 /**
  * @brief A binary operator or comparison with a custom operand, by the

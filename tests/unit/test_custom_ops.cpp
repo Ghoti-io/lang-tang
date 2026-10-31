@@ -793,7 +793,13 @@ TEST(TypeOps, TheNewMembersAreAtTheEndInTheDocumentedOrderAndTheMinimumSizeDidNo
   EXPECT_LT(offsetof(D, to_string), offsetof(D, resumable_ops));
   EXPECT_LT(offsetof(D, resumable_ops), offsetof(D, continuations));
   EXPECT_LT(offsetof(D, continuations), offsetof(D, continuation_count));
-  EXPECT_EQ(offsetof(D, continuation_count) + sizeof(size_t), sizeof(D));
+  // The collector model's members (story 7), after the guest calls', in the order type.h gives.
+  EXPECT_LT(offsetof(D, continuation_count), offsetof(D, copy_semantics));
+  EXPECT_LT(offsetof(D, copy_semantics), offsetof(D, copy));
+  EXPECT_LT(offsetof(D, copy), offsetof(D, finalizer));
+  EXPECT_LT(offsetof(D, finalizer), offsetof(D, weak_slots));
+  EXPECT_LT(offsetof(D, weak_slots), offsetof(D, weak_slot_count));
+  EXPECT_EQ(offsetof(D, weak_slot_count) + sizeof(size_t), sizeof(D));
   D d = GLTANG_TYPE_DESCRIPTOR_INIT;
   EXPECT_EQ(d.size, sizeof(D));
   EXPECT_EQ(d.iterator_begin, nullptr);

@@ -1,0 +1,16 @@
+# 279 the instance's trace leaves out a weak slot's cell
+# defect: a weak slot is skipped by the trace, so its cell is collected while the instance still holds it
+# caught by: the cell-lifetime test (the cell lives as long as its instance) (testCustom_collector)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -70,6 +70,9 @@
+ static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
+   GLTANG_CustomObject * object = payload;
+   for (uint32_t i = 0; i < object->slot_count; ++i) {
++    if (gltang_type_weak_slot(object->type, i)) {
++      continue; /* planted */
++    }
+     grheap_trace_word(tracer, &object->slots[i]);
+   }
+ }

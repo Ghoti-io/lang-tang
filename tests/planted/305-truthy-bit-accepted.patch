@@ -4,12 +4,12 @@
 #
 --- a/src/library/types.c
 +++ b/src/library/types.c
-@@ -222,7 +222,7 @@
+@@ -250,7 +250,7 @@
    if (copy.resumable_ops >> (unsigned)GLTANG_TYPE_OP_COUNT) {
      return GLTANG_ERR_INVALID;
    }
--  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY))) {
-+  if ((copy.resumable_ops & ~operations)) {
+-  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY)) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_COPY))) {
++  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_COPY))) {
      return GLTANG_ERR_INVALID;
    }
-   const bool has_table = copy.continuations != NULL || copy.continuation_count != 0;
+   // The collector's members. A `copy` is a value type's only; a value type with a finalizer must have one, since the

@@ -36,8 +36,71 @@
  * reference, so a type has no trace function to get wrong. An instance is
  * made, and its slots and bytes read and written, through the handle API
  * (handle.h: ::gltang_handle_make_custom and the `gltang_handle_custom_*`
- * calls), and it is passed by reference, as a function is: storing it in an
- * array stores the same object.
+ * calls). By default it is passed by reference, as a function is: storing it
+ * in an array stores the same object. A type with value semantics is copied
+ * where a container is (below).
+ *
+ * **The collector model.** What a type may keep, and how the collector sees it:
+ *  - *Strong slots*: every slot not listed in `weak_slots`. It keeps what it
+ *    holds alive, and the collector updates it when the object moves.
+ *  - *Weak slots*: the slot indices listed in `weak_slots`. A weak slot does
+ *    not keep its target alive: once nothing else holds the target, a
+ *    collection clears it, and ::gltang_handle_custom_slot_get then answers
+ *    null and ::gltang_handle_custom_slot_cleared true. No host code runs when
+ *    a slot clears; the host learns of it by reading. A weak slot is read and
+ *    written with the same slot calls as a strong one. It holds null, a
+ *    boolean, a function, or a value that is stored by reference: a string, a
+ *    library, a native or template, a random generator, or an instance of a
+ *    type with reference semantics. A number, an array, a map, an error and an
+ *    instance of a value type are refused (each is copied, or boxed, when it is
+ *    stored, so what the slot held would be a copy that nothing else holds). A
+ *    weak slot is kept in a small object of its own, made at its first
+ *    non-null store, so an execution that holds one cannot be in a snapshot
+ *    (the refusal names the instance's type).
+ *  - *Raw bytes*: plain data the collector never reads. They are copied in and
+ *    out (::gltang_handle_custom_read_bytes, ::gltang_handle_custom_write_bytes)
+ *    or reached in place (::gltang_handle_custom_bytes), through a pointer that
+ *    is stable until the callback returns.
+ *  - *A finalizer*: `finalizer(user, bytes, byte_count)` runs exactly once per
+ *    instance, when a collection finds it unreachable or when its context is
+ *    destroyed, whichever comes first. It is plain C: it may free host memory
+ *    the bytes name, and must not allocate in the engine's heap, touch another
+ *    value, call the engine or run guest code. It sees whatever the bytes hold,
+ *    all zeros included (an instance that was made and never written). The
+ *    registry, its descriptors and `user` are valid while it runs, even after
+ *    the host has released its own reference to the registry and the execution
+ *    has been destroyed: an instance of a type with a finalizer holds a
+ *    reference to its registry, which it lets go after the finalizer returns.
+ *    An instance of a type with no finalizer costs nothing for it.
+ *  - *Identity*: an instance's identity is its stable ID
+ *    (::gltang_handle_custom_id), never its address, which a collector may
+ *    change. An ID is never reused, and holds its instance weakly: once the
+ *    instance dies, ::gltang_handle_custom_from_id refuses it. A collection
+ *    forgets an instance's ID before its finalizer runs, so a host that keys a
+ *    table of its own by ID writes the ID into the raw bytes when it asks for it.
+ *
+ * **Copy semantics.** `copy_semantics` is ::GLTANG_COPY_REFERENCE (the default)
+ * or ::GLTANG_COPY_VALUE. An instance of a value type is copied wherever the
+ * language copies an array or a map: when it is stored into a container
+ * (`[m]`, `a[i] = m`, `{"k": m}`), into a slot or a container through the
+ * handle API, and as an element of a container that is copied. Assigning it to a
+ * variable or passing it to a function does not copy it, as for an array. The
+ * copy is the type's `copy` operation when it has one and it answers (a new
+ * instance of the same type, which must not be `self`; anything else is
+ * `Host function failed`), and otherwise the default copy: a new instance of the
+ * type, each strong slot copied as a stored value is (a container deeply, an
+ * instance of a value type recursively, anything else by reference), each weak
+ * slot given a cell of its own with the same target, and the raw bytes and the
+ * error mark copied exactly. A copy shares the depth limit of a container's
+ * (`Recursion Limit Exceeded`) and is paced as one. A value type's `==` is still
+ * identity unless it implements `equal`, so a stored copy is not `==` its
+ * original. An operation's answer is stored as it is (the language takes an
+ * operator's value to be new), so a value type's operations answer new
+ * instances, not an operand. A value type with a finalizer must implement `copy`
+ * (the default copy would duplicate a host resource its bytes name, and the
+ * finalizer would release it twice); when that `copy` declines, the default copy
+ * is made all the same, so a `copy` declines only for an instance whose bytes
+ * name nothing.
  *
  * **The descriptor** (::GLTANG_TypeDescriptor) says what a type is: its name
  * and version, its slot and byte counts, whether it is thread-safe, a `user`
@@ -58,8 +121,9 @@
  * name and its version are all the same: two registries that each hold a
  * `money` version 1 hold two types. A registry's id is unique in the process
  * and never reused. A type's *table hash* covers what it declares (name,
- * version, slot and byte counts, `thread_safe` and which operations it
- * implements), never an address.
+ * version, slot and byte counts, `thread_safe`, which operations it
+ * implements, and its guest calls, copy semantics, finalizer and weak slots
+ * when it declares them), never an address.
  *
  * **Operations.** An operation is a host callback, called as a native is
  * (handle.h): it is given the call object and handles, it reads and makes
@@ -116,7 +180,8 @@
  * Inside an array comparison an element pair with a custom side asks `equal`
  * the same way: only `true` makes the elements equal, and an error it answers
  * is the value of the whole comparison, as it is at the top level.
- * Map keys stay strings: a type needs no hash.
+ * Map keys stay strings: a type needs no hash (a host that needs one for its
+ * own tables has ::gltang_handle_custom_identity_hash).
  *
  * **The other operations** (negate, attribute get and set, index get and set,
  * slice) are called on their custom operand; an empty entry, or a decline,
@@ -174,8 +239,11 @@
  * and random generators). A built-in name always wins; maps and libraries
  * take none, since their names are the user's keys and members.
  *
- * **Lifetimes.** The handles an operation is given (`self`, the operands, a
- * call's `args`) are valid until the callback returns and no longer; to keep a
+ * **Lifetimes.** Every operand of an operation (`self`, the other operands, a
+ * call's `args`) is pinned for the call: the collector neither frees nor moves
+ * it while the callback runs, so ::gltang_handle_custom_bytes of an operand
+ * costs no pin. The handles an operation is given are valid until the callback
+ * returns and no longer; to keep a
  * value, store it in a slot (::gltang_handle_custom_slot_set) or promote it
  * (::gltang_handle_promote). An answer set with ::gltang_call_return_handle is
  * read when the callback returns, and an iterator's item is copied into the
@@ -213,7 +281,7 @@
  * callee produced is an ordinary value to the continuation (Tang has no
  * catchable exception); a callee the run cannot enter (argument count, depth) is
  * the same error value; a limit that unwinds the run stops it and no continuation
- * is called. Any operation except `truthy` may be resumable; an operation not
+ * is called. Any operation except `truthy` and `copy` may be resumable; an operation not
  * listed is opaque and its request is refused. A callee that is itself a
  * resumable native or a callable instance whose `call` is pending chains.
  * A pause inside the callee, and a resume on another thread, need nothing of the
@@ -223,7 +291,9 @@
  * callee must be a Tang function there, and a pause inside it is an unwind.
  *
  * A snapshot of an execution that holds an instance is refused
- * (::gltang_snapshot_refused_type names the type).
+ * (::gltang_snapshot_refused_type names the type), and so is one whose heap
+ * still holds the cell of a weak slot (it names the type of the instance that
+ * made a cell first).
  *
  * **Threads.** A registry is built on one thread. Once sealed, it and its
  * descriptors may be read from any thread. ::gltang_type_registry_retain and
@@ -297,8 +367,15 @@ typedef enum GLTANG_TypeOp {
   GLTANG_TYPE_OP_TRUTHY,  ///< Never resumable: its answer is needed at once by a jump.
   GLTANG_TYPE_OP_PRINT,
   GLTANG_TYPE_OP_TO_STRING,
+  GLTANG_TYPE_OP_COPY,    ///< Never resumable: the copy is made inside the language's container copy, which cannot suspend.
   GLTANG_TYPE_OP_COUNT
 } GLTANG_TypeOp;
+
+/** @brief How an instance of a type is stored (type.h, "Copy semantics"). */
+typedef enum GLTANG_CopySemantics {
+  GLTANG_COPY_REFERENCE = 0,  ///< Stored by reference, as a function is: the default.
+  GLTANG_COPY_VALUE           ///< Copied wherever an array or a map is copied.
+} GLTANG_CopySemantics;
 
 /**
  * @brief The continuation of a guest call (::gltang_call_guest): called with
@@ -450,6 +527,27 @@ typedef GLTANG_OpStatus (*GLTANG_HostAttributeFn)(GLTANG_NativeCall * call,
     void * user, GLTANG_Handle self);
 
 /**
+ * @brief The copy of an instance of a value type: the answer is a new instance
+ *   of the same type (not `self`), which is stored in place of `self`. A
+ *   decline makes the default copy. An answer that is not an instance of the
+ *   type, or that is `self`, is `Host function failed`. It cannot ask for a
+ *   guest call.
+ */
+typedef GLTANG_OpStatus (*GLTANG_TypeCopyFn)(GLTANG_NativeCall * call,
+    void * user, GLTANG_Handle self);
+
+/**
+ * @brief Releases what an instance's raw bytes name, once, when the instance
+ *   dies (type.h, "The collector model").
+ *
+ * @param user The descriptor's `user`.
+ * @param bytes The instance's raw bytes, in place; all zeros if nothing wrote
+ *   them. Valid for the call only.
+ * @param byte_count The type's byte count.
+ */
+typedef void (*GLTANG_TypeFinalizeFn)(void * user, void * bytes, size_t byte_count);
+
+/**
  * @brief What a type is. Size-prefixed: set `size` to
  *   `sizeof(GLTANG_TypeDescriptor)` (::GLTANG_TYPE_DESCRIPTOR_INIT does), and
  *   zero what you do not use.
@@ -495,6 +593,12 @@ typedef struct GLTANG_TypeDescriptor {
   uint32_t resumable_ops;                     ///< A bit `1u << GLTANG_TYPE_OP_*` for each operation that may call guest code; not `truthy`, and only an operation the type implements.
   const GLTANG_Continuation * continuations;  ///< The table ::gltang_call_guest names an index of; copied. Needed when `resumable_ops` is not 0.
   size_t continuation_count;                  ///< Entries of `continuations`, at most ::GLTANG_CONTINUATIONS_MAX.
+  // Added after story 9 (the collector model); a descriptor sized without them is a reference type with strong slots and no finalizer.
+  GLTANG_CopySemantics copy_semantics;        ///< ::GLTANG_COPY_REFERENCE (the default) or ::GLTANG_COPY_VALUE.
+  GLTANG_TypeCopyFn copy;                     ///< A value type's copy; NULL for the default copy. Refused on a reference type.
+  GLTANG_TypeFinalizeFn finalizer;            ///< Run once per instance when it dies; NULL for none. A value type with one must have `copy`.
+  const uint32_t * weak_slots;                ///< The slot indices that are weak, each below `slot_count`, none twice; copied. NULL for none.
+  size_t weak_slot_count;                     ///< Entries of `weak_slots`.
 } GLTANG_TypeDescriptor;
 
 /** @brief The smallest `size` a descriptor may state: every member of this first version. */
@@ -510,7 +614,7 @@ typedef struct GLTANG_TypeDescriptor {
  * `{.size = ...}` both draw `-Wmissing-field-initializers` from g++ (C accepts
  * the designated form, C++17 has none). A member added later is added here too.
  */
-#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0u, NULL, 0u}
+#define GLTANG_TYPE_DESCRIPTOR_INIT {sizeof(GLTANG_TypeDescriptor), NULL, 0, 0, 0, false, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0u, NULL, 0u, GLTANG_COPY_REFERENCE, NULL, NULL, NULL, 0u}
 
 /**
  * @brief Creates an empty registry with a reference count of one.
@@ -541,7 +645,10 @@ GLTANG_API void gltang_type_registry_release(GLTANG_TypeRegistry * registry);
  * @return ::GLTANG_OK; ::GLTANG_ERR_INVALID for a NULL argument, a sealed
  *   registry, a `size` below ::GLTANG_TYPE_DESCRIPTOR_MIN_SIZE, a name that is
  *   not 1 to ::GLTANG_TYPE_NAME_MAX identifier characters, a slot or byte count past its maximum,
- *   or a name and version the registry already holds; ::GLTANG_ERR_OOM.
+ *   a name and version the registry already holds, a `resumable_ops` that names `truthy` or
+ *   `copy`, a `copy_semantics` that is neither value, a `copy` on a reference type, a value type
+ *   with a `finalizer` and no `copy`, or a weak slot index that is past `slot_count` or listed
+ *   twice (or a `weak_slot_count` with no list); ::GLTANG_ERR_OOM.
  */
 GLTANG_API GLTANG_Result gltang_type_registry_add(
     GLTANG_TypeRegistry * registry, const GLTANG_TypeDescriptor * descriptor,
@@ -615,8 +722,10 @@ GLTANG_API uint32_t gltang_type_byte_count(const GLTANG_Type * type);
  * @brief The type's table hash: a function of its name, version, slot count,
  *   byte count, `thread_safe` and the set of operations it implements and, when it
  *   declares any, its resumable mask, and the count, index and name of each
- *   continuation. Never of an address, so the same descriptor gives the same hash in
- *   every process; a descriptor that declares no guest calls hashes as it always did.
+ *   continuation, and, when it declares value semantics, a finalizer or a weak slot, each of
+ *   those (the weak slots as their indices in increasing order). Never of an address, so the
+ *   same descriptor gives the same hash in every process; a descriptor that declares no guest
+ *   calls and none of the collector's members hashes as it always did.
  */
 GLTANG_API uint64_t gltang_type_table_hash(const GLTANG_Type * type);
 
@@ -658,7 +767,11 @@ GLTANG_API GLTANG_Result gltang_execution_attach_types(
  * An instance of a host-defined type cannot be in a snapshot yet: a take of an
  * execution whose heap holds one live is refused with
  * ::GLTANG_ERR_UNSUPPORTED, and this names the type of the first instance the
- * take met. A later take that is not refused for a type clears it.
+ * take met. So is a take of a heap that still holds the cell of a weak slot
+ * (the heap type `lang-tang weak cell`, which no image can hold), live or not
+ * yet collected: this then names the instance's type when the take met the
+ * instance, and otherwise the type of the first instance of the execution that
+ * made a cell. A later take that is not refused for a type clears it.
  */
 GLTANG_API const GLTANG_Type * gltang_snapshot_refused_type(
     const GLTANG_Execution * execution);

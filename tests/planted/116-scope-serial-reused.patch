@@ -4,7 +4,7 @@
 #
 --- a/src/vm/handle.c
 +++ b/src/vm/handle.c
-@@ -83,7 +83,7 @@
+@@ -88,7 +88,7 @@
      hs->frame_capacity = grown;
    }
    GLTANG_HostScope * f = &hs->frames[hs->frame_count++];
@@ -12,4 +12,4 @@
 +  f->serial = 1; /* planted: a serial is reused */
    f->base = exec->temp_count;
    f->count = 0;
-   return true;
+   f->pin_base = hs->pin_count;

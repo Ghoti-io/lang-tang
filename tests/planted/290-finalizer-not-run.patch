@@ -1,0 +1,15 @@
+# 290 the destroy hook does not run the finalizer
+# defect: an instance of a type with a finalizer dies and nothing is released
+# caught by: the finalizer counts (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -206,7 +206,7 @@
+   // touched, and nothing is allocated in the heap. The instance's ID is already forgotten.
+   GLTANG_CustomObject * custom = payload;
+   const GLTANG_Type * type = custom->type;
+-  type->descriptor.finalizer(type->descriptor.user, gltang_custom_bytes(custom), type->descriptor.byte_count);
++  /* planted: the finalizer is not run */
+   // Last: the registry holds the type, its descriptor and the module the finalizer is in. This can be the last
+   // reference, which frees the registry with the process allocator it was made with.
+   gltang_type_registry_release((GLTANG_TypeRegistry *)(uintptr_t)type->registry);

@@ -1,0 +1,15 @@
+# 295 the finalizable heap type has no destroy hook
+# defect: an instance of a type with a finalizer is of the twin heap type, which runs nothing when it dies
+# caught by: the finalizer counts (testCustom_collector)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -80,7 +80,7 @@
+ // hook, and a destroy hook that runs the finalizer (custom.c). A type of its
+ // own, chosen when the instance is made, so an instance of a type with none
+ // has no destroy hook to run.
+-const GRHEAP_Type gltang_type_custom_final = GRHEAP_TYPE_INIT("lang-tang custom final", sizeof(GLTANG_CustomObject), custom_trace, gltang_vm_custom_destroy, NULL, gltang_vm_custom_snapshot, NULL);
++const GRHEAP_Type gltang_type_custom_final = GRHEAP_TYPE_INIT("lang-tang custom final", sizeof(GLTANG_CustomObject), custom_trace, NULL, NULL, gltang_vm_custom_snapshot, NULL); /* planted */
+ 
+ // The cell of a weak slot (vm_internal.h, GLTANG_WeakCell): no trace (its one
+ // slot is the weak one, which the heap handles), the value codec's words

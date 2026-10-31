@@ -65,6 +65,8 @@ static void map_store_trace(GRHEAP_Tracer * tracer, void * payload) {
 // (AD-11: the engine traces, no module does). The raw bytes after them are
 // never traced. The type pointer is the one host pointer it holds, so an
 // image refuses it by name (custom.c) until story 8 gives types their hooks.
+// A weak slot is traced like any other: it holds the slot's cell, which the
+// instance keeps alive, and the cell's target is the heap's to clear.
 static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
   GLTANG_CustomObject * object = payload;
   for (uint32_t i = 0; i < object->slot_count; ++i) {
@@ -73,6 +75,23 @@ static void custom_trace(GRHEAP_Tracer * tracer, void * payload) {
 }
 
 const GRHEAP_Type gltang_type_custom = GRHEAP_TYPE_INIT("lang-tang custom", sizeof(GLTANG_CustomObject), custom_trace, NULL, NULL, gltang_vm_custom_snapshot, NULL);
+
+// An instance of a type with a finalizer: the same layout, trace and image
+// hook, and a destroy hook that runs the finalizer (custom.c). A type of its
+// own, chosen when the instance is made, so an instance of a type with none
+// has no destroy hook to run.
+const GRHEAP_Type gltang_type_custom_final = GRHEAP_TYPE_INIT("lang-tang custom final", sizeof(GLTANG_CustomObject), custom_trace, gltang_vm_custom_destroy, NULL, gltang_vm_custom_snapshot, NULL);
+
+// The cell of a weak slot (vm_internal.h, GLTANG_WeakCell): no trace (its one
+// slot is the weak one, which the heap handles), the value codec's words
+// (`encoded`, so an immediate is left alone and never cleared), and no
+// callback when it clears: no host code can run there. An image cannot hold
+// a type with a weak spec, so its snapshot hook would never run (snapshot.c
+// names the refusal).
+static const GRHEAP_WeakSpec weak_cell_spec = {GRHEAP_WEAK_CELL, offsetof(GLTANG_WeakCell, target), 0, 0, true, NULL};
+_Static_assert(offsetof(GLTANG_WeakCell, target) % 8u == 0, "the heap reads a weak slot at an 8-byte-aligned offset");
+
+const GRHEAP_Type gltang_type_weak_cell = GRHEAP_TYPE_INIT("lang-tang weak cell", sizeof(GLTANG_WeakCell), NULL, NULL, &weak_cell_spec, NULL, NULL);
 
 const GRHEAP_Type gltang_type_integer = GRHEAP_TYPE_INIT("lang-tang integer", sizeof(GLTANG_IntegerObject), NULL, NULL, NULL, NULL, NULL);
 const GRHEAP_Type gltang_type_float = GRHEAP_TYPE_INIT("lang-tang float", sizeof(GLTANG_FloatObject), NULL, NULL, NULL, NULL, NULL);
@@ -181,6 +200,9 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
     [GLTANG_OBJ_TEMPLATE] = GLTANG_KIND_FUNCTION,
     [GLTANG_OBJ_RNG] = GLTANG_KIND_RNG,
     [GLTANG_OBJ_CUSTOM] = GLTANG_KIND_CUSTOM,
+    // Never a language value; null if one is ever asked about.
+    [GLTANG_OBJ_PENDING] = GLTANG_KIND_NULL,
+    [GLTANG_OBJ_WEAK] = GLTANG_KIND_NULL,
   };
   uint32_t k = gltang_object_kind(v);
   return k < sizeof kinds ? (GLTANG_ValueKind)kinds[k] : GLTANG_KIND_NULL;
@@ -199,7 +221,10 @@ GLTANG_ValueKind gltang_vm_kind(GLTANG_Value v) {
  *                                              and a marked instance is never logged (both tiers agree)
  *     ops.c append_copies, gltang_vm_op_slice, map_store, gltang_vm_op_set_index - a deep copy or a stored value that FAILED (an engine
  *                                              error made by the engine, or the out-of-memory value);
- *                                              an instance is stored by reference, never copied
+ *                                              an instance of a reference type is stored by reference,
+ *                                              and the copy of one of a value type that failed is an
+ *                                              engine error too (its `copy` answered one, or the engine
+ *                                              made `Host function failed`)
  *     custom.c gltang_vm_custom_iterator_begin and gltang_vm_custom_cast - the error a callback ANSWERED
  *                                              (made by the engine from its status): engine errors only
  *     interp.c's truth sites (JMP_FALSE, JMP_TRUE, OR) - an error a `truthy` answered is recorded with

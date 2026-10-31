@@ -1,0 +1,16 @@
+# 278 a weak slot's target is traced as a strong reference
+# defect: the instance's trace reports the target of each weak slot's cell, so the target is never collected and the slot never clears
+# caught by: the weak-slot tests (a dead target reads null and cleared, and its finalizer runs) (testCustom_collector)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -71,6 +71,9 @@
+   GLTANG_CustomObject * object = payload;
+   for (uint32_t i = 0; i < object->slot_count; ++i) {
+     grheap_trace_word(tracer, &object->slots[i]);
++    if (object->slots[i] && gltang_type_weak_slot(object->type, i)) {
++      grheap_trace_word(tracer, &((GLTANG_WeakCell *)gltang_object(object->slots[i]))->target); /* planted */
++    }
+   }
+ }
+ 

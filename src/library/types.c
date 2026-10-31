@@ -39,6 +39,14 @@
 /** The id of the next registry: process-wide, counted up, never reused. */
 static atomic_uint_fast64_t next_registry_id = 1;
 
+/** Registries freed so far in the process: read by the tests only (test_hooks.h), to see when a registry went. */
+static atomic_uint_fast64_t registries_freed = 0;
+
+/* For the tests only; declared in vm/test_hooks.h. */
+uint64_t gltang_vm_test_registries_freed(void) {
+  return (uint64_t)atomic_load_explicit(&registries_freed, memory_order_acquire);
+}
+
 GLTANG_Result gltang_type_registry_create(GLTANG_TypeRegistry ** out_registry) {
   if (!out_registry) {
     return GLTANG_ERR_INVALID;
@@ -67,15 +75,20 @@ void gltang_type_registry_release(GLTANG_TypeRegistry * registry) {
     return;
   }
   // acq_rel, as for a library: every other thread's reads of the registry
-  // happen before the free.
+  // happen before the free. The last reference can be an instance's, let go by
+  // the heap's destroy hook after its finalizer (custom.c), so this is plain C
+  // and frees with the process allocator the registry was made with, never a
+  // context's.
   if (atomic_fetch_sub_explicit(&registry->references, 1, memory_order_acq_rel) == 1) {
     for (size_t i = 0; i < registry->count; ++i) {
       gcu_free(registry->types[i]->continuations);
+      gcu_free(registry->types[i]->weak);
       gcu_free(registry->types[i]);
     }
     gcu_free(registry->types);
     gcu_free(registry->attributes);
     gcu_free(registry);
+    atomic_fetch_add_explicit(&registries_freed, 1, memory_order_release);
   }
 }
 
@@ -159,6 +172,20 @@ static uint64_t table_hash(const GLTANG_Type * t) {
     h = fnv_u64(h, t->resumable);
     h = gltang_continuations_hash(h, t->continuations, t->continuation_count);
   }
+  if (t->value_type || t->finalizable || t->weak_count) {
+    // The collector's members, likewise only when declared: the semantics, whether there is a finalizer (its
+    // address is not a name), and each weak slot's index in increasing order. A `copy` is an operation, so it is in
+    // `operations` above.
+    h = fnv_u64(h, UINT64_C(0x636f6c6c));  // "coll": keeps this run of numbers apart from the guest calls'
+    h = fnv_u64(h, t->value_type ? 1u : 0u);
+    h = fnv_u64(h, t->finalizable ? 1u : 0u);
+    h = fnv_u64(h, t->weak_count);
+    for (uint32_t i = 0; i < t->descriptor.slot_count; ++i) {
+      if (gltang_type_weak_slot(t, i)) {
+        h = fnv_u64(h, i);
+      }
+    }
+  }
   return h;
 }
 
@@ -189,6 +216,7 @@ static uint32_t operations_of(const GLTANG_TypeDescriptor * d) {
   HAS(truthy, GLTANG_TYPE_OP_TRUTHY);
   HAS(print, GLTANG_TYPE_OP_PRINT);
   HAS(to_string, GLTANG_TYPE_OP_TO_STRING);
+  HAS(copy, GLTANG_TYPE_OP_COPY);
 #undef HAS
   return bits;
 }
@@ -222,8 +250,24 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
   if (copy.resumable_ops >> (unsigned)GLTANG_TYPE_OP_COUNT) {
     return GLTANG_ERR_INVALID;
   }
-  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY))) {
+  if ((copy.resumable_ops & ~operations) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_TRUTHY)) || (copy.resumable_ops & (1u << (unsigned)GLTANG_TYPE_OP_COPY))) {
     return GLTANG_ERR_INVALID;
+  }
+  // The collector's members. A `copy` is a value type's only; a value type with a finalizer must have one, since the
+  // default copy would duplicate what the bytes name and the finalizer would release it twice.
+  if ((unsigned)copy.copy_semantics > (unsigned)GLTANG_COPY_VALUE) {
+    return GLTANG_ERR_INVALID;
+  }
+  const bool value_type = copy.copy_semantics == GLTANG_COPY_VALUE;
+  if ((copy.copy && !value_type) || (value_type && copy.finalizer && !copy.copy)) {
+    return GLTANG_ERR_INVALID;
+  }
+  if (copy.weak_slot_count && !copy.weak_slots) {
+    return GLTANG_ERR_INVALID;
+  }
+  const size_t weak_count = copy.weak_slots ? copy.weak_slot_count : 0u;
+  if (weak_count > copy.slot_count) {
+    return GLTANG_ERR_INVALID;   // more indices than slots: one is past the end or listed twice
   }
   const bool has_table = copy.continuations != NULL || copy.continuation_count != 0;
   if ((copy.resumable_ops || has_table) && !gltang_continuations_valid(copy.continuations, copy.continuation_count)) {
@@ -238,8 +282,26 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
     registry->types = bigger;
     registry->capacity = grown;
   }
+  // The weak slots as one bit per slot: checked here (each below the slot count, none twice), and read by the
+  // slot calls and the copy without a search.
+  uint8_t * weak = NULL;
+  if (weak_count) {
+    weak = gcu_calloc(((size_t)copy.slot_count + 7u) / 8u, 1);
+    if (!weak) {
+      return GLTANG_ERR_OOM;
+    }
+    for (size_t i = 0; i < weak_count; ++i) {
+      uint32_t index = copy.weak_slots[i];
+      if (index >= copy.slot_count || ((weak[index >> 3] >> (index & 7u)) & 1u)) {
+        gcu_free(weak);
+        return GLTANG_ERR_INVALID;
+      }
+      weak[index >> 3] = (uint8_t)(weak[index >> 3] | (1u << (index & 7u)));
+    }
+  }
   GLTANG_Type * type = gcu_calloc(1, sizeof(GLTANG_Type));
   if (!type) {
+    gcu_free(weak);
     return GLTANG_ERR_OOM;
   }
   type->registry = registry;
@@ -251,9 +313,15 @@ GLTANG_Result gltang_type_registry_add(GLTANG_TypeRegistry * registry, const GLT
   type->descriptor.name = type->name;
   type->operations = operations;
   type->resumable = copy.resumable_ops;
+  type->weak = weak;
+  type->weak_count = (uint32_t)weak_count;
+  type->value_type = value_type;
+  type->finalizable = copy.finalizer != NULL;
+  type->descriptor.weak_slots = NULL;   // the caller's list is not kept; the bits are the copy
   if (has_table) {
     void * block = gcu_calloc(1, gltang_continuations_bytes(copy.continuations, copy.continuation_count));
     if (!block) {
+      gcu_free(weak);
       gcu_free(type);
       return GLTANG_ERR_OOM;
     }

@@ -939,10 +939,11 @@ resume_loop:
 
       case GLTANG_OP_ADOPT: {
         GLTANG_Value v = S[sp - 1u];
-        if (gltang_vm_is_container(v)) {
+        if (gltang_vm_is_copied(v)) {
           SYNC();
-          // The copy paces (a deep copy of a long container): stand at the ADOPT, as compiled
-          // code's helper does. An ADOPT of anything else does nothing, and stands nowhere.
+          // The copy paces (a deep copy of a long container, or of an instance of a value type, whose
+          // type's `copy` is a callback): stand at the ADOPT, as compiled code's helper does. An ADOPT
+          // of anything else does nothing, and stands nowhere.
           SAVE_AT_OP();
           STAND_AT_OP();
           GLTANG_Value r = gltang_vm_op_adopt(exec, v);

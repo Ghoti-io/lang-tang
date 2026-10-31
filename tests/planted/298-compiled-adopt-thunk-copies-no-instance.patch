@@ -1,0 +1,15 @@
+# 298 compiled code's ADOPT helper copies no instance
+# defect: the thunk hands an instance back as it is, so compiled code stores a value type uncopied
+# caught by: the JIT differential of value-type stores (testCustom_collector)
+#
+--- a/src/jit/natives.c
++++ b/src/jit/natives.c
+@@ -365,7 +365,7 @@
+   exec->pending_fuel += gltang_opcode_cost_table[GLTANG_OP_ADOPT];
+   ++exec->jit_stats.value_calls;
+   exec->standing = true;
+-  GLTANG_Value result = gltang_vm_op_adopt(exec, value);
++  GLTANG_Value result = gltang_v_is_custom(value) ? value : gltang_vm_op_adopt(exec, value); /* planted */
+   exec->standing = false;
+   return finished(exec, result, false);
+ }

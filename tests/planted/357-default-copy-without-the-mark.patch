@@ -1,0 +1,15 @@
+# 357 the default copy leaves the error mark out
+# defect: a copy of an instance that stands for an error does not
+# caught by: the default-copy test (testCustom_collector)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -449,7 +449,7 @@
+     if (type->descriptor.byte_count) {
+       memcpy(gltang_custom_bytes(target), gltang_custom_bytes(source), type->descriptor.byte_count);
+     }
+-    target->flags = (uint16_t)(target->flags | (source->flags & GLTANG_CUSTOM_FLAG_ERROR));
++    (void)source; /* planted: the mark is not copied */
+   }
+   copy = gltang_vm_temp_at(exec, mark + 1u);
+   gltang_vm_temp_release(exec, mark);

@@ -1,0 +1,15 @@
+# 289 an instance that is not an operand is not pinned for its bytes pointer
+# defect: every instance is taken for an operand, so one read from a slot can move while the callback holds its bytes pointer
+# caught by: the pin count of the slot's instance (and, under relocation, the bytes it reads back) (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -897,7 +897,7 @@
+     return GLTANG_ERR_INVALID;
+   }
+   const size_t size = custom->type->descriptor.byte_count;
+-  if (size && !is_operand(call, custom)) {
++  if (size && false && !is_operand(call, custom)) { /* planted */
+     // An instance the callback reached on its own (a slot, a container, one it made) is pinned for the rest of the
+     // callback, once however many times it is asked for, and let go when the callback's scope closes. An operand is
+     // pinned already, by the bracket's segment, and costs nothing here.

@@ -1,0 +1,15 @@
+# 283 a weak slot never stored into reads as cleared
+# defect: slot_cleared answers true for a slot with no cell, so a host cannot tell "cleared" from "never set"
+# caught by: the never-set test (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -846,7 +846,7 @@
+   if (gltang_type_weak_slot(custom->type, index)) {
+     // Cleared only if it had a target and lost it: never set, emptied with null, or holding an immediate is not.
+     const GLTANG_WeakCell * cell = weak_cell(custom, index);
+-    cleared = cell && (cell->flags & GLTANG_WEAK_FLAG_HAD_TARGET) && cell->target == GLTANG_V_NULL;
++    cleared = !cell || ((cell->flags & GLTANG_WEAK_FLAG_HAD_TARGET) && cell->target == GLTANG_V_NULL); /* planted */
+   }
+   *out_cleared = cleared;
+   return GLTANG_OK;

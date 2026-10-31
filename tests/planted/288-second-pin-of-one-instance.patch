@@ -1,0 +1,15 @@
+# 288 an instance asked for twice in one callback is pinned twice
+# defect: the bytes pointer does not look at the callback's pins before pinning again
+# caught by: the pin count of a callback that asks twice (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -905,7 +905,7 @@
+     GLTANG_HandleState * hs = exec->handles;
+     const size_t pin_base = hs->frames[call->frame_floor].pin_base;
+     bool pinned = false;
+-    for (size_t i = pin_base; i < hs->pin_count && !pinned; ++i) {
++    for (size_t i = pin_base; i < pin_base && !pinned; ++i) { /* planted */
+       pinned = hs->pins[i] == (void *)custom;
+     }
+     if (!pinned) {

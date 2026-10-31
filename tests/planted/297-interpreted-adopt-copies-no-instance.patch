@@ -1,0 +1,15 @@
+# 297 the interpreter's ADOPT copies no instance of a value type
+# defect: ADOPT asks the container predicate, so a value type stored into a container is the same object
+# caught by: the stored-value tests of value types (testCustom_collector)
+#
+--- a/src/vm/interp.c
++++ b/src/vm/interp.c
+@@ -939,7 +939,7 @@
+ 
+       case GLTANG_OP_ADOPT: {
+         GLTANG_Value v = S[sp - 1u];
+-        if (gltang_vm_is_copied(v)) {
++        if (gltang_vm_is_container(v)) { /* planted */
+           SYNC();
+           // The copy paces (a deep copy of a long container, or of an instance of a value type, whose
+           // type's `copy` is a callback): stand at the ADOPT, as compiled code's helper does. An ADOPT

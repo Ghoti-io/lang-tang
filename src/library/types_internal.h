@@ -51,7 +51,11 @@ struct GLTANG_Type {
   uint32_t resumable;                    ///< Bit GLTANG_TYPE_OP_* for each operation that may call guest code (descriptor `resumable_ops`, checked).
   GLTANG_Continuation * continuations;   ///< The copy of the descriptor's table (one block: entries, then names); NULL when it declares none. Owned.
   size_t continuation_count;
-  GLTANG_TypeDescriptor descriptor;      ///< The copy, `size` the engine's; `name` points at `name` above.
+  uint8_t * weak;                        ///< One bit per slot, set for a weak slot (descriptor `weak_slots`, checked); NULL when it declares none. Owned.
+  uint32_t weak_count;
+  bool value_type;                       ///< `copy_semantics` is GLTANG_COPY_VALUE: an instance is copied where a container is.
+  bool finalizable;                      ///< It has a finalizer: an instance is of the heap type gltang_type_custom_final and holds a reference to the registry.
+  GLTANG_TypeDescriptor descriptor;      ///< The copy, `size` the engine's; `name` points at `name` above; `weak_slots` is NULL (the bits above hold them).
 };
 
 /** @brief An attribute a registry adds to a built-in kind (type.h): get only. */
@@ -105,6 +109,11 @@ static inline bool gltang_type_resumable(const GLTANG_Type * type, GLTANG_TypeOp
 /** @brief Whether a type implements an operation. */
 static inline bool gltang_type_has(const GLTANG_Type * type, GLTANG_TypeOp op) {
   return (type->operations >> (unsigned)op) & 1u;
+}
+
+/** @brief Whether slot `index` (below the slot count) of a type's instances is weak. */
+static inline bool gltang_type_weak_slot(const GLTANG_Type * type, size_t index) {
+  return type->weak && ((type->weak[index >> 3] >> (index & 7u)) & 1u);
 }
 
 #endif /* GHOTI_IO_GLTANG_LIBRARY_TYPES_INTERNAL_H */

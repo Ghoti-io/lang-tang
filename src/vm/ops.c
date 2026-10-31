@@ -186,7 +186,7 @@ static GLTANG_Status append_copies(GLTANG_Execution * exec, size_t dest, size_t 
   size_t n = (size_t)gltang_vm_array(gltang_vm_temp_at(exec, source))->length;
   for (size_t i = 0; i < n; ++i) {
     GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, source))->store.typed->slots[i];
-    if (gltang_vm_is_container(element)) {
+    if (gltang_vm_is_copied(element)) {
       element = gltang_vm_deep_copy(exec, element);
       if (element == GLTANG_V_UNWIND) {
         *failure = GLTANG_V_UNWIND;
@@ -854,7 +854,7 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   int64_t i = start;
   for (int64_t k = 0; k < count && st == GLTANG_ST_OK; ++k) {
     GLTANG_Value element = gltang_vm_array(gltang_vm_temp_at(exec, mark))->store.typed->slots[i];
-    if (gltang_vm_is_container(element)) {
+    if (gltang_vm_is_copied(element)) {
       GLTANG_Value copy = gltang_vm_deep_copy(exec, element);
       if (copy == GLTANG_V_UNWIND) {
         st = GLTANG_ST_UNWIND;
@@ -882,9 +882,9 @@ GLTANG_Value gltang_vm_op_slice(GLTANG_Execution * exec, GLTANG_Value container,
   return st == GLTANG_ST_OK ? result : failure;
 }
 
-/** Copies `v` if it is a container and the store asked for a copy. */
+/** Copies `v` if it is a container or an instance of a value type and the store asked for a copy. */
 static GLTANG_Value stored_value(GLTANG_Execution * exec, GLTANG_Value v, bool adopt) {
-  return adopt && gltang_vm_is_container(v) ? gltang_vm_deep_copy(exec, v) : v;
+  return adopt && gltang_vm_is_copied(v) ? gltang_vm_deep_copy(exec, v) : v;
 }
 
 /**

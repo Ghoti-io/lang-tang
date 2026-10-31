@@ -1,0 +1,15 @@
+# 353 the handle API stores an instance of a value type uncopied
+# defect: a slot set (or array push, map set) through the handle API stores the instance itself
+# caught by: the handle-API store test (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -507,7 +507,7 @@
+ static size_t hold_stored_copy(GLTANG_NativeCall * call, GLTANG_Value value, GLTANG_Result * r) {
+   GLTANG_Execution * exec = call->exec;
+   size_t mark = gltang_vm_temp_mark(exec);
+-  GLTANG_Value copy = gltang_vm_op_adopt(exec, value);
++  GLTANG_Value copy = gltang_v_is_custom(value) ? value : gltang_vm_op_adopt(exec, value); /* planted */
+   if (is_failure(call, copy)) {
+     *r = failed_value(call, copy);
+     return SIZE_MAX;

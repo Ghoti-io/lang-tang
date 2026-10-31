@@ -1,0 +1,16 @@
+# 286 an operation's operands are left out of the conservative segment
+# defect: the bracket gives the collector a segment that names nothing, so the operand of a type's operation can move under the callback and the bytes pointer it was given is stale
+# caught by: the operand bytes-pointer test under relocation torture (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -536,7 +536,8 @@
+   const size_t lent = exec->jit && exec->jit->records_open > exec->jit->depth_lent ? gltang_jit_lend_depth(exec) : 0;
+ #endif
+   GRCORE_Stack * stack = grcore_context_stack(exec->context);
+-  GRCORE_CSegment segment = {(uintptr_t)&held[0], (uintptr_t)&held[0] + oc->argc * sizeof(GLTANG_Value)};
++  static GLTANG_Value planted_empty[1];  /* planted: the segment is a word that names nothing, not the operands */
++  GRCORE_CSegment segment = {(uintptr_t)&planted_empty[0], (uintptr_t)&planted_empty[0] + sizeof(GLTANG_Value)};
+   GRCORE_ActivationRef record;
+   GRCORE_Result entered = grcore_activation_enter(stack, GRCORE_ACTIVATION_NATIVE, exec->engine, false, &segment, &record);
+   if (entered != GRCORE_OK) {

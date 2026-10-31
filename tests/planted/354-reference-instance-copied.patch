@@ -1,0 +1,15 @@
+# 354 an instance of a reference type is copied
+# defect: the copy predicate takes every instance, so a reference type stored into a container is a copy
+# caught by: the stored-value test (a reference type is the same object) (testCustom_collector)
+#
+--- a/src/vm/vm_internal.h
++++ b/src/vm/vm_internal.h
+@@ -857,7 +857,7 @@
+   }
+   const uint32_t kind = *(const uint32_t *)(const void *)(uintptr_t)v;
+   return kind == GLTANG_OBJ_ARRAY || kind == GLTANG_OBJ_MAP ||
+-         (kind == GLTANG_OBJ_CUSTOM && (((const GLTANG_CustomObject *)(const void *)(uintptr_t)v)->flags & GLTANG_CUSTOM_FLAG_VALUE) != 0);
++         kind == GLTANG_OBJ_CUSTOM; /* planted */
+ }
+ int64_t gltang_vm_int(GLTANG_Value v);
+ double gltang_vm_float(GLTANG_Value v);

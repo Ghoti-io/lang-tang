@@ -1,0 +1,15 @@
+# 367 a snapshot refused by a weak cell names no type
+# defect: a take refused because the heap holds a cell no instance reached is the heap's bare refusal, naming nothing
+# caught by: the snapshot test (a cell left by an instance that died) (testCustom_collector)
+#
+--- a/src/vm/snapshot.c
++++ b/src/vm/snapshot.c
+@@ -1065,7 +1065,7 @@
+     // weak spec (the cell of a weak slot, `lang-tang weak cell`), live or not
+     // yet collected, before any hook has run: the refusal names the type of
+     // the first instance that made a cell. (Story 8 does not lift this.)
+-    if (execution->handles && execution->handles->weak_owner && r == GRCORE_ERR_INVALID) {
++    if (execution->handles && execution->handles->weak_owner && r == GRCORE_ERR_INVALID && false) { /* planted */
+       execution->handles->snapshot_refused = execution->handles->weak_owner;
+       return GLTANG_ERR_UNSUPPORTED;
+     }

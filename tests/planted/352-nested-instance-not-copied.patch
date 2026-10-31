@@ -1,0 +1,15 @@
+# 352 an instance inside a copied container is not copied
+# defect: the deep copy copies a value type at the top only, so an element of a copied array is shared with the original
+# caught by: the nested-instance test (testCustom_collector)
+#
+--- a/src/vm/container.c
++++ b/src/vm/container.c
+@@ -465,7 +465,7 @@
+     return GLTANG_V_NULL;
+   }
+   if (gltang_v_is_custom(v)) {
+-    return copy_instance(exec, v, depth, fail, pacer, failure);
++    return depth ? v : copy_instance(exec, v, depth, fail, pacer, failure); /* planted */
+   }
+   bool is_array = gltang_v_is_kind(v, GLTANG_OBJ_ARRAY);
+   size_t n = is_array ? (size_t)gltang_vm_array(v)->length : (size_t)gltang_vm_map(v)->count;

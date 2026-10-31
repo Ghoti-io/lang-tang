@@ -365,15 +365,107 @@ GLTANG_Value gltang_vm_map_fill(GLTANG_Execution * exec, GLTANG_Value map, const
 // The deep copy
 // ---------------------------------------------------------------------------
 
-enum { COPY_OK = 0, COPY_OOM, COPY_UNWIND, COPY_DEEP };
+/** How a copy failed; COPY_FAILED: the error value an instance's `copy` answered is in `*failure`. */
+enum { COPY_OK = 0, COPY_OOM, COPY_UNWIND, COPY_DEEP, COPY_FAILED };
 
-static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth, int * fail, Pacer * pacer) {
-  if (!gltang_vm_is_container(v)) {
+static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth, int * fail, Pacer * pacer, GLTANG_Value * failure);
+
+/** The failure a value that should have been made stands for. */
+static int failed_with(GLTANG_Value made) {
+  return made == GLTANG_V_UNWIND ? COPY_UNWIND : COPY_OOM;
+}
+
+/**
+ * The copy of an instance of a value type (type.h, "Copy semantics"): its type's `copy` when it answers, else the
+ * default copy, a new instance whose strong slots are copied as stored values are (this function's caller, one level
+ * deeper), whose weak slots each get a cell of their own with the same target and flags, and whose raw bytes and
+ * error mark are the source's. Every call below is a GC point: the source and the copy are held on the temporaries
+ * and read from them after each.
+ */
+static GLTANG_Value copy_instance(GLTANG_Execution * exec, GLTANG_Value v, int depth, int * fail, Pacer * pacer, GLTANG_Value * failure) {
+  size_t mark = gltang_vm_temp_mark(exec);
+  if (!gltang_vm_temp_push(exec, v)) {
+    *fail = COPY_OOM;
+    return GLTANG_V_NULL;
+  }
+  bool declined = true;
+  GLTANG_Value answer = gltang_vm_custom_host_copy(exec, v, &declined);
+  if (!declined) {
+    gltang_vm_temp_release(exec, mark);
+    if (answer == GLTANG_V_UNWIND || answer == exec->roots[GLTANG_ROOT_OOM]) {
+      *fail = failed_with(answer);
+      return GLTANG_V_NULL;
+    }
+    if (gltang_vm_is_error(answer)) {
+      *fail = COPY_FAILED;
+      *failure = answer;
+      return GLTANG_V_NULL;
+    }
+    return answer;
+  }
+  const GLTANG_Type * type = gltang_vm_custom(gltang_vm_temp_at(exec, mark))->type;
+  GLTANG_Value copy = gltang_vm_make_custom(exec, type);
+  if (!gltang_v_is_custom(copy)) {
+    *fail = failed_with(copy);
+    gltang_vm_temp_release(exec, mark);
+    return GLTANG_V_NULL;
+  }
+  if (!gltang_vm_temp_push(exec, copy)) {
+    *fail = COPY_OOM;
+    gltang_vm_temp_release(exec, mark);
+    return GLTANG_V_NULL;
+  }
+  const uint32_t slots = type->descriptor.slot_count;
+  for (uint32_t i = 0; i < slots && !*fail; ++i) {
+    GLTANG_Value slot = gltang_vm_custom(gltang_vm_temp_at(exec, mark))->slots[i];
+    GLTANG_Value child;
+    if (gltang_type_weak_slot(type, i)) {
+      if (slot == GLTANG_V_NULL) {
+        continue;   // never stored into: the copy's stays so
+      }
+      // A cell of the copy's own: sharing the source's would let a store into one slot change the other.
+      const GLTANG_WeakCell * cell = gltang_object(slot);
+      child = gltang_vm_weak_cell_make(exec, type, cell->target, cell->flags);
+      if (!gltang_v_is_kind(child, GLTANG_OBJ_WEAK)) {
+        *fail = failed_with(child);
+      }
+    }
+    else {
+      child = copy_rec(exec, slot, depth + 1, fail, pacer, failure);
+    }
+    if (!*fail) {
+      // Nothing collects between the child's return and its being stored.
+      GLTANG_CustomObject * target = gltang_vm_custom(gltang_vm_temp_at(exec, mark + 1u));
+      (void)grheap_store_word(exec->heap, target, &target->slots[i], child);
+      if (pace(pacer, 1) != GLTANG_ST_OK) {
+        *fail = COPY_UNWIND;
+      }
+    }
+  }
+  if (!*fail) {
+    // Plain data, and a flag in the header: copied as they are, with no barrier.
+    GLTANG_CustomObject * source = gltang_vm_custom(gltang_vm_temp_at(exec, mark));
+    GLTANG_CustomObject * target = gltang_vm_custom(gltang_vm_temp_at(exec, mark + 1u));
+    if (type->descriptor.byte_count) {
+      memcpy(gltang_custom_bytes(target), gltang_custom_bytes(source), type->descriptor.byte_count);
+    }
+    target->flags = (uint16_t)(target->flags | (source->flags & GLTANG_CUSTOM_FLAG_ERROR));
+  }
+  copy = gltang_vm_temp_at(exec, mark + 1u);
+  gltang_vm_temp_release(exec, mark);
+  return copy;
+}
+
+static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth, int * fail, Pacer * pacer, GLTANG_Value * failure) {
+  if (!gltang_vm_is_copied(v)) {
     return v;
   }
   if (depth >= GLTANG_MAX_VALUE_DEPTH) {
     *fail = COPY_DEEP;
     return GLTANG_V_NULL;
+  }
+  if (gltang_v_is_custom(v)) {
+    return copy_instance(exec, v, depth, fail, pacer, failure);
   }
   bool is_array = gltang_v_is_kind(v, GLTANG_OBJ_ARRAY);
   size_t n = is_array ? (size_t)gltang_vm_array(v)->length : (size_t)gltang_vm_map(v)->count;
@@ -398,14 +490,14 @@ static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth,
   for (size_t i = 0; i < n && !*fail; ++i) {
     GLTANG_Value source = gltang_vm_temp_at(exec, mark);
     if (is_array) {
-      GLTANG_Value child = copy_rec(exec, gltang_vm_array(source)->store.typed->slots[i], depth + 1, fail, pacer);
+      GLTANG_Value child = copy_rec(exec, gltang_vm_array(source)->store.typed->slots[i], depth + 1, fail, pacer, failure);
       if (!*fail) {
         // Nothing collects between the child's return and its being stored.
         gltang_vm_array_push(exec, gltang_vm_temp_at(exec, mark + 1u), child);
       }
     }
     else {
-      GLTANG_Value child = copy_rec(exec, gltang_vm_map(source)->store.typed->slots[2u * i + 1u], depth + 1, fail, pacer);
+      GLTANG_Value child = copy_rec(exec, gltang_vm_map(source)->store.typed->slots[2u * i + 1u], depth + 1, fail, pacer, failure);
       if (!*fail) {
         source = gltang_vm_temp_at(exec, mark);
         GLTANG_Value pair[2] = {gltang_vm_map(source)->store.typed->slots[2u * i], child};
@@ -422,16 +514,19 @@ static GLTANG_Value copy_rec(GLTANG_Execution * exec, GLTANG_Value v, int depth,
 }
 
 GLTANG_Value gltang_vm_deep_copy(GLTANG_Execution * exec, GLTANG_Value v) {
-  if (!gltang_vm_is_container(v)) {
+  if (!gltang_vm_is_copied(v)) {
     return v;
   }
   int fail = COPY_OK;
+  GLTANG_Value failure = GLTANG_V_NULL;
   Pacer pacer = GLTANG_PACER(exec, DEEP_COPY);
-  GLTANG_Value copy = copy_rec(exec, v, 0, &fail, &pacer);
+  GLTANG_Value copy = copy_rec(exec, v, 0, &fail, &pacer, &failure);
   switch (fail) {
     case COPY_OK: return copy;
     case COPY_UNWIND: return GLTANG_V_UNWIND;
     case COPY_DEEP: return gltang_vm_make_error(exec, GLTANG_ERROR_RECURSION_LIMIT);
+    // Nothing has collected since the copy answered it: the loops above stop at the first failure.
+    case COPY_FAILED: return failure;
     default: return exec->roots[GLTANG_ROOT_OOM];
   }
 }

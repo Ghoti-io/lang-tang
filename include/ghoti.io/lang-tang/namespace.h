@@ -535,6 +535,14 @@
 #define gltang_handle_custom_slot_set GHOTIIO_LANG_TANG(gltang_handle_custom_slot_set)
 #define gltang_handle_custom_read_bytes GHOTIIO_LANG_TANG(gltang_handle_custom_read_bytes)
 #define gltang_handle_custom_write_bytes GHOTIIO_LANG_TANG(gltang_handle_custom_write_bytes)
+#define GLTANG_CopySemantics GHOTIIO_LANG_TANG(GLTANG_CopySemantics)
+#define GLTANG_TypeCopyFn GHOTIIO_LANG_TANG(GLTANG_TypeCopyFn)
+#define GLTANG_TypeFinalizeFn GHOTIIO_LANG_TANG(GLTANG_TypeFinalizeFn)
+#define gltang_handle_custom_slot_cleared GHOTIIO_LANG_TANG(gltang_handle_custom_slot_cleared)
+#define gltang_handle_custom_bytes GHOTIIO_LANG_TANG(gltang_handle_custom_bytes)
+#define gltang_handle_custom_id GHOTIIO_LANG_TANG(gltang_handle_custom_id)
+#define gltang_handle_custom_identity_hash GHOTIIO_LANG_TANG(gltang_handle_custom_identity_hash)
+#define gltang_handle_custom_from_id GHOTIIO_LANG_TANG(gltang_handle_custom_from_id)
 
 /// @endcond
 

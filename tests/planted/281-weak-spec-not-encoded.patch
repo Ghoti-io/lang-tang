@@ -1,0 +1,15 @@
+# 281 the weak spec reads its slot as a raw pointer
+# defect: the cell's weak slot is declared a pointer, not an encoded value, so an immediate (true, a function) is taken for a bad pointer and cleared
+# caught by: the immediate rows of the never-set test (testCustom_collector)
+#
+--- a/src/vm/value.c
++++ b/src/vm/value.c
+@@ -88,7 +88,7 @@
+ // callback when it clears: no host code can run there. An image cannot hold
+ // a type with a weak spec, so its snapshot hook would never run (snapshot.c
+ // names the refusal).
+-static const GRHEAP_WeakSpec weak_cell_spec = {GRHEAP_WEAK_CELL, offsetof(GLTANG_WeakCell, target), 0, 0, true, NULL};
++static const GRHEAP_WeakSpec weak_cell_spec = {GRHEAP_WEAK_CELL, offsetof(GLTANG_WeakCell, target), 0, 0, false, NULL}; /* planted */
+ _Static_assert(offsetof(GLTANG_WeakCell, target) % 8u == 0, "the heap reads a weak slot at an 8-byte-aligned offset");
+ 
+ const GRHEAP_Type gltang_type_weak_cell = GRHEAP_TYPE_INIT("lang-tang weak cell", sizeof(GLTANG_WeakCell), NULL, NULL, &weak_cell_spec, NULL, NULL);

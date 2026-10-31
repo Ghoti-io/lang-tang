@@ -1,0 +1,15 @@
+# 285 the first store into a weak slot keeps the instance's address across the cell's allocation
+# defect: the instance is not read again from its handle after the cell is made, so under relocation the cell is stored into the old copy
+# caught by: the moved-target test under relocation torture (testCustom_collector)
+#
+--- a/src/vm/handle.c
++++ b/src/vm/handle.c
+@@ -807,7 +807,7 @@
+   if (is_failure(call, made)) {
+     return failed_value(call, made);
+   }
+-  holder = custom_of(call, handle);
++  /* planted: the instance is not read again */
+   (void)grheap_store_word(exec->heap, holder, &holder->slots[index], made);
+   return GLTANG_OK;
+ }

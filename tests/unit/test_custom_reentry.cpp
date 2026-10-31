@@ -229,7 +229,8 @@ GLTANG_OpStatus ops_cast(GLTANG_NativeCall * c, void * u, GLTANG_Handle s, GLTAN
 GLTANG_OpStatus ops_print(GLTANG_NativeCall * c, void * u, GLTANG_Handle s) { return act(c, u, s, GLTANG_TYPE_OP_PRINT, 0); }
 GLTANG_OpStatus ops_text(GLTANG_NativeCall * c, void * u, GLTANG_Handle s) { return act(c, u, s, GLTANG_TYPE_OP_TO_STRING, 0); }
 
-constexpr uint32_t kEligible = (1u << GLTANG_TYPE_OP_COUNT) - 1u - (1u << GLTANG_TYPE_OP_TRUTHY) - (1u << GLTANG_TYPE_OP_ITERATOR_NEXT);
+// Every operation but truthy and copy (never resumable) and iterator_next (which these types do not implement).
+constexpr uint32_t kEligible = (1u << GLTANG_TYPE_OP_COUNT) - 1u - (1u << GLTANG_TYPE_OP_TRUTHY) - (1u << GLTANG_TYPE_OP_ITERATOR_NEXT) - (1u << GLTANG_TYPE_OP_COPY);
 
 GLTANG_TypeDescriptor ops_descriptor(const char * name, Fx * fx, bool resumable) {
   GLTANG_TypeDescriptor d = GLTANG_TYPE_DESCRIPTOR_INIT;

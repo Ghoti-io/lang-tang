@@ -1,0 +1,15 @@
+# 292 a finalizable instance takes no reference to its registry
+# defect: the destroy hook lets go of a reference it never took, so the registry is freed while instances that need it are still to be finalized
+# caught by: the context-destruction test (no registry freed before a finalizer ran) (testCustom_collector)
+#
+--- a/src/vm/custom.c
++++ b/src/vm/custom.c
+@@ -186,7 +186,7 @@
+     // The registry outlives the finalizer: the execution lets its own references go (release_parts) before the
+     // heap is destroyed and runs the destroy hooks, and a host may have let its own go before that. Taken before
+     // the next GC point, so the destroy hook never meets an instance without it.
+-    (void)gltang_type_registry_retain((GLTANG_TypeRegistry *)(uintptr_t)type->registry);
++    /* planted: no reference is taken */
+   }
+   return gltang_value_of(custom);
+ }
