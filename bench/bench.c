@@ -397,7 +397,7 @@ static void want_set(int jit_on, Policy p, uint64_t calls) {
  * is never discarded, and every compiled entry returns (the HALT's return), so a warm call that exits or a
  * function that is discarded fails the row. (Story 5 had two more, for the rows of a raw float's print and
  * concatenation: a designed box exit at every call, and an exit that counts and discards at the eighth. They
- * were the "before" of planning/unboxed-float-output.md, and went when story 4g removed those exits.)
+ * were the "before" of the work that compiled a raw float's print, and went when story 4g removed those exits.)
  * Which calls are compiled depends on the threshold, `jit_mode` as steady_run_x takes it (0 the JIT off, 1 its
  * default threshold, 2 a threshold of one). At the default, the poll that reaches GLTANG_JIT_DEFAULT_THRESHOLD
  * compiles the function and the same call enters it, so the calls from that one on are compiled and the calls
@@ -664,10 +664,10 @@ static uint64_t template_call_run(uint64_t iterations, double * elapsed) {
 }
 
 /*
- * The host-extensibility workarounds (step 0 of the workspace's
- * planning/tang-host-extensibility.md). What a host does today because it
+ * The host-extensibility workarounds: what a host does today because it
  * cannot hand a template an array, a map or an object of its own, so that each
- * capability that work restores has a measured "before" to compare with.
+ * capability the host-extensibility work restores has a measured "before" to
+ * compare with.
  *
  * A list of WORKAROUND_ITEMS links is rendered in C, one run of a scalar-only
  * item template per item, the outputs joined in C. That is what Defiant's
@@ -2393,7 +2393,7 @@ static uint64_t steady_template_rows(int jit_on, uint64_t iterations, double * e
 static uint64_t steady_template_rows_interpreted(uint64_t it, double * el) { return steady_template_rows(0, it, el); }
 static uint64_t steady_template_rows_compiled(uint64_t it, double * el) { return steady_template_rows(1, it, el); }
 
-/* planning/unboxed-float-output.md's rows: a compiled template that prints, in a loop, a float it computed
+/* The rows of the raw-float output work: a compiled template that prints, in a loop, a float it computed
  * (`i * 0.5`, held raw in compiled code), and two that concatenate a label and such a float, the label a
  * string constant or a top-level variable. Until spec-template-compiled story 4g they were the "before": the
  * print and the constant's concatenation were a designed box exit at every call, and the variable's a counted
