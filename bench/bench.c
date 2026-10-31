@@ -1694,7 +1694,9 @@ static uint64_t reentry_chain_run(uint64_t iterations, double * elapsed) {
  * instance of a type with a finalizer (against custom-make-1000, the same loop with none), a weak slot set and read,
  * a value-type instance stored into an array (interpreted, and compiled at a threshold of one), twenty collections
  * of a heap holding 1,000 instances with a weak slot set (against the same instances with none), and an ID asked
- * for and looked up. A build without the story leaves them out (GLTANG_BENCH_NO_COLLECTOR_MODEL).
+ * for and looked up. Each native is read out of the library once, before its loop, as custom-make-1000's `money` is:
+ * a member read inside the loop would make a native value at every iteration and measure that. A build without the
+ * story leaves them out (GLTANG_BENCH_NO_COLLECTOR_MODEL).
  */
 static const GLTANG_Type * bench_res;
 static const GLTANG_Type * bench_node;
@@ -1879,7 +1881,7 @@ static uint64_t collector_case(const char * source, int64_t expected, Setup setu
 
 static uint64_t collector_make_final_run(uint64_t iterations, double * elapsed) {
   const uint64_t before = bench_finalized;
-  uint64_t sink = collector_case("use c; m = null; for (i = 0; i < 1000; i += 1) { m = c.res(i); } c.tag(m);", 999, setup_collector, iterations, elapsed);
+  uint64_t sink = collector_case("use c; res = c.res; m = null; for (i = 0; i < 1000; i += 1) { m = res(i); } c.tag(m);", 999, setup_collector, iterations, elapsed);
   /* Every instance is finalized by the time its engine is closed: a finalizer that did not run would not be measured. */
   if (bench_finalized - before != iterations * 1000u) {
     setup_failed("a finalizer that did not run once per instance");
@@ -1888,7 +1890,7 @@ static uint64_t collector_make_final_run(uint64_t iterations, double * elapsed) 
 }
 
 static uint64_t collector_weak_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; n = c.node(0); x = c.node(1); k = 0; for (i = 0; i < 1000; i += 1) { c.wset(n, x); if (c.wget(n) != null) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
+  return collector_case("use c; wset = c.wset; wget = c.wget; n = c.node(0); x = c.node(1); k = 0; for (i = 0; i < 1000; i += 1) { wset(n, x); if (wget(n) != null) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
 }
 
 /* A literal, so that the store is ADOPT and the literal's fill, which compiled code does itself (compiled code has no
@@ -1918,15 +1920,15 @@ static uint64_t collector_value_store_compiled_run(uint64_t iterations, double *
 #endif
 
 static uint64_t collector_collect_weak_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; keep = c.nodes(1000, true); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
+  return collector_case("use c; collect = c.collect; keep = c.nodes(1000, true); for (j = 0; j < 20; j += 1) { collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
 }
 
 static uint64_t collector_collect_plain_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; keep = c.nodes(1000, false); for (j = 0; j < 20; j += 1) { c.collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
+  return collector_case("use c; collect = c.collect; keep = c.nodes(1000, false); for (j = 0; j < 20; j += 1) { collect(); } keep.size;", 1001, setup_collector, iterations, elapsed);
 }
 
 static uint64_t collector_id_run(uint64_t iterations, double * elapsed) {
-  return collector_case("use c; x = c.node(0); k = 0; for (i = 0; i < 1000; i += 1) { if (c.idround(x)) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
+  return collector_case("use c; idround = c.idround; x = c.node(0); k = 0; for (i = 0; i < 1000; i += 1) { if (idround(x)) { k += 1; } } k;", 1000, setup_collector, iterations, elapsed);
 }
 #endif /* GLTANG_BENCH_NO_COLLECTOR_MODEL */
 
